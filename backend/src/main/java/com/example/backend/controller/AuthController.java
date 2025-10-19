@@ -17,24 +17,24 @@ import java.util.Optional;
 @RequestMapping("/api")
 @CrossOrigin(origins = "http://localhost:5173")
 public class AuthController {
-    
+
     @Autowired
     private UserRepository userRepository;
-    
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-    
+
     @PostMapping("/login")
     public ResponseEntity<ApiResponse> login(@RequestBody LoginRequest loginRequest) {
         try {
             Optional<User> userOptional = userRepository.findByUsername(loginRequest.getUsername());
-            
+
             if (userOptional.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(new ApiResponse(false, "Invalid username or password"));
             }
-            
+
             User user = userOptional.get();
-            
+
             if (passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
                 return ResponseEntity.ok(new ApiResponse(true, "Login successful"));
             } else {
@@ -46,19 +46,19 @@ public class AuthController {
                     .body(new ApiResponse(false, "An error occurred: " + e.getMessage()));
         }
     }
-    
+
     @PostMapping("/update-credentials")
     public ResponseEntity<ApiResponse> updateCredentials(@RequestBody UpdateCredentialsRequest request) {
         try {
             Optional<User> userOptional = userRepository.findByUsername(request.getCurrentUsername());
-            
+
             if (userOptional.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(new ApiResponse(false, "User not found"));
             }
-            
+
             User user = userOptional.get();
-            
+
             // Update username if provided and different
             if (request.getNewUsername() != null && !request.getNewUsername().isEmpty()) {
                 // Check if new username already exists
@@ -69,15 +69,15 @@ public class AuthController {
                 }
                 user.setUsername(request.getNewUsername());
             }
-            
+
             // Update password if provided
             if (request.getNewPassword() != null && !request.getNewPassword().isEmpty()) {
                 String encodedPassword = passwordEncoder.encode(request.getNewPassword());
                 user.setPassword(encodedPassword);
             }
-            
+
             userRepository.save(user);
-            
+
             return ResponseEntity.ok(new ApiResponse(true, "Credentials updated successfully"));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)

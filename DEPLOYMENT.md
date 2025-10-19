@@ -22,16 +22,19 @@ This guide covers deploying the Koi Fish Friend application to production.
 ## Production Environment Requirements
 
 ### Backend
+
 - Java 21 JRE/JDK
 - At least 512MB RAM
 - MySQL 8.0+ database
 - SSL/TLS enabled
 
 ### Frontend
+
 - Static file hosting (Nginx, Apache, S3, Netlify, Vercel)
 - CDN (optional but recommended)
 
 ### Database
+
 - MySQL 8.0+
 - Persistent storage
 - Regular backups
@@ -46,17 +49,20 @@ This guide covers deploying the Koi Fish Friend application to production.
 #### Backend (Spring Boot on Linux Server)
 
 1. **Build the application:**
+
    ```bash
    cd backend
    ./mvnw clean package -DskipTests
    ```
 
 2. **Transfer JAR file to server:**
+
    ```bash
    scp target/backend-0.0.1-SNAPSHOT.jar user@server:/opt/koi-fish-friend/
    ```
 
 3. **Create systemd service:**
+
    ```bash
    sudo nano /etc/systemd/system/koi-fish-friend.service
    ```
@@ -81,17 +87,18 @@ This guide covers deploying the Koi Fish Friend application to production.
    ```
 
 4. **Update application.properties for production:**
+
    ```properties
    # Update these with production values
    spring.datasource.url=jdbc:mysql://your-prod-db:3306/your_db_name
    spring.datasource.username=your_prod_user
    spring.datasource.password=your_prod_password
-   
+
    # Important production settings
    spring.jpa.hibernate.ddl-auto=validate
    spring.jpa.show-sql=false
    server.port=8080
-   
+
    # Enable HTTPS (if using)
    server.ssl.enabled=true
    server.ssl.key-store=classpath:keystore.p12
@@ -109,22 +116,26 @@ This guide covers deploying the Koi Fish Friend application to production.
 #### Frontend (Nginx Static Hosting)
 
 1. **Build the frontend:**
+
    ```bash
    cd frontend
    npm run build
    ```
 
 2. **Update .env.production:**
+
    ```
    VITE_API_URL=https://api.yourdomain.com
    ```
 
 3. **Transfer build files:**
+
    ```bash
    scp -r dist/* user@server:/var/www/koi-fish-friend/
    ```
 
 4. **Configure Nginx:**
+
    ```bash
    sudo nano /etc/nginx/sites-available/koi-fish-friend
    ```
@@ -133,7 +144,7 @@ This guide covers deploying the Koi Fish Friend application to production.
    server {
        listen 80;
        server_name yourdomain.com www.yourdomain.com;
-       
+
        # Redirect to HTTPS
        return 301 https://$server_name$request_uri;
    }
@@ -178,6 +189,7 @@ This guide covers deploying the Koi Fish Friend application to production.
 #### Backend Dockerfile
 
 Create `backend/Dockerfile`:
+
 ```dockerfile
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
@@ -189,6 +201,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 #### Frontend Dockerfile
 
 Create `frontend/Dockerfile`:
+
 ```dockerfile
 # Build stage
 FROM node:18-alpine AS builder
@@ -209,8 +222,9 @@ CMD ["nginx", "-g", "daemon off;"]
 #### Docker Compose
 
 Create `docker-compose.yml`:
+
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   backend:
@@ -247,6 +261,7 @@ volumes:
 ```
 
 **Deploy:**
+
 ```bash
 docker-compose up -d
 ```
@@ -258,6 +273,7 @@ docker-compose up -d
 #### AWS Deployment
 
 **Backend (Elastic Beanstalk):**
+
 1. Install AWS CLI and EB CLI
 2. Create `backend/.ebextensions/https.config`
 3. Deploy:
@@ -269,6 +285,7 @@ docker-compose up -d
    ```
 
 **Frontend (S3 + CloudFront):**
+
 1. Build frontend: `npm run build`
 2. Create S3 bucket
 3. Upload dist folder to S3
@@ -276,6 +293,7 @@ docker-compose up -d
 5. Update DNS
 
 **Database (RDS MySQL):**
+
 1. Create RDS MySQL instance
 2. Configure security groups
 3. Update backend datasource URL
@@ -283,6 +301,7 @@ docker-compose up -d
 #### Heroku Deployment
 
 **Backend:**
+
 ```bash
 cd backend
 heroku create koi-fish-friend-api
@@ -292,6 +311,7 @@ git push heroku main
 ```
 
 **Frontend (Netlify):**
+
 1. Connect GitHub repo to Netlify
 2. Build command: `npm run build`
 3. Publish directory: `dist`
@@ -300,11 +320,13 @@ git push heroku main
 #### Azure Deployment
 
 **Backend (App Service):**
+
 ```bash
 az webapp up --name koi-fish-friend-api --resource-group koi-rg --runtime "JAVA:21-java21"
 ```
 
 **Frontend (Static Web Apps):**
+
 ```bash
 az staticwebapp create --name koi-fish-friend --resource-group koi-rg
 ```
@@ -316,6 +338,7 @@ az staticwebapp create --name koi-fish-friend --resource-group koi-rg
 ### Update DDL Strategy for Production
 
 Change in `application.properties`:
+
 ```properties
 # Development
 spring.jpa.hibernate.ddl-auto=update
@@ -327,6 +350,7 @@ spring.jpa.hibernate.ddl-auto=validate
 ### Use Flyway for Migrations (Recommended)
 
 1. **Add Flyway dependency to pom.xml:**
+
 ```xml
 <dependency>
     <groupId>org.flywaydb</groupId>
@@ -339,7 +363,8 @@ spring.jpa.hibernate.ddl-auto=validate
 ```
 
 2. **Create migration file:**
-`backend/src/main/resources/db/migration/V1__initial_schema.sql`
+   `backend/src/main/resources/db/migration/V1__initial_schema.sql`
+
 ```sql
 CREATE TABLE users (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -348,7 +373,7 @@ CREATE TABLE users (
 );
 
 -- Insert demo user
-INSERT INTO users (username, password) VALUES 
+INSERT INTO users (username, password) VALUES
 ('admin', '$2a$10$...');  -- Use actual BCrypt hash
 ```
 
@@ -357,6 +382,7 @@ INSERT INTO users (username, password) VALUES
 ## Environment Variables
 
 ### Backend (.env or system environment)
+
 ```bash
 export SPRING_DATASOURCE_URL=jdbc:mysql://host:3306/dbname
 export SPRING_DATASOURCE_USERNAME=username
@@ -366,6 +392,7 @@ export SPRING_JPA_HIBERNATE_DDL_AUTO=validate
 ```
 
 ### Frontend (.env.production)
+
 ```bash
 VITE_API_URL=https://api.yourdomain.com
 ```
@@ -377,19 +404,23 @@ VITE_API_URL=https://api.yourdomain.com
 ### Backend
 
 1. **Enable HTTPS:**
+
    - Obtain SSL certificate
    - Configure in application.properties
 
 2. **Update CORS for production:**
+
    ```java
    @CrossOrigin(origins = "https://yourdomain.com")
    ```
 
 3. **Add rate limiting:**
+
    - Use Spring Security rate limiting
    - Or use API Gateway
 
 4. **Enable security headers:**
+
    ```java
    http.headers()
        .contentSecurityPolicy("default-src 'self'")
@@ -424,6 +455,7 @@ VITE_API_URL=https://api.yourdomain.com
 ### Backend Monitoring
 
 1. **Add Spring Boot Actuator:**
+
    ```xml
    <dependency>
        <groupId>org.springframework.boot</groupId>
@@ -432,6 +464,7 @@ VITE_API_URL=https://api.yourdomain.com
    ```
 
 2. **Configure endpoints:**
+
    ```properties
    management.endpoints.web.exposure.include=health,info,metrics
    management.endpoint.health.show-details=always
@@ -463,6 +496,7 @@ VITE_API_URL=https://api.yourdomain.com
 ### Database Backups
 
 **Automated daily backups:**
+
 ```bash
 #!/bin/bash
 # backup.sh
@@ -473,6 +507,7 @@ aws s3 cp backup_$DATE.sql s3://your-backup-bucket/
 ```
 
 **Cron job:**
+
 ```bash
 0 2 * * * /path/to/backup.sh
 ```
@@ -488,11 +523,13 @@ aws s3 cp backup_$DATE.sql s3://your-backup-bucket/
 ## Rollback Plan
 
 1. **Keep previous version:**
+
    ```bash
    cp backend-0.0.1-SNAPSHOT.jar backend-0.0.1-SNAPSHOT.jar.backup
    ```
 
 2. **Database rollback:**
+
    - Keep database backups
    - Test rollback procedure
 
@@ -508,16 +545,19 @@ aws s3 cp backup_$DATE.sql s3://your-backup-bucket/
 ## Health Checks
 
 ### Backend Health Endpoint
+
 ```bash
 curl http://localhost:8080/actuator/health
 ```
 
 ### Frontend Health Check
+
 ```bash
 curl -I https://yourdomain.com
 ```
 
 ### Database Health
+
 ```bash
 mysql -h host -u user -p -e "SELECT 1"
 ```
@@ -527,12 +567,14 @@ mysql -h host -u user -p -e "SELECT 1"
 ## Performance Optimization
 
 ### Backend
+
 - Enable connection pooling (HikariCP)
 - Add caching (Redis)
 - Enable compression
 - Optimize database queries
 
 ### Frontend
+
 - Enable gzip compression
 - Use CDN
 - Optimize images
@@ -540,6 +582,7 @@ mysql -h host -u user -p -e "SELECT 1"
 - Lazy loading
 
 ### Database
+
 - Add indexes
 - Optimize queries
 - Regular maintenance
@@ -564,6 +607,7 @@ mysql -h host -u user -p -e "SELECT 1"
 ## Support & Maintenance
 
 ### Regular Tasks
+
 - Update dependencies monthly
 - Review logs weekly
 - Database maintenance weekly
@@ -571,6 +615,7 @@ mysql -h host -u user -p -e "SELECT 1"
 - Performance reviews quarterly
 
 ### Monitoring Alerts
+
 - Set up alerts for:
   - High CPU usage
   - High memory usage
@@ -583,18 +628,21 @@ mysql -h host -u user -p -e "SELECT 1"
 ## Troubleshooting
 
 ### Backend won't start
+
 - Check Java version
 - Verify database connection
 - Check port availability
 - Review application logs
 
 ### Frontend not loading
+
 - Check build output
 - Verify API URL
 - Check server configuration
 - Review browser console
 
 ### Database connection fails
+
 - Verify credentials
 - Check network connectivity
 - Ensure database is running
@@ -605,6 +653,7 @@ mysql -h host -u user -p -e "SELECT 1"
 ## Contact & Support
 
 For deployment issues:
+
 1. Check logs first
 2. Review this guide
 3. Check documentation

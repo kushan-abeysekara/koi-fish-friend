@@ -11,20 +11,25 @@ A complete **login and credential update system** with Spring Boot backend and R
 ### Files Created:
 
 1. **Entity Layer:**
+
    - `User.java` - JPA entity with id, username, password
 
 2. **Repository Layer:**
+
    - `UserRepository.java` - Spring Data JPA repository
 
 3. **DTO Layer:**
+
    - `LoginRequest.java` - Login request payload
    - `UpdateCredentialsRequest.java` - Update credentials payload
    - `ApiResponse.java` - Standard API response
 
 4. **Controller Layer:**
+
    - `AuthController.java` - REST endpoints for login and update credentials
 
 5. **Configuration:**
+
    - `SecurityConfig.java` - Disable default security, enable CORS
    - `DataInitializer.java` - Creates demo user on startup
 
@@ -33,6 +38,7 @@ A complete **login and credential update system** with Spring Boot backend and R
    - `pom.xml` - Added dependencies for JPA, MySQL, Security
 
 ### Features:
+
 - ✅ BCrypt password encryption
 - ✅ MySQL database integration
 - ✅ CORS enabled for React frontend
@@ -47,13 +53,16 @@ A complete **login and credential update system** with Spring Boot backend and R
 ### Files Created:
 
 1. **Pages:**
+
    - `Login.tsx` - Login page with form validation
    - `Dashboard.tsx` - Dashboard with credential update form
 
 2. **Services:**
+
    - `api.ts` - Axios API service with typed functions
 
 3. **Configuration:**
+
    - `.env` - Environment variables (VITE_API_URL)
    - `tailwind.config.js` - Tailwind CSS configuration
    - `postcss.config.js` - PostCSS configuration
@@ -65,6 +74,7 @@ A complete **login and credential update system** with Spring Boot backend and R
    - `package.json` - Added dependencies
 
 ### Features:
+
 - ✅ React Router navigation
 - ✅ Tailwind CSS styling
 - ✅ TypeScript type safety
@@ -80,9 +90,11 @@ A complete **login and credential update system** with Spring Boot backend and R
 ## 🔌 API Endpoints
 
 ### 1. POST /api/login
+
 Authenticates user with username and password.
 
 **Request:**
+
 ```json
 {
   "username": "admin",
@@ -91,6 +103,7 @@ Authenticates user with username and password.
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -99,9 +112,11 @@ Authenticates user with username and password.
 ```
 
 ### 2. POST /api/update-credentials
+
 Updates username and/or password.
 
 **Request:**
+
 ```json
 {
   "currentUsername": "admin",
@@ -111,6 +126,7 @@ Updates username and/or password.
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -123,11 +139,13 @@ Updates username and/or password.
 ## 🗄️ Database
 
 **Remote MySQL Database:**
+
 - Host: 82.197.82.97
 - Database: u626686198_fishfeed
 - Table: `users` (auto-created by JPA)
 
 **Schema:**
+
 ```sql
 CREATE TABLE users (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -137,6 +155,7 @@ CREATE TABLE users (
 ```
 
 **Demo User:**
+
 - Username: admin
 - Password: admin123 (BCrypt encrypted in DB)
 
@@ -145,10 +164,12 @@ CREATE TABLE users (
 ## 🎯 User Flow
 
 1. **Initial Access:**
+
    - User visits http://localhost:5173
    - Redirected to `/login`
 
 2. **Login:**
+
    - Enter username: admin
    - Enter password: admin123
    - Click "Login"
@@ -156,6 +177,7 @@ CREATE TABLE users (
    - On failure → error message displayed
 
 3. **Update Credentials:**
+
    - Enter new username (optional)
    - Enter new password (optional)
    - Confirm new password
@@ -182,6 +204,7 @@ CREATE TABLE users (
 ## 📱 UI/UX Features
 
 ### Login Page:
+
 - Clean gradient background
 - Centered card layout
 - Input validation
@@ -190,6 +213,7 @@ CREATE TABLE users (
 - Loading state during submission
 
 ### Dashboard:
+
 - Navigation bar with logout button
 - Current username display
 - Optional username update field
@@ -203,23 +227,27 @@ CREATE TABLE users (
 ## 🧪 Testing Instructions
 
 1. **Start Backend:**
+
    ```powershell
    cd backend
    .\mvnw spring-boot:run
    ```
 
 2. **Start Frontend:**
+
    ```powershell
    cd frontend
    npm run dev
    ```
 
 3. **Test Login:**
+
    - Navigate to http://localhost:5173
    - Login with admin/admin123
    - Verify redirect to dashboard
 
 4. **Test Update Username:**
+
    - Change username to "testuser"
    - Keep password empty
    - Submit
@@ -227,6 +255,7 @@ CREATE TABLE users (
    - Login with testuser/admin123
 
 5. **Test Update Password:**
+
    - Login with current credentials
    - Keep username empty
    - Change password to "newpass123"
@@ -298,6 +327,7 @@ CREATE TABLE users (
 ## 📞 Support
 
 For issues or questions:
+
 1. Check README.md for detailed setup
 2. Check QUICKSTART.md for common issues
 3. Verify database connection

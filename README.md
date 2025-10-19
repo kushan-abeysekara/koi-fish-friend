@@ -5,6 +5,7 @@ A full-stack application with Spring Boot backend and React frontend featuring a
 ## Tech Stack
 
 ### Backend
+
 - **Spring Boot 3.5.6** (Java 21)
 - **Spring Data JPA**
 - **MySQL Database**
@@ -12,6 +13,7 @@ A full-stack application with Spring Boot backend and React frontend featuring a
 - **Maven**
 
 ### Frontend
+
 - **React 19** with TypeScript
 - **Vite** (Build tool)
 - **React Router DOM** (Navigation)
@@ -68,6 +70,7 @@ koi-fish-friend/
 ## Setup & Installation
 
 ### Prerequisites
+
 - Java 21
 - Maven 3.x
 - Node.js 18+ and npm
@@ -76,16 +79,19 @@ koi-fish-friend/
 ### Backend Setup
 
 1. Navigate to the backend directory:
+
    ```bash
    cd backend
    ```
 
 2. Build the project:
+
    ```bash
    ./mvnw clean install
    ```
 
 3. Run the Spring Boot application:
+
    ```bash
    ./mvnw spring-boot:run
    ```
@@ -95,16 +101,19 @@ koi-fish-friend/
 ### Frontend Setup
 
 1. Navigate to the frontend directory:
+
    ```bash
    cd frontend
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Start the development server:
+
    ```bash
    npm run dev
    ```
@@ -114,9 +123,11 @@ koi-fish-friend/
 ## API Endpoints
 
 ### POST /api/login
+
 Login with username and password.
 
 **Request Body:**
+
 ```json
 {
   "username": "admin",
@@ -125,6 +136,7 @@ Login with username and password.
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -133,9 +145,11 @@ Login with username and password.
 ```
 
 ### POST /api/update-credentials
+
 Update username and/or password for the current user.
 
 **Request Body:**
+
 ```json
 {
   "currentUsername": "admin",
@@ -145,6 +159,7 @@ Update username and/or password for the current user.
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -155,6 +170,7 @@ Update username and/or password for the current user.
 ## Features
 
 ### Login Page
+
 - Username and password input fields
 - Form validation
 - Error handling
@@ -162,6 +178,7 @@ Update username and/or password for the current user.
 - Redirects to dashboard on successful login
 
 ### Dashboard Page
+
 - Update username (optional)
 - Update password (optional)
 - Password confirmation
@@ -170,6 +187,7 @@ Update username and/or password for the current user.
 - Logout button
 
 ### Security Features
+
 - BCrypt password encryption
 - CORS enabled for frontend
 - Session management using sessionStorage
@@ -178,12 +196,14 @@ Update username and/or password for the current user.
 ## Usage Flow
 
 1. **Login:**
+
    - Open `http://localhost:5173/login`
    - Enter demo credentials (admin / admin123)
    - Click Login button
    - Redirected to Dashboard
 
 2. **Update Credentials:**
+
    - On Dashboard, enter new username and/or password
    - Confirm new password if changing
    - Click Update Credentials
@@ -197,11 +217,13 @@ Update username and/or password for the current user.
 ## Environment Variables
 
 ### Frontend (.env)
+
 ```
 VITE_API_URL=http://localhost:8080
 ```
 
 ### Backend (application.properties)
+
 ```properties
 spring.datasource.url=jdbc:mysql://82.197.82.97:3306/u626686198_fishfeed
 spring.datasource.username=u626686198_fishfeedu
@@ -211,11 +233,13 @@ spring.datasource.password=FrevCf&1:2
 ## Development
 
 ### Backend
+
 - The application uses JPA with `ddl-auto=update` for automatic schema updates
 - Demo user is created automatically on startup
 - CORS is configured to accept requests from `http://localhost:5173`
 
 ### Frontend
+
 - Hot module replacement (HMR) enabled
 - TypeScript for type safety
 - Tailwind CSS for responsive design
@@ -224,21 +248,25 @@ spring.datasource.password=FrevCf&1:2
 ## Troubleshooting
 
 ### Backend won't start
+
 - Check if Java 21 is installed: `java -version`
 - Ensure MySQL connection is working
 - Check port 8080 is not in use
 
 ### Frontend won't start
+
 - Delete `node_modules` and run `npm install` again
 - Check port 5173 is not in use
 - Verify .env file exists
 
 ### Login fails
+
 - Ensure backend is running
 - Check browser console for CORS errors
 - Verify database connection
 
 ### Database connection issues
+
 - Verify MySQL credentials
 - Check if remote database allows your IP
 - Test connection using MySQL client

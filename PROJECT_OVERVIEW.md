@@ -21,18 +21,21 @@ A full-stack web application that provides a secure login system with credential
 ## ✨ Key Features
 
 ### 🔐 Authentication
+
 - Secure login with username/password
 - BCrypt password encryption
 - Session management
 - Auto-logout on credential change
 
 ### 🔧 Credential Management
+
 - Update username
 - Update password with confirmation
 - Validate password strength
 - Prevent duplicate usernames
 
 ### 🎨 User Interface
+
 - Clean, modern design with Tailwind CSS
 - Responsive (mobile & desktop)
 - Real-time form validation
@@ -40,6 +43,7 @@ A full-stack web application that provides a secure login system with credential
 - Loading states
 
 ### 🛡️ Security
+
 - BCrypt password hashing
 - CORS protection
 - SQL injection prevention (JPA)
@@ -53,6 +57,7 @@ A full-stack web application that provides a secure login system with credential
 ### Tech Stack
 
 **Backend:**
+
 - Spring Boot 3.5.6
 - Java 21
 - Spring Data JPA
@@ -61,6 +66,7 @@ A full-stack web application that provides a secure login system with credential
 - Maven
 
 **Frontend:**
+
 - React 19
 - TypeScript
 - Vite
@@ -69,6 +75,7 @@ A full-stack web application that provides a secure login system with credential
 - Tailwind CSS
 
 **Database:**
+
 - MySQL 8.0
 - Remote hosted (82.197.82.97)
 
@@ -109,17 +116,20 @@ koi-fish-friend/
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 - Java 21
 - Node.js 18+
 - Internet connection (for remote database)
 
 ### Start Backend
+
 ```powershell
 cd backend
 .\mvnw spring-boot:run
 ```
 
 ### Start Frontend
+
 ```powershell
 cd frontend
 npm install
@@ -127,10 +137,12 @@ npm run dev
 ```
 
 ### Access Application
+
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8080/api
 
 ### Demo Credentials
+
 - Username: `admin`
 - Password: `admin123`
 
@@ -139,9 +151,11 @@ npm run dev
 ## 📊 API Endpoints
 
 ### POST /api/login
+
 Authenticate user with username and password.
 
 **Request:**
+
 ```json
 {
   "username": "admin",
@@ -150,6 +164,7 @@ Authenticate user with username and password.
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -158,9 +173,11 @@ Authenticate user with username and password.
 ```
 
 ### POST /api/update-credentials
+
 Update user credentials (username and/or password).
 
 **Request:**
+
 ```json
 {
   "currentUsername": "admin",
@@ -170,6 +187,7 @@ Update user credentials (username and/or password).
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -183,13 +201,14 @@ Update user credentials (username and/or password).
 
 **Table: users**
 
-| Column   | Type         | Constraints           |
-|----------|-------------|-----------------------|
-| id       | BIGINT      | PRIMARY KEY, AUTO_INCREMENT |
-| username | VARCHAR(255)| UNIQUE, NOT NULL      |
-| password | VARCHAR(255)| NOT NULL              |
+| Column   | Type         | Constraints                 |
+| -------- | ------------ | --------------------------- |
+| id       | BIGINT       | PRIMARY KEY, AUTO_INCREMENT |
+| username | VARCHAR(255) | UNIQUE, NOT NULL            |
+| password | VARCHAR(255) | NOT NULL                    |
 
 **Demo User:**
+
 - Username: admin
 - Password: admin123 (stored as BCrypt hash)
 
@@ -198,6 +217,7 @@ Update user credentials (username and/or password).
 ## 🔄 User Flows
 
 ### Login Flow
+
 1. User visits application
 2. Redirected to login page
 3. Enters username and password
@@ -206,6 +226,7 @@ Update user credentials (username and/or password).
 6. On failure: Show error message
 
 ### Update Credentials Flow
+
 1. User logged in at dashboard
 2. Enters new username (optional)
 3. Enters new password (optional)
@@ -220,16 +241,19 @@ Update user credentials (username and/or password).
 ## 📚 Documentation
 
 ### For Developers
+
 - **README.md** - Complete project documentation
 - **ARCHITECTURE.md** - System architecture & diagrams
 - **TESTING.md** - Comprehensive testing checklist
 - **DEPLOYMENT.md** - Deployment guide (Docker, Cloud, etc.)
 
 ### For Users
+
 - **QUICKSTART.md** - Quick start guide
 - **SUMMARY.md** - Project summary
 
 ### Scripts
+
 - **start.ps1** - PowerShell start script
 - **start.bat** - Batch start script
 
@@ -238,6 +262,7 @@ Update user credentials (username and/or password).
 ## 🧪 Testing
 
 ### Test Coverage
+
 - ✅ Backend compilation
 - ✅ Frontend build
 - ✅ API endpoints
@@ -254,19 +279,23 @@ See **TESTING.md** for complete checklist.
 ## 🛡️ Security Features
 
 1. **Password Encryption**
+
    - BCrypt with Spring Security
    - Secure salt generation
 
 2. **CORS Protection**
+
    - Configured for frontend only
    - Production-ready
 
 3. **Input Validation**
+
    - Frontend validation
    - Backend validation
    - Database constraints
 
 4. **Session Management**
+
    - SessionStorage (client-side)
    - Auto-logout on credential change
 
@@ -279,6 +308,7 @@ See **TESTING.md** for complete checklist.
 ## 🎯 Features Implemented
 
 ### Backend ✅
+
 - [x] User entity with JPA
 - [x] User repository
 - [x] Authentication controller
@@ -291,6 +321,7 @@ See **TESTING.md** for complete checklist.
 - [x] DTO classes
 
 ### Frontend ✅
+
 - [x] Login page
 - [x] Dashboard page
 - [x] React Router setup
@@ -303,6 +334,7 @@ See **TESTING.md** for complete checklist.
 - [x] TypeScript types
 
 ### Documentation ✅
+
 - [x] README
 - [x] Quick Start Guide
 - [x] Architecture Documentation
@@ -316,6 +348,7 @@ See **TESTING.md** for complete checklist.
 ## 📦 Dependencies
 
 ### Backend Dependencies
+
 ```xml
 - spring-boot-starter-web
 - spring-boot-starter-data-jpa
@@ -324,6 +357,7 @@ See **TESTING.md** for complete checklist.
 ```
 
 ### Frontend Dependencies
+
 ```json
 - react (19.1.1)
 - react-router-dom
@@ -337,11 +371,13 @@ See **TESTING.md** for complete checklist.
 ## 🚀 Deployment Options
 
 1. **Traditional Server**
+
    - Linux server with systemd
    - Nginx for frontend
    - Java for backend
 
 2. **Docker**
+
    - Docker Compose
    - Containerized services
 
@@ -358,6 +394,7 @@ See **DEPLOYMENT.md** for detailed instructions.
 ## 🔧 Configuration
 
 ### Backend Configuration
+
 **File:** `backend/src/main/resources/application.properties`
 
 ```properties
@@ -375,6 +412,7 @@ server.port=8080
 ```
 
 ### Frontend Configuration
+
 **File:** `frontend/.env`
 
 ```
@@ -386,6 +424,7 @@ VITE_API_URL=http://localhost:8080
 ## 🎨 UI/UX Highlights
 
 ### Login Page
+
 - Gradient background (blue to purple)
 - Centered white card
 - Clean input fields
@@ -393,6 +432,7 @@ VITE_API_URL=http://localhost:8080
 - Error handling with red alerts
 
 ### Dashboard
+
 - Navigation bar with logout
 - Current username display
 - Optional credential updates
@@ -405,18 +445,21 @@ VITE_API_URL=http://localhost:8080
 ## 📈 Performance
 
 ### Backend
+
 - Fast startup time (~5-10 seconds)
 - Efficient database queries
 - Connection pooling (HikariCP)
 - Minimal dependencies
 
 ### Frontend
+
 - Fast build time with Vite
 - Optimized bundle size
 - Lazy loading ready
 - Code splitting ready
 
 ### Database
+
 - Indexed username column
 - Minimal table structure
 - Remote hosting with good uptime
@@ -426,14 +469,17 @@ VITE_API_URL=http://localhost:8080
 ## 🐛 Known Limitations
 
 1. **No Registration**
+
    - Demo system with pre-created user only
    - Can be extended for registration
 
 2. **Single User Support**
+
    - Designed for demo purposes
    - Easily scalable to multi-user
 
 3. **No Password Reset**
+
    - Would require email integration
    - Future enhancement
 
@@ -446,6 +492,7 @@ VITE_API_URL=http://localhost:8080
 ## 🔮 Future Enhancements
 
 ### Authentication
+
 - [ ] JWT token authentication
 - [ ] Refresh tokens
 - [ ] Remember me functionality
@@ -453,6 +500,7 @@ VITE_API_URL=http://localhost:8080
 - [ ] OAuth integration (Google, GitHub)
 
 ### User Management
+
 - [ ] User registration
 - [ ] Email verification
 - [ ] Password reset via email
@@ -460,6 +508,7 @@ VITE_API_URL=http://localhost:8080
 - [ ] User roles (admin, user)
 
 ### Features
+
 - [ ] Password strength meter
 - [ ] Login history
 - [ ] Security audit log
@@ -467,6 +516,7 @@ VITE_API_URL=http://localhost:8080
 - [ ] Email notifications
 
 ### Technical
+
 - [ ] Redis caching
 - [ ] Rate limiting
 - [ ] API versioning
@@ -478,12 +528,14 @@ VITE_API_URL=http://localhost:8080
 ## 📞 Support
 
 ### Getting Help
+
 1. Check **README.md** for setup instructions
 2. Review **QUICKSTART.md** for common issues
 3. See **TESTING.md** for testing procedures
 4. Check **DEPLOYMENT.md** for deployment issues
 
 ### Common Issues
+
 - Backend won't start → Check Java version, database connection
 - Frontend errors → Run `npm install`, check .env file
 - Database errors → Verify credentials, check network
@@ -509,6 +561,7 @@ MIT License - Feel free to use, modify, and distribute.
 ## 🎉 Success Metrics
 
 ✅ **100% Requirements Met**
+
 - Login system implemented
 - Credential update implemented
 - BCrypt encryption working
@@ -517,12 +570,14 @@ MIT License - Feel free to use, modify, and distribute.
 - Complete documentation
 
 ✅ **Production Ready**
+
 - Security features implemented
 - Error handling complete
 - Testing checklist provided
 - Deployment guide available
 
 ✅ **Developer Friendly**
+
 - Clean code structure
 - TypeScript type safety
 - Comprehensive comments
@@ -549,23 +604,27 @@ MIT License - Feel free to use, modify, and distribute.
 ### What Makes This Special?
 
 1. **Complete Solution**
+
    - Both backend and frontend
    - Full authentication flow
    - Production-ready security
 
 2. **Modern Tech Stack**
+
    - Latest Spring Boot 3.5.6
    - React 19
    - TypeScript for type safety
    - Tailwind for modern UI
 
 3. **Excellent Documentation**
+
    - 7 comprehensive guides
    - Architecture diagrams
    - Testing checklists
    - Deployment instructions
 
 4. **Easy to Start**
+
    - One-click start scripts
    - Demo user pre-configured
    - Clear error messages
@@ -584,16 +643,19 @@ MIT License - Feel free to use, modify, and distribute.
 This project can be used as:
 
 1. **Learning Resource**
+
    - Study full-stack development
    - Learn Spring Boot + React
    - Understand authentication flows
 
 2. **Starting Template**
+
    - Bootstrap new projects
    - Reference architecture
    - Best practices example
 
 3. **Demo Application**
+
    - Show technical skills
    - Portfolio project
    - Client demonstrations
@@ -618,6 +680,7 @@ This project can be used as:
 ## 📮 Contact
 
 For questions, issues, or contributions:
+
 - Check documentation first
 - Review GitHub issues
 - Contact development team

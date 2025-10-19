@@ -26,6 +26,7 @@ Open browser at: `http://localhost:5173`
 ## ✅ Test the Application
 
 1. **Login Test:**
+
    - Go to http://localhost:5173
    - Enter demo credentials
    - Click "Login"
@@ -49,12 +50,14 @@ Open browser at: `http://localhost:5173`
 ## 🛠️ Troubleshooting
 
 ### Backend Issues
+
 ```powershell
 # If port 8080 is in use, change in application.properties:
 server.port=8081
 ```
 
 ### Frontend Issues
+
 ```powershell
 # If dependencies are missing:
 cd frontend
@@ -65,6 +68,7 @@ npm install -D tailwindcss postcss autoprefixer
 ```
 
 ### Database Connection Issues
+
 - The database is hosted remotely at 82.197.82.97
 - Ensure your internet connection is stable
 - Check if your firewall allows MySQL connections

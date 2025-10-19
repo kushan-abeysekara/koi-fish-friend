@@ -185,6 +185,7 @@
 ## Technology Stack
 
 ### Frontend Stack
+
 ```
 ┌─────────────────────────────────────┐
 │          React 19                   │
@@ -205,6 +206,7 @@
 ```
 
 ### Backend Stack
+
 ```
 ┌───────────────────────────────────┐
 │     Spring Boot 3.5.6             │
@@ -285,13 +287,13 @@ Production (Future):
 
 ```
 Login Flow:
-User Input → Frontend Validation → API Request → Backend Validation 
-→ Database Query → Password Verification → Response → Session Store 
+User Input → Frontend Validation → API Request → Backend Validation
+→ Database Query → Password Verification → Response → Session Store
 → Navigation
 
 Update Flow:
-User Input → Frontend Validation → API Request → Backend Validation 
-→ Database Query (check existing) → Uniqueness Check → Password Encryption 
+User Input → Frontend Validation → API Request → Backend Validation
+→ Database Query (check existing) → Uniqueness Check → Password Encryption
 → Database Update → Response → Session Update → Auto Logout
 ```
 
@@ -359,6 +361,7 @@ koi-fish-friend/
 ## API Contract
 
 ### POST /api/login
+
 ```json
 Request:
 {
@@ -380,6 +383,7 @@ Response (Failure):
 ```
 
 ### POST /api/update-credentials
+
 ```json
 Request:
 {

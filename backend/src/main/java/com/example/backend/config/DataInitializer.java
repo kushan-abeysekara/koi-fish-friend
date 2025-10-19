@@ -9,12 +9,12 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class DataInitializer implements CommandLineRunner {
-    
+
     @Autowired
     private UserRepository userRepository;
-    
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-    
+
     @Override
     public void run(String... args) throws Exception {
         // Check if demo user already exists
