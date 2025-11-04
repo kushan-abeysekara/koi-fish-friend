@@ -27,9 +27,5 @@ echo Access Points:
 echo   Frontend: http://localhost:5173
 echo   Backend:  http://localhost:8080
 echo.
-echo Demo Credentials:
-echo   Username: admin
-echo   Password: admin123
-echo.
 echo Press any key to exit...
 pause >nul

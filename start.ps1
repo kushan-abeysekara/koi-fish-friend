@@ -96,11 +96,7 @@ Write-Host "📍 Access Points:" -ForegroundColor Cyan
 Write-Host "   Frontend: http://localhost:5173" -ForegroundColor White
 Write-Host "   Backend:  http://localhost:8080" -ForegroundColor White
 Write-Host ""
-Write-Host "🔑 Demo Credentials:" -ForegroundColor Cyan
-Write-Host "   Username: admin" -ForegroundColor White
-Write-Host "   Password: admin123" -ForegroundColor White
-Write-Host ""
-Write-Host "📚 Documentation:" -ForegroundColor Cyan
+Write-Host " Documentation:" -ForegroundColor Cyan
 Write-Host "   README.md      - Complete documentation" -ForegroundColor White
 Write-Host "   QUICKSTART.md  - Quick start guide" -ForegroundColor White
 Write-Host "   TESTING.md     - Testing checklist" -ForegroundColor White
