@@ -68,6 +68,34 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
         />
         
         <NavItem
+          icon={<i className="fas fa-fish"></i>}
+          label="Fish Count"
+          path="/dashboard/fish-count"
+          active={location.pathname === '/dashboard/fish-count'}
+        />
+        
+        <NavItem
+          icon={<i className="fas fa-wallet"></i>}
+          label="Expenditures"
+          path="/dashboard/expenditures"
+          active={location.pathname === '/dashboard/expenditures'}
+        />
+        
+        <NavItem
+          icon={<i className="fas fa-bolt"></i>}
+          label="Realtime Current"
+          path="/dashboard/realtime-current"
+          active={location.pathname === '/dashboard/realtime-current'}
+        />
+        
+        <NavItem
+          icon={<i className="fas fa-chart-bar"></i>}
+          label="Calculate Kwh"
+          path="/dashboard/calculate-kwh"
+          active={location.pathname === '/dashboard/calculate-kwh'}
+        />
+        
+        <NavItem
           icon={<i className="fas fa-user-edit"></i>}
           label="Update Credentials"
           path="/dashboard/credentials"

@@ -3,6 +3,10 @@ import { useNavigate, Routes, Route } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import DashboardHome from '../components/DashboardHome';
 import UpdateCredentials from '../components/UpdateCredentials';
+import Expenditures from '../components/Expenditures';
+import RealtimeCurrent from '../components/RealtimeCurrent';
+import CalculateKwh from '../components/CalculateKwh';
+import FishCount from '../components/FishCount';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -54,6 +58,10 @@ const Dashboard: React.FC = () => {
         <div className="p-8">
           <Routes>
             <Route path="/" element={<DashboardHome username={currentUsername} />} />
+            <Route path="/fish-count" element={<FishCount />} />
+            <Route path="/expenditures" element={<Expenditures />} />
+            <Route path="/realtime-current" element={<RealtimeCurrent />} />
+            <Route path="/calculate-kwh" element={<CalculateKwh />} />
             <Route 
               path="/credentials" 
               element={
