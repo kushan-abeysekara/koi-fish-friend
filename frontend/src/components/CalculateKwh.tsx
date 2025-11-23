@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { pondApi } from '../services/api';
 
 interface PowerConsumption {
   id: string;
-  pondId: string;
+  pondId: number;
   pondName: string;
   currentKwh: number;
   todayKwh: number;
@@ -15,22 +16,35 @@ interface PowerConsumption {
 }
 
 interface Pond {
-  id: string;
+  id: number;
   name: string;
   color: string;
 }
 
 const CalculateKwh: React.FC = () => {
   const [consumptionData, setConsumptionData] = useState<PowerConsumption[]>([]);
-  const [selectedPond, setSelectedPond] = useState<string>('all');
+  const [selectedPond, setSelectedPond] = useState<number | 'all'>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<'today' | 'week' | 'month'>('today');
   const [electricityRate, setElectricityRate] = useState(25); // LKR per kWh
+  const [ponds, setPonds] = useState<Pond[]>([]);
 
-  // Mock ponds - In real app, fetch from backend
-  const ponds: Pond[] = [
-    { id: '1', name: 'Pond 1', color: 'blue' },
-    { id: '2', name: 'Pond 2', color: 'green' },
-  ];
+  // Load ponds from API on mount
+  useEffect(() => {
+    loadPonds();
+  }, []);
+
+  const loadPonds = async () => {
+    try {
+      const response = await pondApi.getAll();
+      if (response.success && response.data) {
+        setPonds(response.data);
+      }
+    } catch (error) {
+      console.error('Error loading ponds:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load ponds: ' + errorMessage);
+    }
+  };
 
   const pondColors: Record<string, { bg: string; text: string; border: string }> = {
     blue: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
@@ -45,6 +59,8 @@ const CalculateKwh: React.FC = () => {
 
   // Simulate sensor data for power consumption
   useEffect(() => {
+    if (ponds.length === 0) return;
+
     const generateMockConsumption = (): PowerConsumption[] => {
       return ponds.map((pond) => {
         const currentKwh = parseFloat((Math.random() * 2 + 1).toFixed(3)); // 1-3 kWh
@@ -78,7 +94,7 @@ const CalculateKwh: React.FC = () => {
     }, 5000); // Update every 5 seconds
 
     return () => clearInterval(interval);
-  }, [electricityRate]);
+  }, [electricityRate, ponds]);
 
   const getFilteredData = () => {
     if (selectedPond === 'all') {

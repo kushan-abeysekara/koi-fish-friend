@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { pondApi } from '../services/api';
 
 interface SensorData {
   id: string;
-  pondId: string;
+  pondId: number;
   pondName: string;
   current: number;
   voltage: number;
@@ -12,21 +13,34 @@ interface SensorData {
 }
 
 interface Pond {
-  id: string;
+  id: number;
   name: string;
   color: string;
 }
 
 const RealtimeCurrent: React.FC = () => {
   const [sensorData, setSensorData] = useState<SensorData[]>([]);
-  const [selectedPond, setSelectedPond] = useState<string>('all');
+  const [selectedPond, setSelectedPond] = useState<number | 'all'>('all');
   const [isLive, setIsLive] = useState(true);
+  const [ponds, setPonds] = useState<Pond[]>([]);
 
-  // Mock ponds - In real app, fetch from backend
-  const ponds: Pond[] = [
-    { id: '1', name: 'Pond 1', color: 'blue' },
-    { id: '2', name: 'Pond 2', color: 'green' },
-  ];
+  // Load ponds from API on mount
+  useEffect(() => {
+    loadPonds();
+  }, []);
+
+  const loadPonds = async () => {
+    try {
+      const response = await pondApi.getAll();
+      if (response.success && response.data) {
+        setPonds(response.data);
+      }
+    } catch (error) {
+      console.error('Error loading ponds:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load ponds: ' + errorMessage);
+    }
+  };
 
   const pondColors: Record<string, { bg: string; text: string; border: string }> = {
     blue: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
@@ -41,6 +55,8 @@ const RealtimeCurrent: React.FC = () => {
 
   // Simulate real-time sensor data updates
   useEffect(() => {
+    if (ponds.length === 0) return;
+
     const generateMockData = (): SensorData[] => {
       return ponds.map((pond) => {
         const current = parseFloat((Math.random() * 15 + 5).toFixed(2)); // 5-20 Amps
@@ -73,7 +89,7 @@ const RealtimeCurrent: React.FC = () => {
 
       return () => clearInterval(interval);
     }
-  }, [isLive]);
+  }, [isLive, ponds]);
 
   const getFilteredData = () => {
     if (selectedPond === 'all') {

@@ -11,7 +11,7 @@ interface NavItemProps {
 
 const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick }) => {
   const navigate = useNavigate();
-  
+
   const handleClick = () => {
     if (onClick) {
       onClick();
@@ -23,11 +23,10 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick })
   return (
     <button
       onClick={handleClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-        active
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${active
           ? 'bg-cyan-500 text-white shadow-lg'
           : 'text-gray-300 hover:bg-slate-700 hover:text-white'
-      }`}
+        }`}
     >
       <span className="text-xl">{icon}</span>
       <span className="font-medium">{label}</span>
@@ -66,49 +65,56 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           path="/dashboard"
           active={location.pathname === '/dashboard'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-fish"></i>}
           label="Fish Count"
           path="/dashboard/fish-count"
           active={location.pathname === '/dashboard/fish-count'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-wallet"></i>}
           label="Expenditures"
           path="/dashboard/expenditures"
           active={location.pathname === '/dashboard/expenditures'}
         />
-        
+
+        <NavItem
+          icon={<i className="fas fa-boxes"></i>}
+          label="Inventory"
+          path="/dashboard/inventory"
+          active={location.pathname === '/dashboard/inventory'}
+        />
+
         <NavItem
           icon={<i className="fas fa-bolt"></i>}
           label="Realtime Current"
           path="/dashboard/realtime-current"
           active={location.pathname === '/dashboard/realtime-current'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-chart-bar"></i>}
           label="Calculate Kwh"
           path="/dashboard/calculate-kwh"
           active={location.pathname === '/dashboard/calculate-kwh'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-user-edit"></i>}
           label="Update Credentials"
           path="/dashboard/credentials"
           active={location.pathname === '/dashboard/credentials'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-user-circle"></i>}
           label="Profile"
           path="/dashboard/profile"
           active={location.pathname === '/dashboard/profile'}
         />
-        
+
         <NavItem
           icon={<i className="fas fa-cog"></i>}
           label="Settings"

@@ -4,6 +4,7 @@ import Sidebar from '../components/Sidebar';
 import DashboardHome from '../components/DashboardHome';
 import UpdateCredentials from '../components/UpdateCredentials';
 import Expenditures from '../components/Expenditures';
+import Inventory from '../components/Inventory';
 import RealtimeCurrent from '../components/RealtimeCurrent';
 import CalculateKwh from '../components/CalculateKwh';
 import FishCount from '../components/FishCount';
@@ -60,17 +61,18 @@ const Dashboard: React.FC = () => {
             <Route path="/" element={<DashboardHome username={currentUsername} />} />
             <Route path="/fish-count" element={<FishCount />} />
             <Route path="/expenditures" element={<Expenditures />} />
+            <Route path="/inventory" element={<Inventory />} />
             <Route path="/realtime-current" element={<RealtimeCurrent />} />
             <Route path="/calculate-kwh" element={<CalculateKwh />} />
-            <Route 
-              path="/credentials" 
+            <Route
+              path="/credentials"
               element={
-                <UpdateCredentials 
-                  currentUsername={currentUsername} 
+                <UpdateCredentials
+                  currentUsername={currentUsername}
                   onUsernameUpdate={updateUsername}
                   onLogout={handleLogout}
                 />
-              } 
+              }
             />
             <Route path="/profile" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Profile - Coming Soon</h2></div>} />
             <Route path="/settings" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Settings - Coming Soon</h2></div>} />
