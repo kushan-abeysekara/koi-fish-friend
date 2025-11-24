@@ -55,7 +55,17 @@ Before you begin, ensure you have:
 - Search: `RTClib`
 - Install: **RTClib by Adafruit**
 
+### Library 4: Adafruit GFX (For OLED)
+- Search: `Adafruit GFX`
+- Install: **Adafruit GFX Library by Adafruit**
+
+### Library 5: Adafruit SSD1306 (For OLED)
+- Search: `Adafruit SSD1306`
+- Install: **Adafruit SSD1306 by Adafruit**
+
 3. Close Library Manager
+
+**Note**: OLED libraries are optional for initial testing
 
 ---
 
@@ -99,6 +109,21 @@ Connect all GND pins together (ESP32, sensors, battery, motor driver).
 - [ ] ESP32 GPIO 27 → L298N IN3 (Right Motor)
 - [ ] ESP32 GPIO 32 → L298N IN4 (Right Motor)
 - [ ] ESP32 GPIO 33 → L298N ENB (Right Motor PWM)
+
+#### OLED Display (SPI)
+- [ ] ESP32 GPIO 3 → OLED MOSI (D1)
+- [ ] ESP32 GPIO 1 → OLED CLK (D0)
+- [ ] ESP32 GPIO 36 → OLED DC
+- [ ] ESP32 GPIO 39 → OLED CS
+- [ ] OLED VCC → 3.3V, GND → GND
+
+#### Fish Feeding System
+- [ ] ESP32 GPIO 9 → ESC Signal (A2212 Motor)
+- [ ] ESP32 GPIO 10 → A4988 STEP
+- [ ] ESP32 GPIO 11 → A4988 DIR
+- [ ] ESP32 GPIO 8 → A4988 EN
+- [ ] ESC: Red→12V, Black→GND, Signal→GPIO 9
+- [ ] A4988: VMOT→12V, GND→GND
 
 **Full details**: See `WIRING_DIAGRAM.md`
 

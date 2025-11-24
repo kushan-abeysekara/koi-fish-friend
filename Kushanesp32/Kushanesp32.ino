@@ -29,8 +29,8 @@
 #define RELAY_PIN 13           // G13 for relay control
 
 // HX711 Load Cell
-#define HX711_DOUT_PIN 16      // HX711 DOUT
-#define HX711_SCK_PIN 17       // HX711 SCK
+#define HX711_DOUT_PIN 16      // HX711 DOUT (keep original)
+#define HX711_SCK_PIN 17       // HX711 SCK (keep original)
 
 // LDR Light Sensor
 #define LDR_PIN 35             // Analog pin for LDR
@@ -52,7 +52,7 @@
 #define ULTRASONIC_FRONT_TRIG 18
 #define ULTRASONIC_FRONT_ECHO 19
 #define ULTRASONIC_BACK_TRIG 23
-#define ULTRASONIC_BACK_ECHO 0    // GPIO 5 not available, using GPIO 0
+#define ULTRASONIC_BACK_ECHO -1   // DISABLED - GPIO 0 causes boot loop
 #define ULTRASONIC_LEFT_TRIG 4
 #define ULTRASONIC_LEFT_ECHO 15
 #define ULTRASONIC_RIGHT_TRIG 2
@@ -62,10 +62,28 @@
 // SDA -> GPIO 21
 // SCL -> GPIO 22
 
+// OLED Display 0.96" SSD1306 (SPI Mode)
+#define OLED_MOSI 3          // SDA/MOSI
+#define OLED_CLK 1           // SCL/SCK
+#define OLED_DC 36           // Data/Command
+#define OLED_CS 39           // Chip Select
+#define OLED_RESET -1        // Reset (not used, -1)
+
+// Fish Feeding Motor (A2212 Brushless - ESC Control)
+#define FEED_MOTOR_PIN 9     // PWM pin for ESC control
+
+// A4988 Stepper Motor Driver
+#define STEPPER_STEP 10      // Step pin
+#define STEPPER_DIR 11       // Direction pin
+#define STEPPER_EN 8         // Enable pin (optional)
+
+// Arduino Pro Mini Communication (Serial2)
+#define ARDUINO_TX 17          // ESP32 TX2 -> Arduino RX
+#define ARDUINO_RX 18          // ESP32 RX2 -> Arduino TX (conflicts with HX711!)
+// NOTE: Use I2C instead! Arduino as I2C slave on the shared I2C bus
+
 // RESERVED FOR FUTURE WiFi/MQTT
 // Note: WiFi uses internal pins (no external connection needed)
-// Reserved for MQTT/Additional features: GPIO 36, GPIO 39
-// Note: GPIO 5 is NOT available on ESP32 38-pin board
 
 // ==================== CONSTANTS ====================
 
@@ -111,6 +129,15 @@ unsigned long lastRTCRead = 0;
 const unsigned long SENSOR_READ_INTERVAL = 100;  // 100ms
 const unsigned long RTC_READ_INTERVAL = 1000;     // 1 second
 
+// Feeding motor state (controlled by backend)
+int feedMotorSpeed = 0;  // 0-180 (ESC servo style) or 1000-2000 (PWM microseconds)
+bool feedMotorEnabled = false;
+
+// Stepper motor state (controlled by backend)
+long stepperPosition = 0;
+int stepperSpeed = 1000;  // Microseconds between steps
+bool stepperEnabled = false;
+
 // ==================== SETUP ====================
 
 void setup() {
@@ -136,15 +163,37 @@ void setup() {
   pinMode(MOTOR_RIGHT_IN2, OUTPUT);
   pinMode(MOTOR_RIGHT_EN, OUTPUT);
   
-  // Ultrasonic pins (4 sensors)
+  // Ultrasonic pins (3 sensors - back disabled)
   pinMode(ULTRASONIC_FRONT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_FRONT_ECHO, INPUT);
-  pinMode(ULTRASONIC_BACK_TRIG, OUTPUT);
-  pinMode(ULTRASONIC_BACK_ECHO, INPUT);
+  // pinMode(ULTRASONIC_BACK_TRIG, OUTPUT);  // Disabled
+  // pinMode(ULTRASONIC_BACK_ECHO, INPUT);   // Disabled
   pinMode(ULTRASONIC_LEFT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_LEFT_ECHO, INPUT);
   pinMode(ULTRASONIC_RIGHT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_RIGHT_ECHO, INPUT);
+  
+  // OLED Display pins (SPI) - DISABLED (conflicts with flash pins)
+  // pinMode(OLED_MOSI, OUTPUT);
+  // pinMode(OLED_CLK, OUTPUT);
+  // pinMode(OLED_DC, OUTPUT);
+  // pinMode(OLED_CS, OUTPUT);
+  Serial.println("OLED DISABLED - GPIO 1,3,36,39 cause issues");
+  
+  // Fish Feeding Motor (ESC) - DISABLED (GPIO 9 is flash pin)
+  // pinMode(FEED_MOTOR_PIN, OUTPUT);
+  // ledcAttach(FEED_MOTOR_PIN, 50, 16);
+  // ledcWrite(FEED_MOTOR_PIN, 0);
+  Serial.println("Feeding motor DISABLED - GPIO 8-11 are flash pins");
+  
+  // Stepper Motor Driver pins - DISABLED (GPIO 8,10,11 are flash pins)
+  // pinMode(STEPPER_STEP, OUTPUT);
+  // pinMode(STEPPER_DIR, OUTPUT);
+  // pinMode(STEPPER_EN, OUTPUT);
+  // digitalWrite(STEPPER_EN, HIGH);
+  // digitalWrite(STEPPER_STEP, LOW);
+  // digitalWrite(STEPPER_DIR, LOW);
+  Serial.println("Stepper motor DISABLED - GPIO 8-11 are flash pins");
   
   // Initialize HX711
   Serial.println("Initializing HX711...");
@@ -180,6 +229,8 @@ void setup() {
   stopMotors();
   
   Serial.println("Initialization complete!");
+  Serial.println("NOTE: OLED Display requires Adafruit_SSD1306 library for full functionality");
+  Serial.println("NOTE: Feeding motor and stepper are ready for backend control");
   Serial.println("========================================");
 }
 
@@ -204,6 +255,7 @@ void loop() {
   if (currentMillis - lastRTCRead >= RTC_READ_INTERVAL) {
     lastRTCRead = currentMillis;
     readRTC();
+    readArduinoProMini();  // Get back ultrasonic distance
     printSensorData();
   }
   
@@ -264,9 +316,28 @@ void readMPU6050() {
 
 void readUltrasonicSensors() {
   distanceFront = getDistance(ULTRASONIC_FRONT_TRIG, ULTRASONIC_FRONT_ECHO);
-  distanceBack = getDistance(ULTRASONIC_BACK_TRIG, ULTRASONIC_BACK_ECHO);
+  // distanceBack read from Arduino Pro Mini via I2C
   distanceLeft = getDistance(ULTRASONIC_LEFT_TRIG, ULTRASONIC_LEFT_ECHO);
   distanceRight = getDistance(ULTRASONIC_RIGHT_TRIG, ULTRASONIC_RIGHT_ECHO);
+}
+
+void readArduinoProMini() {
+  // Request 2 bytes from Arduino Pro Mini (back distance)
+  Wire.requestFrom(0x08, 2);
+  
+  if (Wire.available() >= 2) {
+    byte highByte = Wire.read();
+    byte lowByte = Wire.read();
+    int distanceInt = (highByte << 8) | lowByte;
+    distanceBack = distanceInt / 10.0;  // Convert back to float
+  }
+}
+
+// Send command to Arduino Pro Mini
+void sendArduinoCommand(const char* command) {
+  Wire.beginTransmission(0x08);
+  Wire.write(command);
+  Wire.endTransmission();
 }
 
 float getDistance(int trigPin, int echoPin) {
@@ -499,6 +570,17 @@ void printSensorData() {
   Serial.print(motorLeftSpeed);
   Serial.print(" | Right Speed: ");
   Serial.println(motorRightSpeed);
+  
+  // Feeding system status
+  Serial.println("\n--- Feeding System ---");
+  Serial.print("Feed Motor: ");
+  Serial.print(feedMotorEnabled ? "ON" : "OFF");
+  Serial.print(" | Speed: ");
+  Serial.println(feedMotorSpeed);
+  Serial.print("Stepper: ");
+  Serial.print(stepperEnabled ? "ENABLED" : "DISABLED");
+  Serial.print(" | Position: ");
+  Serial.println(stepperPosition);
   
   Serial.println("=====================================");
 }

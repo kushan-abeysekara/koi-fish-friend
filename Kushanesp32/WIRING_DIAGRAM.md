@@ -233,7 +233,108 @@ DS3231 Module
 
 ---
 
-## 9. WiFi & MQTT (Reserved for Future)
+## 9. OLED Display 0.96" SSD1306 (SPI Mode)
+
+```
+OLED Display Module (7-pin SPI)
+    VCC  →  3.3V (ESP32)
+    GND  →  GND (ESP32)
+    D0   →  GPIO 1 (CLK/SCK)
+    D1   →  GPIO 3 (MOSI/SDA)
+    RES  →  3.3V (or dedicated reset pin)
+    DC   →  GPIO 36 (Data/Command)
+    CS   →  GPIO 39 (Chip Select)
+```
+
+**Notes:**
+- Uses SPI interface for fast refresh rate
+- 128x64 pixel resolution
+- 3.3V logic compatible with ESP32
+- Displays real-time sensor data
+- RES can be tied to VCC if not using software reset
+
+**Required Libraries:**
+- Adafruit_GFX
+- Adafruit_SSD1306
+
+---
+
+## 10. Fish Feeding System
+
+### A2212/5T 2450KV Brushless Motor with ESC
+
+```
+Brushless Motor Setup
+    Motor Wires (3-phase)
+        Phase A →  ESC Output A
+        Phase B →  ESC Output B  
+        Phase C →  ESC Output C
+    
+    ESC (Electronic Speed Controller)
+        Red Wire    →  12V Battery Positive
+        Black Wire  →  Battery Negative (GND)
+        Signal Wire →  GPIO 9 (ESP32 PWM)
+```
+
+**ESC Calibration (One-time):**
+1. Set PWM to maximum (2000μs)
+2. Connect battery to ESC
+3. Wait for beeps
+4. Set PWM to minimum (1000μs)
+5. Wait for confirmation beeps
+6. ESC is calibrated
+
+**Normal Operation:**
+- Stop: 1000μs (or 0)
+- Slow: 1200μs
+- Medium: 1500μs
+- Fast: 1800μs
+- Max: 2000μs
+
+### A4988 Stepper Motor Driver
+
+```
+A4988 Driver Module
+    VDD   →  3.3V (ESP32 logic power)
+    GND   →  GND (Common ground)
+    VMOT  →  12V (Motor power supply)
+    GND   →  GND (Motor ground)
+    
+    Control Pins
+    STEP  →  GPIO 10 (ESP32)
+    DIR   →  GPIO 11 (ESP32)
+    EN    →  GPIO 8 (ESP32) - LOW=Enabled, HIGH=Disabled
+    
+    Motor Outputs
+    1A    →  Stepper Coil A+
+    1B    →  Stepper Coil A-
+    2A    →  Stepper Coil B+
+    2B    →  Stepper Coil B-
+    
+    Microstepping (Optional)
+    MS1   →  Low/High for step resolution
+    MS2   →  Low/High for step resolution
+    MS3   →  Low/High for step resolution
+```
+
+**Microstepping Configuration:**
+| MS1 | MS2 | MS3 | Resolution |
+|-----|-----|-----|------------|
+| L | L | L | Full step |
+| H | L | L | Half step |
+| L | H | L | Quarter step |
+| H | H | L | Eighth step |
+| H | H | H | Sixteenth step |
+
+**Notes:**
+- Add heatsink to A4988 chip
+- Adjust current limit potentiometer
+- Maximum current: 2A per coil
+- Enable pin: LOW = motor enabled
+
+---
+
+## 11. WiFi & MQTT (Reserved for Future)
 
 **WiFi Module:**
 ```
@@ -244,11 +345,7 @@ Built-in ESP32 WiFi
     - Controlled via software only
 ```
 
-**Reserved GPIO Pins:**
-```
-GPIO 36 - Reserved for expansion (input only, ADC)
-GPIO 39 - Reserved for expansion (input only, ADC)
-```
+**Note**: GPIO 36 and GPIO 39 are now used for OLED display.
 
 **Unavailable Pins on 38-Pin Board:**
 ```
@@ -295,10 +392,17 @@ GPIO 5  - Not available on this board variant
 | 15 | Left US Echo | HC-SR04 ECHO | Digital In |
 | 2 | Right US Trigger | HC-SR04 TRIG | Digital Out |
 | 12 | Right US Echo | HC-SR04 ECHO | Digital In |
-| 36 | Reserved | Future Expansion | Reserved (Input Only) |
-| 39 | Reserved | Future Expansion | Reserved (Input Only) |
+| 3 | OLED MOSI | SSD1306 D1 | SPI Data Out |
+| 1 | OLED CLK | SSD1306 D0 | SPI Clock |
+| 36 | OLED DC | SSD1306 DC | Digital Out |
+| 39 | OLED CS | SSD1306 CS | Digital Out |
+| 9 | Feed Motor ESC | A2212 Signal | PWM Out |
+| 10 | Stepper Step | A4988 STEP | Digital Out |
+| 11 | Stepper Direction | A4988 DIR | Digital Out |
+| 8 | Stepper Enable | A4988 EN | Digital Out |
 
-**Note**: GPIO 5 is NOT available on ESP32 38-pin development board
+**Note**: GPIO 5 is NOT available on ESP32 38-pin development board  
+**Total Pins Used**: 28 out of 38 available GPIO pins
 
 ---
 
@@ -364,6 +468,7 @@ Boat Layout (Top View) - 360° Sensor Coverage
     [Left HC-SR04]  |  [Right HC-SR04]
            |        |        |
     ===========================================
+    |         [OLED Display 0.96"]           |
     |                                         |
     |  [MPU-6050]      [ESP32]      [RTC]    |
     |                                         |
@@ -371,17 +476,21 @@ Boat Layout (Top View) - 360° Sensor Coverage
     |                                         |
     |       [L298N Motor Driver]              |
     |                                         |
-    |  [Left Motor]           [Right Motor]   |
+    |  [Left Motor]  [A4988]  [Right Motor]   |
+    |                [Stepper]                |
+    |                                         |
+    |      [Feed Motor ESC + A2212]          |
     ===========================================
            |        |        |
        Propeller    |    Propeller
               [Back HC-SR04]
 
-**4 Ultrasonic Sensors provide 360° coverage:**
-- Front: Forward obstacle detection
-- Back: Reverse obstacle detection  
-- Left: Port side monitoring
-- Right: Starboard side monitoring
+**Complete System Overview:**
+- 4 Ultrasonic Sensors: 360° obstacle detection
+- OLED Display: Real-time data visualization
+- Feeding System: Automated fish feeding
+- Stepper Motor: Precise feed dispensing
+- Balance Control: MPU-6050 stabilization
 ```
 
 ---

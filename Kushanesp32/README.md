@@ -56,6 +56,24 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
    - Controls external devices based on voltage
    - Activates when voltage < 8.6V
 
+9. **OLED Display 0.96" (SSD1306)**
+   - 128x64 pixel resolution
+   - SPI interface (7-pin module)
+   - Real-time sensor data visualization
+   - Low power consumption
+
+10. **Fish Feeding System**
+   - **A2212/5T 2450KV Brushless Motor**
+   - Drives feeding plate to spread fish feed
+   - ESC (Electronic Speed Controller) required
+   - Controlled via PWM signal from backend
+
+11. **A4988 Stepper Motor Driver**
+   - Controls stepper motor for precise movements
+   - Microstepping capability (up to 1/16 step)
+   - Backend controlled for automated operations
+   - Enable/disable functionality
+
 ## Features
 
 ### 1. Voltage Monitoring & Control
@@ -107,6 +125,21 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 - Battery backup ensures time persistence
 - Logs system events with timestamps
 
+### 9. OLED Display (0.96" SSD1306)
+- **Real-time visualization** of sensor data
+- **128x64 resolution** for clear display
+- Shows voltage, weight, distances, angles
+- Low power consumption
+- SPI interface for fast updates
+
+### 10. Automated Fish Feeding System
+- **Brushless motor** (A2212 2450KV) drives feeding plate
+- **Spreads fish feed** across pond surface
+- **Stepper motor** for precise feed dispensing
+- **Backend controlled** for scheduled feeding
+- **ESC control** for smooth motor operation
+- **A4988 driver** for stepper accuracy
+
 ## Technical Specifications
 
 ### Power Requirements
@@ -117,9 +150,10 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 
 ### Communication Protocols
 - **I2C**: MPU-6050, DS3231
-- **SPI**: Not used
+- **SPI**: OLED Display (SSD1306)
 - **Analog**: Voltage sensor, LDR
-- **Digital**: Ultrasonic sensors, relay, motor control
+- **Digital**: Ultrasonic sensors, relay, motor control, stepper driver
+- **PWM**: Motor drivers (L298N), ESC (feeding motor)
 
 ### Sampling Rates
 - **Sensor Reading**: 100ms (10 Hz)
@@ -176,14 +210,25 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 | GPIO 2 | Right Trigger | Right HC-SR04 |
 | GPIO 12 | Right Echo | Right HC-SR04 |
 
-### Reserved Pins for Future WiFi/MQTT
-| Pin | Purpose | Notes |
-|-----|---------|-------|
-| GPIO 36 | Reserved | Future expansion (input only) |
-| GPIO 39 | Reserved | Future expansion (input only) |
+### OLED Display (SPI)
+| Pin | Function | Module |
+|-----|----------|--------|
+| GPIO 3 | MOSI (SDA) | SSD1306 OLED |
+| GPIO 1 | CLK (SCK) | SSD1306 OLED |
+| GPIO 36 | Data/Command | SSD1306 OLED |
+| GPIO 39 | Chip Select | SSD1306 OLED |
+
+### Fish Feeding System
+| Pin | Function | Module |
+|-----|----------|--------|
+| GPIO 9 | ESC PWM Signal | A2212 Brushless Motor |
+| GPIO 10 | Step Pulse | A4988 Stepper Driver |
+| GPIO 11 | Direction | A4988 Stepper Driver |
+| GPIO 8 | Enable | A4988 Stepper Driver |
 
 **Note**: WiFi uses internal ESP32 hardware (no external pins required)  
-**Important**: GPIO 5 is NOT available on ESP32 38-pin development board
+**Important**: GPIO 5 is NOT available on ESP32 38-pin development board  
+**Backend Control**: Feeding motor and stepper are controlled via backend API (functions ready)
 
 ## Software Architecture
 
@@ -245,7 +290,11 @@ Install these libraries via Arduino IDE Library Manager:
 - HX711.h (by Bogdan Necula)
 - MPU6050.h (by Electronic Cats)
 - RTClib.h (by Adafruit)
+- Adafruit_GFX.h (by Adafruit) - For OLED
+- Adafruit_SSD1306.h (by Adafruit) - For OLED Display
 ```
+
+**Note**: OLED display libraries are optional for initial testing. The system will work without them, but display features will be unavailable.
 
 ### Arduino IDE Setup
 
@@ -335,6 +384,10 @@ Left: 45.2 cm | Right: 38.7 cm
 
 --- Motors ---
 Left Speed: 150 | Right Speed: 150
+
+--- Feeding System ---
+Feed Motor: OFF | Speed: 0
+Stepper: DISABLED | Position: 0
 
 ========== RTC Information ==========
 Date: 2025/11/24

@@ -45,6 +45,30 @@ This document lists all required Arduino libraries for the Koi Fish Friend ESP32
 
 **GitHub**: https://github.com/adafruit/RTClib
 
+### 5. Adafruit GFX Library
+- **Name**: Adafruit GFX Library
+- **Author**: Adafruit
+- **Version**: 1.11.0 or higher
+- **Used For**: Graphics core library for OLED display
+- **Installation**:
+  - Arduino IDE: Tools → Manage Libraries → Search "Adafruit GFX"
+  - Install "Adafruit GFX Library" by Adafruit
+
+**GitHub**: https://github.com/adafruit/Adafruit-GFX-Library
+
+### 6. Adafruit SSD1306
+- **Name**: Adafruit SSD1306
+- **Author**: Adafruit
+- **Version**: 2.5.0 or higher
+- **Used For**: OLED display (SSD1306 controller) communication
+- **Installation**:
+  - Arduino IDE: Tools → Manage Libraries → Search "Adafruit SSD1306"
+  - Install "Adafruit SSD1306" by Adafruit
+
+**GitHub**: https://github.com/adafruit/Adafruit_SSD1306
+
+**Note**: OLED libraries are optional. System will work without them, but display features will be unavailable.
+
 ---
 
 ## Installation Instructions
@@ -67,6 +91,12 @@ This document lists all required Arduino libraries for the Koi Fish Friend ESP32
 
 3. Search: "RTClib"
    Install: RTClib by Adafruit
+
+4. Search: "Adafruit GFX" (For OLED)
+   Install: Adafruit GFX Library by Adafruit
+
+5. Search: "Adafruit SSD1306" (For OLED)
+   Install: Adafruit SSD1306 by Adafruit
 ```
 
 ### Method 2: Manual Installation
@@ -99,6 +129,8 @@ To verify libraries are installed correctly:
 | HX711 | 0.7.0 | 0.7.5 | ✅ Stable |
 | MPU6050 | 0.5.0 | 0.6.0 | ✅ Stable |
 | RTClib | 2.0.0 | 2.1.1 | ✅ Stable |
+| Adafruit GFX | 1.10.0 | 1.11.0 | ✅ Stable |
+| Adafruit SSD1306 | 2.4.0 | 2.5.0 | ✅ Stable |
 
 ---
 
@@ -160,6 +192,8 @@ Before installing libraries, ensure ESP32 board support is installed:
 - [ ] HX711 library installed
 - [ ] MPU6050 library installed
 - [ ] RTClib library installed
+- [ ] Adafruit GFX library installed (for OLED)
+- [ ] Adafruit SSD1306 library installed (for OLED)
 - [ ] Board selected: ESP32 Dev Module
 - [ ] USB driver installed (CP210x or CH340)
 - [ ] Port selected in Tools → Port
