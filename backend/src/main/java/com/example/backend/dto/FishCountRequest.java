@@ -21,7 +21,8 @@ public class FishCountRequest {
         this.notes = notes;
     }
 
-    public FishCountRequest(LocalDate date, Long pondId, Integer count, String notes, String countMethod, String countedBy) {
+    public FishCountRequest(LocalDate date, Long pondId, Integer count, String notes, String countMethod,
+            String countedBy) {
         this.date = date;
         this.pondId = pondId;
         this.count = count;

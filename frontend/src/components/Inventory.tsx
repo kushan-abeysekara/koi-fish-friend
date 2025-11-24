@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { pondApi, inventoryApi, stockTransactionApi } from '../services/api';
 
 interface InventoryItem {
-  id: string;
+  id: number;
   name: string;
   category: string;
   currentStock: number;
@@ -13,41 +14,89 @@ interface InventoryItem {
 }
 
 interface StockTransaction {
-  id: string;
-  itemId: string;
+  id: number;
+  itemId: number;
   type: 'add' | 'use';
   quantity: number;
   date: string;
-  pondId?: string;
+  pondId?: number;
   notes?: string;
   unitCost?: number;
 }
 
 interface Pond {
-  id: string;
+  id: number;
   name: string;
   color: string;
 }
 
 const Inventory: React.FC = () => {
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([
-    { id: '1', name: 'Water Filter', category: 'Equipment', currentStock: 15, unit: 'pieces', reorderLevel: 5, costPerUnit: 2500, lastRestocked: '2024-11-20', supplier: 'Aqua Supplies Ltd' },
-    { id: '2', name: 'Fish Feed (Premium)', category: 'Feed', currentStock: 50, unit: 'kg', reorderLevel: 20, costPerUnit: 350, lastRestocked: '2024-11-22', supplier: 'Koi Feed Co' },
-    { id: '3', name: 'pH Stabilizer', category: 'Chemical', currentStock: 8, unit: 'liters', reorderLevel: 10, costPerUnit: 1200, lastRestocked: '2024-11-15', supplier: 'Aqua Supplies Ltd' },
-    { id: '4', name: 'Oxygen Tablets', category: 'Chemical', currentStock: 100, unit: 'tablets', reorderLevel: 50, costPerUnit: 15, lastRestocked: '2024-11-18', supplier: 'Fish Health Pro' },
-    { id: '5', name: 'Net (Large)', category: 'Equipment', currentStock: 3, unit: 'pieces', reorderLevel: 2, costPerUnit: 1800, lastRestocked: '2024-11-10', supplier: 'Aqua Tools' },
-  ]);
-  
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [stockTransactions, setStockTransactions] = useState<StockTransaction[]>([]);
-  const [ponds] = useState<Pond[]>([
-    { id: '1', name: 'Pond 1', color: 'blue' },
-    { id: '2', name: 'Pond 2', color: 'green' },
-  ]);
+  const [ponds, setPonds] = useState<Pond[]>([]);
+  
+  // Load data from API on mount
+  useEffect(() => {
+    const loadData = async () => {
+      await Promise.all([
+        loadPonds(),
+        loadInventoryItems(),
+        loadStockTransactions(),
+      ]);
+    };
+    loadData();
+  }, []);
+
+  const loadPonds = async () => {
+    try {
+      const response = await pondApi.getAll();
+      if (response.success && response.data) {
+        setPonds(response.data);
+      }
+    } catch (error) {
+      console.error('Error loading ponds:', error);
+    }
+  };
+
+  const loadInventoryItems = async () => {
+    try {
+      const response = await inventoryApi.getAll();
+      if (response.success && response.data) {
+        setInventoryItems(response.data);
+      }
+    } catch (error) {
+      console.error('Error loading inventory:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load inventory: ' + errorMessage);
+    }
+  };
+
+  const loadStockTransactions = async () => {
+    try {
+      const response = await stockTransactionApi.getAll();
+      if (response.success && response.data) {
+        // Transform backend data to match frontend interface
+        const transactions: StockTransaction[] = response.data.map(t => ({
+          id: t.id,
+          itemId: t.item.id,
+          type: t.type,
+          quantity: t.quantity,
+          date: t.date,
+          pondId: t.pond?.id,
+          notes: t.notes,
+          unitCost: t.unitCost,
+        }));
+        setStockTransactions(transactions);
+      }
+    } catch (error) {
+      console.error('Error loading transactions:', error);
+    }
+  };
   
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [stockAction, setStockAction] = useState<'add' | 'use'>('add');
-  const [selectedItem, setSelectedItem] = useState<string>('');
+  const [selectedItem, setSelectedItem] = useState<number | ''>('');
   const [stockFormData, setStockFormData] = useState({
     quantity: '',
     pondId: '',
@@ -94,7 +143,7 @@ const Inventory: React.FC = () => {
     setIsStockModalOpen(true);
   };
 
-  const handleStockTransaction = () => {
+  const handleStockTransaction = async () => {
     if (!selectedItem || !stockFormData.quantity) {
       alert('Please select an item and enter quantity');
       return;
@@ -115,70 +164,78 @@ const Inventory: React.FC = () => {
       return;
     }
 
-    // Create transaction record
-    const transaction: StockTransaction = {
-      id: Date.now().toString(),
-      itemId: selectedItem,
-      type: stockAction,
-      quantity,
-      date: new Date().toISOString().split('T')[0],
-      pondId: stockFormData.pondId || undefined,
-      notes: stockFormData.notes || undefined,
-      unitCost: stockFormData.unitCost ? parseFloat(stockFormData.unitCost) : item.costPerUnit,
-    };
+    try {
+      const response = await stockTransactionApi.create({
+        itemId: selectedItem as number,
+        type: stockAction,
+        quantity,
+        date: new Date().toISOString().split('T')[0],
+        pondId: stockFormData.pondId ? parseInt(stockFormData.pondId) : undefined,
+        notes: stockFormData.notes || undefined,
+        unitCost: stockFormData.unitCost ? parseFloat(stockFormData.unitCost) : undefined,
+      });
 
-    setStockTransactions([transaction, ...stockTransactions]);
-
-    // Update inventory
-    setInventoryItems(inventoryItems.map(i => {
-      if (i.id === selectedItem) {
-        return {
-          ...i,
-          currentStock: stockAction === 'add' 
-            ? i.currentStock + quantity 
-            : i.currentStock - quantity,
-          lastRestocked: stockAction === 'add' 
-            ? new Date().toISOString().split('T')[0] 
-            : i.lastRestocked,
-          costPerUnit: stockFormData.unitCost ? parseFloat(stockFormData.unitCost) : i.costPerUnit,
-        };
+      if (response.success) {
+        // Reload inventory and transactions
+        await loadInventoryItems();
+        await loadStockTransactions();
+        setIsStockModalOpen(false);
+        setSelectedItem('');
+        setStockFormData({
+          quantity: '',
+          pondId: '',
+          notes: '',
+          unitCost: '',
+        });
+      } else {
+        alert(response.message || 'Failed to create stock transaction');
       }
-      return i;
-    }));
-
-    setIsStockModalOpen(false);
+    } catch (error) {
+      console.error('Error creating stock transaction:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to create stock transaction: ' + errorMessage);
+    }
   };
 
-  const handleAddNewItem = () => {
+  const handleAddNewItem = async () => {
     if (!newItemFormData.name || !newItemFormData.category || !newItemFormData.initialStock || !newItemFormData.unit) {
       alert('Please fill all required fields');
       return;
     }
 
-    const newItem: InventoryItem = {
-      id: Date.now().toString(),
-      name: newItemFormData.name,
-      category: newItemFormData.category,
-      currentStock: parseFloat(newItemFormData.initialStock),
-      unit: newItemFormData.unit,
-      reorderLevel: newItemFormData.reorderLevel ? parseFloat(newItemFormData.reorderLevel) : 0,
-      costPerUnit: newItemFormData.costPerUnit ? parseFloat(newItemFormData.costPerUnit) : 0,
-      lastRestocked: new Date().toISOString().split('T')[0],
-      supplier: newItemFormData.supplier || undefined,
-    };
+    try {
+      const response = await inventoryApi.create({
+        name: newItemFormData.name,
+        category: newItemFormData.category,
+        currentStock: parseFloat(newItemFormData.initialStock),
+        unit: newItemFormData.unit,
+        reorderLevel: newItemFormData.reorderLevel ? parseFloat(newItemFormData.reorderLevel) : 0,
+        costPerUnit: newItemFormData.costPerUnit ? parseFloat(newItemFormData.costPerUnit) : 0,
+        lastRestocked: new Date().toISOString().split('T')[0],
+        supplier: newItemFormData.supplier || undefined,
+      });
 
-    setInventoryItems([...inventoryItems, newItem]);
-
-    setIsAddItemModalOpen(false);
-    setNewItemFormData({
-      name: '',
-      category: '',
-      initialStock: '',
-      unit: '',
-      reorderLevel: '',
-      costPerUnit: '',
-      supplier: '',
-    });
+      if (response.success) {
+        // Reload inventory items
+        await loadInventoryItems();
+        setIsAddItemModalOpen(false);
+        setNewItemFormData({
+          name: '',
+          category: '',
+          initialStock: '',
+          unit: '',
+          reorderLevel: '',
+          costPerUnit: '',
+          supplier: '',
+        });
+      } else {
+        alert(response.message || 'Failed to add inventory item');
+      }
+    } catch (error) {
+      console.error('Error adding inventory item:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to add inventory item: ' + errorMessage);
+    }
   };
 
   const getLowStockItems = () => {
@@ -187,6 +244,71 @@ const Inventory: React.FC = () => {
 
   const getTotalInventoryValue = () => {
     return inventoryItems.reduce((sum, item) => sum + (item.currentStock * item.costPerUnit), 0);
+  };
+
+  const handleDeleteItem = async (id: number, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await inventoryApi.delete(id);
+      
+      if (response.success) {
+        // Reload inventory items
+        await loadInventoryItems();
+        alert('Inventory item deleted successfully');
+      } else {
+        alert(response.message || 'Failed to delete inventory item');
+      }
+    } catch (error) {
+      console.error('Error deleting inventory item:', error);
+      
+      // Check if error has a response from the backend (Axios error)
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as { response?: { data?: { message?: string } } };
+        if (axiosError.response?.data?.message) {
+          alert(axiosError.response.data.message);
+          return;
+        }
+      }
+      
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to delete inventory item: ' + errorMessage);
+    }
+  };
+
+  const handleDeleteTransaction = async (id: number, itemName: string, type: string) => {
+    if (!window.confirm(`Are you sure you want to delete this ${type} transaction for "${itemName}"? This will reverse the stock change.`)) {
+      return;
+    }
+
+    try {
+      const response = await stockTransactionApi.delete(id);
+      
+      if (response.success) {
+        // Reload all data to reflect changes
+        await loadInventoryItems();
+        await loadStockTransactions();
+        alert('Transaction deleted successfully. Stock has been adjusted.');
+      } else {
+        alert(response.message || 'Failed to delete transaction');
+      }
+    } catch (error) {
+      console.error('Error deleting transaction:', error);
+      
+      // Check if error has a response from the backend (Axios error)
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as { response?: { data?: { message?: string } } };
+        if (axiosError.response?.data?.message) {
+          alert(axiosError.response.data.message);
+          return;
+        }
+      }
+      
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to delete transaction: ' + errorMessage);
+    }
   };
 
   return (
@@ -311,6 +433,7 @@ const Inventory: React.FC = () => {
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Total Value</th>
                 <th className="px-6 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Status</th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Last Restocked</th>
+                <th className="px-6 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -375,6 +498,15 @@ const Inventory: React.FC = () => {
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {new Date(item.lastRestocked).toLocaleDateString()}
                     </td>
+                    <td className="px-6 py-4 text-center">
+                      <button
+                        onClick={() => handleDeleteItem(item.id, item.name)}
+                        className="text-red-600 hover:text-red-800 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                        title="Delete item"
+                      >
+                        <i className="fas fa-trash-alt"></i>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -407,6 +539,7 @@ const Inventory: React.FC = () => {
                   <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 uppercase">Quantity</th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase">Pond</th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase">Notes</th>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-600 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -444,6 +577,15 @@ const Inventory: React.FC = () => {
                       <td className="px-6 py-4 text-sm text-gray-600">
                         {transaction.notes || '-'}
                       </td>
+                      <td className="px-6 py-4 text-center">
+                        <button
+                          onClick={() => handleDeleteTransaction(transaction.id, item?.name || 'Unknown', transaction.type)}
+                          className="text-red-600 hover:text-red-800 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                          title="Delete transaction"
+                        >
+                          <i className="fas fa-trash-alt"></i>
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -480,7 +622,7 @@ const Inventory: React.FC = () => {
                 </label>
                 <select
                   value={selectedItem}
-                  onChange={(e) => setSelectedItem(e.target.value)}
+                  onChange={(e) => setSelectedItem(e.target.value ? parseInt(e.target.value) : '')}
                   className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition"
                   required
                 >

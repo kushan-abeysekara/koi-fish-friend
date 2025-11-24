@@ -2,7 +2,9 @@ package com.example.backend.service;
 
 import com.example.backend.dto.InventoryItemRequest;
 import com.example.backend.entity.InventoryItem;
+import com.example.backend.entity.StockTransaction;
 import com.example.backend.repository.InventoryItemRepository;
+import com.example.backend.repository.StockTransactionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +18,9 @@ public class InventoryItemService {
 
     @Autowired
     private InventoryItemRepository inventoryItemRepository;
+
+    @Autowired
+    private StockTransactionRepository stockTransactionRepository;
 
     public List<InventoryItem> getAllInventoryItems() {
         return inventoryItemRepository.findAllByOrderByNameAsc();
@@ -65,6 +70,15 @@ public class InventoryItemService {
 
     public void deleteInventoryItem(Long id) {
         InventoryItem item = getInventoryItemById(id);
+        
+        // Check if there are stock transactions
+        List<StockTransaction> transactions = stockTransactionRepository.findByItemIdOrderByDateDesc(id);
+        if (!transactions.isEmpty()) {
+            throw new RuntimeException("Cannot delete inventory item '" + item.getName() + 
+                "' because it has " + transactions.size() + " stock transaction(s). " +
+                "Please delete the stock transactions first.");
+        }
+        
         inventoryItemRepository.delete(item);
     }
 
