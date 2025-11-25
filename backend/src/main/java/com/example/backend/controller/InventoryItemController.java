@@ -2,6 +2,7 @@ package com.example.backend.controller;
 
 import com.example.backend.dto.ApiResponse;
 import com.example.backend.dto.InventoryItemRequest;
+import com.example.backend.dto.StockBatch;
 import com.example.backend.entity.InventoryItem;
 import com.example.backend.service.InventoryItemService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -123,6 +124,17 @@ public class InventoryItemController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse(false, "Error deleting inventory item: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/{id}/stock-batches")
+    public ResponseEntity<ApiResponse> getStockBatches(@PathVariable Long id) {
+        try {
+            List<StockBatch> batches = inventoryItemService.getStockBatchesByItemId(id);
+            return ResponseEntity.ok(new ApiResponse(true, "Stock batches retrieved successfully", batches));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving stock batches: " + e.getMessage(), null));
         }
     }
 }

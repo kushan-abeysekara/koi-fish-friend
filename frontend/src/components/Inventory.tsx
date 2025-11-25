@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { pondApi, inventoryApi, stockTransactionApi } from '../services/api';
+import type { StockBatch } from '../services/api';
 
 interface InventoryItem {
   id: number;
@@ -11,6 +12,10 @@ interface InventoryItem {
   costPerUnit: number;
   lastRestocked: string;
   supplier?: string;
+}
+
+interface InventoryItemWithBatches extends InventoryItem {
+  stockBatches?: StockBatch[];
 }
 
 interface StockTransaction {
@@ -31,7 +36,7 @@ interface Pond {
 }
 
 const Inventory: React.FC = () => {
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItemWithBatches[]>([]);
   const [stockTransactions, setStockTransactions] = useState<StockTransaction[]>([]);
   const [ponds, setPonds] = useState<Pond[]>([]);
   
@@ -62,7 +67,21 @@ const Inventory: React.FC = () => {
     try {
       const response = await inventoryApi.getAll();
       if (response.success && response.data) {
-        setInventoryItems(response.data);
+        // Fetch stock batches for each item
+        const itemsWithBatches = await Promise.all(
+          response.data.map(async (item) => {
+            try {
+              const batchResponse = await inventoryApi.getStockBatches(item.id);
+              return {
+                ...item,
+                stockBatches: batchResponse.success ? batchResponse.data : []
+              };
+            } catch {
+              return { ...item, stockBatches: [] };
+            }
+          })
+        );
+        setInventoryItems(itemsWithBatches);
       }
     } catch (error) {
       console.error('Error loading inventory:', error);
@@ -476,11 +495,30 @@ const Inventory: React.FC = () => {
                     <td className="px-6 py-4 text-center text-gray-600">
                       {item.reorderLevel} {item.unit}
                     </td>
-                    <td className="px-6 py-4 text-gray-700 font-medium">
-                      {formatCurrency(item.costPerUnit)}
+                    <td className="px-6 py-4">
+                      {item.stockBatches && item.stockBatches.length > 0 ? (
+                        <div className="space-y-1">
+                          {item.stockBatches.map((batch, idx) => (
+                            <div key={idx} className="text-xs text-gray-600">
+                              {formatCurrency(batch.unitCost)} × {batch.quantity} {item.unit}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-gray-700 font-medium">{formatCurrency(item.costPerUnit)}</div>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-gray-800 font-bold">
-                      {formatCurrency(item.currentStock * item.costPerUnit)}
+                      {item.stockBatches && item.stockBatches.length > 0 ? (
+                        formatCurrency(
+                          item.stockBatches.reduce(
+                            (sum, batch) => sum + (batch.unitCost * batch.quantity),
+                            0
+                          )
+                        )
+                      ) : (
+                        formatCurrency(item.currentStock * item.costPerUnit)
+                      )}
                     </td>
                     <td className="px-6 py-4 text-center">
                       {isLowStock ? (

@@ -256,6 +256,11 @@ export interface InventoryItem {
   updatedAt?: string;
 }
 
+export interface StockBatch {
+  unitCost: number;
+  quantity: number;
+}
+
 export const inventoryApi = {
   getAll: async (): Promise<ApiResponse<InventoryItem[]>> => {
     const response = await api.get<ApiResponse<InventoryItem[]>>('/inventory');
@@ -279,6 +284,11 @@ export const inventoryApi = {
 
   getById: async (id: number): Promise<ApiResponse<InventoryItem>> => {
     const response = await api.get<ApiResponse<InventoryItem>>(`/inventory/${id}`);
+    return response.data;
+  },
+
+  getStockBatches: async (id: number): Promise<ApiResponse<StockBatch[]>> => {
+    const response = await api.get<ApiResponse<StockBatch[]>>(`/inventory/${id}/stock-batches`);
     return response.data;
   },
 
