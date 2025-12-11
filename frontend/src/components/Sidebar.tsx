@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 interface NavItemProps {
@@ -34,6 +34,30 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick })
   );
 };
 
+interface SubNavItemProps {
+  icon: React.ReactNode;
+  label: string;
+  path: string;
+  active?: boolean;
+}
+
+const SubNavItem: React.FC<SubNavItemProps> = ({ icon, label, path, active }) => {
+  const navigate = useNavigate();
+
+  return (
+    <button
+      onClick={() => navigate(path)}
+      className={`w-full flex items-center gap-3 pl-12 pr-4 py-2.5 rounded-lg transition-all duration-200 ${active
+          ? 'bg-cyan-500 text-white shadow-lg'
+          : 'text-gray-300 hover:bg-slate-700 hover:text-white'
+        }`}
+    >
+      <span className="text-base">{icon}</span>
+      <span className="font-normal text-sm">{label}</span>
+    </button>
+  );
+};
+
 interface SidebarProps {
   currentUsername: string;
   onLogout: () => void;
@@ -41,6 +65,17 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
   const location = useLocation();
+  const [isBudgetExpanded, setIsBudgetExpanded] = useState(
+    location.pathname.includes('/expenditures') || 
+    location.pathname.includes('/inventory') || 
+    location.pathname.includes('/energy-monitor') ||
+    location.pathname.includes('/realtime-current') ||
+    location.pathname.includes('/calculate-kwh')
+  );
+
+  const toggleBudgetMenu = () => {
+    setIsBudgetExpanded(!isBudgetExpanded);
+  };
 
   return (
     <div className="w-64 h-screen bg-slate-800 text-white flex flex-col fixed left-0 top-0">
@@ -73,32 +108,57 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           active={location.pathname === '/dashboard/fish-count'}
         />
 
-        <NavItem
-          icon={<i className="fas fa-wallet"></i>}
-          label="Expenditures"
-          path="/dashboard/expenditures"
-          active={location.pathname === '/dashboard/expenditures'}
-        />
+        {/* Budget Management with Sub-menu */}
+        <div>
+          <button
+            onClick={toggleBudgetMenu}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+              isBudgetExpanded || 
+              location.pathname.includes('/expenditures') || 
+              location.pathname.includes('/inventory') || 
+              location.pathname.includes('/energy-monitor')
+                ? 'bg-slate-700 text-white'
+                : 'text-gray-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xl"><i className="fas fa-chart-line"></i></span>
+              <span className="font-medium">Budget Management</span>
+            </div>
+            <i className={`fas fa-chevron-${isBudgetExpanded ? 'down' : 'right'} text-sm transition-transform`}></i>
+          </button>
+
+          {isBudgetExpanded && (
+            <div className="mt-1 space-y-1">
+              <SubNavItem
+                icon={<i className="fas fa-wallet"></i>}
+                label="Expenditures"
+                path="/dashboard/expenditures"
+                active={location.pathname === '/dashboard/expenditures'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-boxes"></i>}
+                label="Inventory"
+                path="/dashboard/inventory"
+                active={location.pathname === '/dashboard/inventory'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-bolt"></i>}
+                label="Energy Monitor"
+                path="/dashboard/energy-monitor"
+                active={location.pathname === '/dashboard/energy-monitor' || 
+                       location.pathname === '/dashboard/realtime-current' || 
+                       location.pathname === '/dashboard/calculate-kwh'}
+              />
+            </div>
+          )}
+        </div>
 
         <NavItem
-          icon={<i className="fas fa-boxes"></i>}
-          label="Inventory"
-          path="/dashboard/inventory"
-          active={location.pathname === '/dashboard/inventory'}
-        />
-
-        <NavItem
-          icon={<i className="fas fa-bolt"></i>}
-          label="Realtime Current"
-          path="/dashboard/realtime-current"
-          active={location.pathname === '/dashboard/realtime-current'}
-        />
-
-        <NavItem
-          icon={<i className="fas fa-chart-bar"></i>}
-          label="Calculate Kwh"
-          path="/dashboard/calculate-kwh"
-          active={location.pathname === '/dashboard/calculate-kwh'}
+          icon={<i className="fas fa-microchip"></i>}
+          label="Device Management"
+          path="/dashboard/device-management"
+          active={location.pathname === '/dashboard/device-management'}
         />
 
         <NavItem

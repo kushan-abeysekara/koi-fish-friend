@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { pondApi } from '../services/api';
+import { pondApi, expenditureApi } from '../services/api';
 
 interface Expenditure {
   id: number;
@@ -8,7 +8,12 @@ interface Expenditure {
   subcategory: string;
   description: string;
   amount: number;
-  pondId: number;
+  pondId?: number;
+  pond?: {
+    id: number;
+    name: string;
+    color: string;
+  };
 }
 
 interface Pond {
@@ -44,9 +49,10 @@ const Expenditures: React.FC = () => {
   const [expenditures, setExpenditures] = useState<Expenditure[]>([]);
   const [ponds, setPonds] = useState<Pond[]>([]);
 
-  // Load ponds from API on mount
+  // Load ponds and expenditures from API on mount
   useEffect(() => {
     loadPonds();
+    loadExpenditures();
   }, []);
 
   const loadPonds = async () => {
@@ -59,6 +65,30 @@ const Expenditures: React.FC = () => {
       console.error('Error loading ponds:', error);
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
       alert('Failed to load ponds: ' + errorMessage);
+    }
+  };
+
+  const loadExpenditures = async () => {
+    try {
+      const response = await expenditureApi.getAll();
+      if (response.success && response.data) {
+        // Transform API response to match local interface
+        const transformedData = response.data.map((exp) => ({
+          id: exp.id,
+          date: exp.date,
+          category: exp.category,
+          subcategory: exp.subcategory,
+          description: exp.description || '',
+          amount: exp.amount,
+          pondId: exp.pond?.id || 0,
+          pond: exp.pond,
+        }));
+        setExpenditures(transformedData);
+      }
+    } catch (error) {
+      console.error('Error loading expenditures:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load expenditures: ' + errorMessage);
     }
   };
   
@@ -258,37 +288,59 @@ const Expenditures: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleAddExpenditure = () => {
+  const handleAddExpenditure = async () => {
     if (!selectedCategory || !formData.subcategory || !formData.amount || !formData.pondId) {
       alert('Please fill all required fields including pond selection');
       return;
     }
 
-    const newExpenditure: Expenditure = {
-      id: Date.now(),
-      date: formData.date,
-      category: selectedCategory,
-      subcategory: formData.subcategory,
-      description: formData.description,
-      amount: parseFloat(formData.amount),
-      pondId: parseInt(formData.pondId),
-    };
+    try {
+      const response = await expenditureApi.create({
+        date: formData.date,
+        category: selectedCategory,
+        subcategory: formData.subcategory,
+        description: formData.description,
+        amount: parseFloat(formData.amount),
+        pondId: parseInt(formData.pondId),
+      });
 
-    setExpenditures([newExpenditure, ...expenditures]);
-    setIsModalOpen(false);
-    setSelectedCategory('');
-    setFormData({
-      date: new Date().toISOString().split('T')[0],
-      subcategory: '',
-      description: '',
-      amount: '',
-      pondId: '',
-    });
+      if (response.success) {
+        // Reload expenditures from database
+        await loadExpenditures();
+        setIsModalOpen(false);
+        setSelectedCategory('');
+        setFormData({
+          date: new Date().toISOString().split('T')[0],
+          subcategory: '',
+          description: '',
+          amount: '',
+          pondId: '',
+        });
+      } else {
+        alert(response.message || 'Failed to create expenditure');
+      }
+    } catch (error) {
+      console.error('Error creating expenditure:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to create expenditure: ' + errorMessage);
+    }
   };
 
-  const handleDeleteExpenditure = (id: number) => {
+  const handleDeleteExpenditure = async (id: number) => {
     if (window.confirm('Are you sure you want to delete this expenditure?')) {
-      setExpenditures(expenditures.filter(exp => exp.id !== id));
+      try {
+        const response = await expenditureApi.delete(id);
+        if (response.success) {
+          // Reload expenditures from database
+          await loadExpenditures();
+        } else {
+          alert(response.message || 'Failed to delete expenditure');
+        }
+      } catch (error) {
+        console.error('Error deleting expenditure:', error);
+        const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+        alert('Failed to delete expenditure: ' + errorMessage);
+      }
     }
   };
 
@@ -852,8 +904,8 @@ const Expenditures: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {getFilteredExpenditures().map((exp) => {
-                  const categoryData = categories[exp.category as keyof typeof categories];
-                  const colorClasses = getColorClasses(categoryData.color);
+                  const categoryData = allCategories[exp.category as keyof typeof allCategories];
+                  const colorClasses = categoryData ? getColorClasses(categoryData.color) : getColorClasses('gray');
                   const pond = ponds.find(p => p.id === exp.pondId);
                   const pondColorClasses = pond ? pondColors[pond.color] : pondColors.blue;
 
@@ -870,7 +922,7 @@ const Expenditures: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${colorClasses.bg} ${colorClasses.text}`}>
-                          <span>{categoryData.icon}</span>
+                          <span>{categoryData?.icon || '📋'}</span>
                           {exp.category}
                         </span>
                       </td>

@@ -399,4 +399,81 @@ export const stockTransactionApi = {
   },
 };
 
+// ==================== Sensor Device Management ====================
+export interface SensorDevice {
+  id: number;
+  deviceId: string;
+  pond: Pond | null;
+  status: string;
+  ipAddress: string;
+  rssi: number;
+  energyWh: number;
+  lastSeen: string;
+  createdAt: string;
+}
+
+export const sensorDeviceApi = {
+  getAll: async (): Promise<ApiResponse<SensorDevice[]>> => {
+    const response = await api.get<ApiResponse<SensorDevice[]>>('/sensors');
+    return response.data;
+  },
+
+  getById: async (id: number): Promise<ApiResponse<SensorDevice>> => {
+    const response = await api.get<ApiResponse<SensorDevice>>(`/sensors/${id}`);
+    return response.data;
+  },
+
+  getByPond: async (pondId: number): Promise<ApiResponse<SensorDevice[]>> => {
+    const response = await api.get<ApiResponse<SensorDevice[]>>(`/sensors/pond/${pondId}`);
+    return response.data;
+  },
+
+  assignToPond: async (deviceId: string, pondId: number): Promise<ApiResponse<SensorDevice>> => {
+    const response = await api.post<ApiResponse<SensorDevice>>(`/sensors/${deviceId}/assign`, { pondId });
+    return response.data;
+  },
+
+  unassignFromPond: async (deviceId: string): Promise<ApiResponse<SensorDevice>> => {
+    const response = await api.post<ApiResponse<SensorDevice>>(`/sensors/${deviceId}/unassign`, {});
+    return response.data;
+  },
+
+  resetEnergy: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/sensors/${deviceId}/reset-energy`, {});
+    return response.data;
+  },
+};
+
+// ==================== Sensor Data ====================
+export interface SensorData {
+  id: number;
+  device: SensorDevice;
+  pond: Pond | null;
+  voltage: number;
+  current: number;
+  power: number;
+  energyWh: number;
+  status: string;
+  timestamp: string;
+}
+
+export const sensorDataApi = {
+  getByPond: async (pondId: number): Promise<ApiResponse<SensorData[]>> => {
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}`);
+    return response.data;
+  },
+
+  getLatestByPond: async (pondId: number): Promise<ApiResponse<SensorData>> => {
+    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest`);
+    return response.data;
+  },
+
+  getHistoricalData: async (pondId: number, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history`, {
+      params: { hours }
+    });
+    return response.data;
+  },
+};
+
 export default api;

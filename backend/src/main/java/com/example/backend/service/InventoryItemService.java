@@ -113,18 +113,20 @@ public class InventoryItemService {
     public List<StockBatch> getStockBatchesByItemId(Long itemId) {
         // Get the inventory item
         InventoryItem item = getInventoryItemById(itemId);
-        
+
         // Get all transactions for this item, ordered by date (oldest first)
         List<StockTransaction> transactions = stockTransactionRepository.findByItemIdOrderByDateDesc(itemId);
-        
+
         // Reverse to get oldest first (FIFO)
         List<StockTransaction> chronological = new ArrayList<>(transactions);
         java.util.Collections.reverse(chronological);
-        
-        // We'll track batches with both cost AND original add date/index to maintain FIFO order
-        // Key: "cost_timestamp" to keep batches with same cost separate if added at different times
+
+        // We'll track batches with both cost AND original add date/index to maintain
+        // FIFO order
+        // Key: "cost_timestamp" to keep batches with same cost separate if added at
+        // different times
         List<StockBatch> batches = new ArrayList<>();
-        
+
         // Calculate if there's initial stock (stock before any transactions)
         BigDecimal calculatedStock = BigDecimal.ZERO;
         for (StockTransaction t : chronological) {
@@ -134,33 +136,33 @@ public class InventoryItemService {
                 calculatedStock = calculatedStock.subtract(t.getQuantity());
             }
         }
-        
+
         // If current stock is more than calculated, there was initial stock
         BigDecimal initialStock = item.getCurrentStock().subtract(calculatedStock);
         if (initialStock.compareTo(BigDecimal.ZERO) > 0) {
             // Add initial stock as first batch
             batches.add(new StockBatch(item.getCostPerUnit(), initialStock));
         }
-        
+
         // Process all transactions in chronological order
         for (StockTransaction transaction : chronological) {
             if ("add".equals(transaction.getType())) {
                 // Add new batch
                 batches.add(new StockBatch(transaction.getUnitCost(), transaction.getQuantity()));
-                
+
             } else if ("use".equals(transaction.getType())) {
                 // Deduct from oldest batches first (FIFO)
                 BigDecimal remainingToUse = transaction.getQuantity();
-                
+
                 int i = 0;
                 while (i < batches.size() && remainingToUse.compareTo(BigDecimal.ZERO) > 0) {
                     StockBatch batch = batches.get(i);
-                    
+
                     if (batch.getQuantity().compareTo(BigDecimal.ZERO) > 0) {
                         BigDecimal toDeduct = remainingToUse.min(batch.getQuantity());
                         batch.setQuantity(batch.getQuantity().subtract(toDeduct));
                         remainingToUse = remainingToUse.subtract(toDeduct);
-                        
+
                         // Remove batch if depleted
                         if (batch.getQuantity().compareTo(BigDecimal.ZERO) == 0) {
                             batches.remove(i);
@@ -174,7 +176,7 @@ public class InventoryItemService {
                 }
             }
         }
-        
+
         // Return only non-empty batches
         return batches.stream()
                 .filter(b -> b.getQuantity().compareTo(BigDecimal.ZERO) > 0)

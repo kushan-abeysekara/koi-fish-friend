@@ -94,7 +94,8 @@ public class StockTransactionService {
         if ("add".equals(request.getType())) {
             item.setCurrentStock(item.getCurrentStock().add(request.getQuantity()));
             item.setLastRestocked(request.getDate());
-            // Note: We don't update item.costPerUnit here because FIFO tracks each transaction's unit cost separately
+            // Note: We don't update item.costPerUnit here because FIFO tracks each
+            // transaction's unit cost separately
 
             // Create expenditure for stock addition (purchase)
             if (pond != null) {

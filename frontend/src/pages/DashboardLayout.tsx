@@ -5,8 +5,8 @@ import DashboardHome from '../components/DashboardHome';
 import UpdateCredentials from '../components/UpdateCredentials';
 import Expenditures from '../components/Expenditures';
 import Inventory from '../components/Inventory';
-import RealtimeCurrent from '../components/RealtimeCurrent';
-import CalculateKwh from '../components/CalculateKwh';
+import DeviceManagement from '../components/DeviceManagement';
+import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
 
 const Dashboard: React.FC = () => {
@@ -62,8 +62,10 @@ const Dashboard: React.FC = () => {
             <Route path="/fish-count" element={<FishCount />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
-            <Route path="/realtime-current" element={<RealtimeCurrent />} />
-            <Route path="/calculate-kwh" element={<CalculateKwh />} />
+            <Route path="/device-management" element={<DeviceManagement />} />
+            <Route path="/energy-monitor" element={<EnergyMonitor />} />
+            <Route path="/realtime-current" element={<EnergyMonitor />} />
+            <Route path="/calculate-kwh" element={<EnergyMonitor />} />
             <Route
               path="/credentials"
               element={
