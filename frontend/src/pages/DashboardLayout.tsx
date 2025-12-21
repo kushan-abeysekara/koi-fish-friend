@@ -8,6 +8,7 @@ import Inventory from '../components/Inventory';
 import DeviceManagement from '../components/DeviceManagement';
 import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
+import ProfitLoss from '../components/ProfitLoss';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -62,6 +63,7 @@ const Dashboard: React.FC = () => {
             <Route path="/fish-count" element={<FishCount />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
+            <Route path="/profit-loss" element={<ProfitLoss />} />
             <Route path="/device-management" element={<DeviceManagement />} />
             <Route path="/energy-monitor" element={<EnergyMonitor />} />
             <Route path="/realtime-current" element={<EnergyMonitor />} />

@@ -68,6 +68,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
   const [isBudgetExpanded, setIsBudgetExpanded] = useState(
     location.pathname.includes('/expenditures') || 
     location.pathname.includes('/inventory') || 
+    location.pathname.includes('/profit-loss') ||
     location.pathname.includes('/energy-monitor') ||
     location.pathname.includes('/realtime-current') ||
     location.pathname.includes('/calculate-kwh')
@@ -115,7 +116,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
             className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
               isBudgetExpanded || 
               location.pathname.includes('/expenditures') || 
-              location.pathname.includes('/inventory') || 
+              location.pathname.includes('/inventory') ||
+              location.pathname.includes('/profit-loss') ||
               location.pathname.includes('/energy-monitor')
                 ? 'bg-slate-700 text-white'
                 : 'text-gray-300 hover:bg-slate-700 hover:text-white'
@@ -127,7 +129,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
             </div>
             <i className={`fas fa-chevron-${isBudgetExpanded ? 'down' : 'right'} text-sm transition-transform`}></i>
           </button>
-
           {isBudgetExpanded && (
             <div className="mt-1 space-y-1">
               <SubNavItem
@@ -141,6 +142,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
                 label="Inventory"
                 path="/dashboard/inventory"
                 active={location.pathname === '/dashboard/inventory'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-pie"></i>}
+                label="Profit & Loss"
+                path="/dashboard/profit-loss"
+                active={location.pathname === '/dashboard/profit-loss'}
               />
               <SubNavItem
                 icon={<i className="fas fa-bolt"></i>}

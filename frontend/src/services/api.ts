@@ -241,6 +241,168 @@ export const expenditureApi = {
   },
 };
 
+// ==================== Revenue Management ====================
+export interface Revenue {
+  id: number;
+  date: string;
+  pond: Pond;
+  source: string;
+  amount: number;
+  quantitySold?: number;
+  pricePerUnit?: number;
+  fishSpecies?: string;
+  customerName?: string;
+  notes?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export const revenueApi = {
+  getAll: async (): Promise<ApiResponse<Revenue[]>> => {
+    const response = await api.get<ApiResponse<Revenue[]>>('/revenues');
+    return response.data;
+  },
+
+  getByPond: async (pondId: number): Promise<ApiResponse<Revenue[]>> => {
+    const response = await api.get<ApiResponse<Revenue[]>>(`/revenues/pond/${pondId}`);
+    return response.data;
+  },
+
+  getBySource: async (source: string): Promise<ApiResponse<Revenue[]>> => {
+    const response = await api.get<ApiResponse<Revenue[]>>(`/revenues/source/${source}`);
+    return response.data;
+  },
+
+  getByDateRange: async (
+    pondId: number,
+    startDate: string,
+    endDate: string
+  ): Promise<ApiResponse<Revenue[]>> => {
+    const response = await api.get<ApiResponse<Revenue[]>>(
+      `/revenues/pond/${pondId}/date-range`,
+      { params: { startDate, endDate } }
+    );
+    return response.data;
+  },
+
+  getTotals: async (): Promise<ApiResponse<{ totalAmount: number }>> => {
+    const response = await api.get<ApiResponse<{ totalAmount: number }>>('/revenues/totals');
+    return response.data;
+  },
+
+  getTotalByPond: async (pondId: number): Promise<ApiResponse<{ totalAmount: number }>> => {
+    const response = await api.get<ApiResponse<{ totalAmount: number }>>(
+      `/revenues/totals/pond/${pondId}`
+    );
+    return response.data;
+  },
+
+  getTotalBySource: async (source: string): Promise<ApiResponse<{ totalAmount: number }>> => {
+    const response = await api.get<ApiResponse<{ totalAmount: number }>>(
+      `/revenues/totals/source/${source}`
+    );
+    return response.data;
+  },
+
+  getById: async (id: number): Promise<ApiResponse<Revenue>> => {
+    const response = await api.get<ApiResponse<Revenue>>(`/revenues/${id}`);
+    return response.data;
+  },
+
+  create: async (data: {
+    date: string;
+    pondId: number;
+    source: string;
+    amount: number;
+    quantitySold?: number;
+    pricePerUnit?: number;
+    fishSpecies?: string;
+    customerName?: string;
+    notes?: string;
+    paymentMethod?: string;
+    paymentStatus?: string;
+  }): Promise<ApiResponse<Revenue>> => {
+    const response = await api.post<ApiResponse<Revenue>>('/revenues', data);
+    return response.data;
+  },
+
+  update: async (
+    id: number,
+    data: {
+      date: string;
+      pondId: number;
+      source: string;
+      amount: number;
+      quantitySold?: number;
+      pricePerUnit?: number;
+      fishSpecies?: string;
+      customerName?: string;
+      notes?: string;
+      paymentMethod?: string;
+      paymentStatus?: string;
+    }
+  ): Promise<ApiResponse<Revenue>> => {
+    const response = await api.put<ApiResponse<Revenue>>(`/revenues/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number): Promise<ApiResponse> => {
+    const response = await api.delete<ApiResponse>(`/revenues/${id}`);
+    return response.data;
+  },
+};
+
+// ==================== Profit & Loss ====================
+export interface ProfitLossReport {
+  pondId?: number;
+  pondName: string;
+  startDate: string;
+  endDate: string;
+  totalRevenue: number;
+  revenueBySource: Record<string, number>;
+  totalExpenses: number;
+  expensesByCategory: Record<string, number>;
+  grossProfit: number;
+  netProfit: number;
+  profitMargin: number;
+  totalInvestment: number;
+  roi: number;
+  roiPeriodDays: number;
+  breakEvenRevenue: number;
+  remainingToBreakEven: number;
+  isBreakEven: boolean;
+  averageRevenuePerDay: number;
+  averageExpensePerDay: number;
+  totalTransactions: number;
+}
+
+export const profitLossApi = {
+  getReportByPond: async (
+    pondId: number,
+    startDate: string,
+    endDate: string
+  ): Promise<ApiResponse<ProfitLossReport>> => {
+    const response = await api.get<ApiResponse<ProfitLossReport>>(
+      `/profit-loss/pond/${pondId}`,
+      { params: { startDate, endDate } }
+    );
+    return response.data;
+  },
+
+  getOverallReport: async (
+    startDate: string,
+    endDate: string
+  ): Promise<ApiResponse<ProfitLossReport>> => {
+    const response = await api.get<ApiResponse<ProfitLossReport>>(
+      '/profit-loss/overall',
+      { params: { startDate, endDate } }
+    );
+    return response.data;
+  },
+};
+
 // ==================== Inventory Management ====================
 export interface InventoryItem {
   id: number;
