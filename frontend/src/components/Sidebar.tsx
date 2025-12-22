@@ -109,6 +109,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           active={location.pathname === '/dashboard/fish-count'}
         />
 
+        <NavItem
+          icon={<i className="fas fa-video"></i>}
+          label="Camera Monitoring"
+          path="/dashboard/camera"
+          active={location.pathname === '/dashboard/camera'}
+        />
+
         {/* Budget Management with Sub-menu */}
         <div>
           <button

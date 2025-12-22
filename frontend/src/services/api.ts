@@ -638,4 +638,127 @@ export const sensorDataApi = {
   },
 };
 
+// ==================== Camera & Detection Management ====================
+export interface CameraPond {
+  id: number;
+  name: string;
+  status: 'normal' | 'warning' | 'critical';
+  lastDetectionTime: string | null;
+  lastAlertSummary: string | null;
+  cameraStatus: 'online' | 'offline';
+  streamUrl?: string;
+}
+
+export interface DetectionEvent {
+  id: number;
+  pondId: number;
+  pondName: string;
+  eventType: 'mortality' | 'abnormal_behavior' | 'rain_detected';
+  confidence: number;
+  timestamp: string;
+  imageUrl?: string;
+  contextTags: string[];
+  acknowledged: boolean;
+  falseAlarm: boolean;
+  notes?: string;
+}
+
+export interface EventDetails extends DetectionEvent {
+  environmentalContext: {
+    temperature?: number;
+    humidity?: number;
+    rainfall?: boolean;
+    timeOfDay: 'morning' | 'afternoon' | 'evening' | 'night';
+  };
+}
+
+export interface Alert {
+  id: number;
+  pondId: number;
+  pondName: string;
+  alertType: 'mortality_suspected' | 'abnormal_behavior_detected' | 'rain_detected';
+  message: string;
+  status: 'sent' | 'acknowledged' | 'resolved';
+  timestamp: string;
+  relatedEventIds: number[];
+}
+
+export const cameraApi = {
+  // Get all ponds with camera status
+  getAllPonds: async (): Promise<ApiResponse<CameraPond[]>> => {
+    const response = await api.get<ApiResponse<CameraPond[]>>('/camera/ponds');
+    return response.data;
+  },
+
+  // Get stream URL for a specific pond
+  getStreamUrl: (pondId: number): string => {
+    return `http://localhost:5000/api/camera/stream/${pondId}`;
+  },
+
+  // Capture snapshot from camera
+  captureSnapshot: async (pondId: number): Promise<ApiResponse<{ imageUrl: string }>> => {
+    const response = await fetch(`http://localhost:5000/api/camera/snapshot/${pondId}`, {
+      method: 'POST',
+    });
+    const data = await response.json();
+    return data;
+  },
+
+  // Get detection events
+  getEvents: async (filters?: {
+    pondId?: number;
+    eventType?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<ApiResponse<DetectionEvent[]>> => {
+    const response = await api.get<ApiResponse<DetectionEvent[]>>('/camera/events', {
+      params: filters
+    });
+    return response.data;
+  },
+
+  // Get event details
+  getEventDetails: async (eventId: number): Promise<ApiResponse<EventDetails>> => {
+    const response = await api.get<ApiResponse<EventDetails>>(`/camera/events/${eventId}`);
+    return response.data;
+  },
+
+  // Acknowledge event
+  acknowledgeEvent: async (eventId: number): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/camera/events/${eventId}/acknowledge`);
+    return response.data;
+  },
+
+  // Mark event as false alarm
+  markAsFalseAlarm: async (eventId: number): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/camera/events/${eventId}/false-alarm`);
+    return response.data;
+  },
+
+  // Add notes to event
+  addEventNotes: async (eventId: number, notes: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/camera/events/${eventId}/notes`, { notes });
+    return response.data;
+  },
+
+  // Get alerts
+  getAlerts: async (filters?: {
+    pondId?: number;
+    status?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<ApiResponse<Alert[]>> => {
+    const response = await api.get<ApiResponse<Alert[]>>('/camera/alerts', {
+      params: filters
+    });
+    return response.data;
+  },
+
+  // Update alert status
+  updateAlertStatus: async (alertId: number, status: 'acknowledged' | 'resolved'): Promise<ApiResponse> => {
+    const response = await api.put<ApiResponse>(`/camera/alerts/${alertId}/status`, { status });
+    return response.data;
+  },
+};
+
 export default api;
