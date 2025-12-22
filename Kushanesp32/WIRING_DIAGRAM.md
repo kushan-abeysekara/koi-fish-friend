@@ -1,550 +1,312 @@
-# Wiring Diagram - ESP32 Boat Control System
+# Koi Fish Friend - Wiring Diagram (Simplified System)
 
-## Complete Wiring Connections
+## System Overview
+
+**ESP32 Only** - All sensors connected directly to ESP32 board. No secondary controllers needed.
+
+---
+
+## Complete Wiring Guide
 
 ### Power Distribution
 
 ```
 12V Battery
-    ├─→ L298N Motor Driver (12V input)
-    │   └─→ Motors (12V each)
-    ├─→ Voltage Regulator (12V → 5V)
-    │   └─→ ESP32 VIN (or use USB)
-    └─→ Voltage Sensor Module (VCC)
+    ├─── L298N Motor Driver (12V Input)
+    ├─── Voltage Sensor (VIN)
+    └─── ESP32 (via voltage regulator to 3.3V)
 
-ESP32 3.3V Pin
-    ├─→ MPU-6050 VCC
-    ├─→ DS3231 RTC VCC
-    ├─→ HX711 VCC
-    ├─→ LDR Module VCC
-    └─→ HC-SR04 sensors VCC (or use 5V)
-
-Ground (Common GND)
-    ├─→ ESP32 GND
-    ├─→ Battery GND
-    ├─→ All sensor/module GND
-    └─→ L298N GND
+Common Ground (GND)
+    ├─── ESP32 GND
+    ├─── L298N GND
+    ├─── All Sensors GND
+    └─── Battery Negative (-)
 ```
+
+**Important**: All components must share a common ground!
 
 ---
 
 ## 1. Voltage Sensor (MD0492)
 
-```
-Voltage Sensor Module
-    VCC  →  3.3V or 5V (ESP32)
-    GND  →  GND (ESP32)
-    OUT  →  GPIO 34 (ESP32 Analog Input)
-    
-Input Terminals
-    +    →  Battery Positive (12V)
-    -    →  Battery Negative (GND)
-```
+| Sensor Pin | ESP32 Pin | Wire Color (suggested) |
+|------------|-----------|------------------------|
+| VCC        | 3.3V      | Red                    |
+| GND        | GND       | Black                  |
+| S (Signal) | GPIO 34   | Yellow                 |
 
-**Notes:**
-- Measures battery voltage (0-25V range)
-- Use voltage divider if needed
-- GPIO 34 is ADC1_CH6 (analog input)
+**Note**: Connect voltage divider between battery and sensor input.
 
 ---
 
-## 2. Relay Module (Connected to G13)
+## 2. Relay Module
 
-```
-Relay Module
-    VCC  →  5V (ESP32 or external)
-    GND  →  GND (ESP32)
-    IN   →  GPIO 13 (ESP32)
-    
-Relay Contacts
-    COM  →  Voltage Sensor Signal Line
-    NO   →  Load Positive
-    NC   →  Not Connected
-```
-
-**Purpose:**
-- Activates when voltage < 8.6V
-- Can control charger, alarm, or cutoff circuit
-- GPIO 13 outputs HIGH/LOW to trigger relay
+| Relay Pin | ESP32 Pin | Wire Color (suggested) |
+|-----------|-----------|------------------------|
+| VCC       | 3.3V      | Red                    |
+| GND       | GND       | Black                  |
+| IN        | GPIO 13   | Yellow                 |
+| COM       | Load      | -                      |
+| NO/NC     | Load      | -                      |
 
 ---
 
-## 3. HX711 Load Cell Amplifier (MD0020)
+## 3. MPU-6050 Accelerometer & Gyroscope (I2C)
 
-```
-HX711 Module
-    VCC  →  3.3V (ESP32)
-    GND  →  GND (ESP32)
-    DT   →  GPIO 16 (DOUT)
-    SCK  →  GPIO 17 (Clock)
-    
-Load Cell (4-wire)
-    E+   →  Red wire (Excitation+)
-    E-   →  Black wire (Excitation-)
-    A+   →  White wire (Signal+)
-    A-   →  Green wire (Signal-)
-    
-Connect Load Cell to HX711
-    E+   →  HX711 E+
-    E-   →  HX711 E-
-    A+   →  HX711 A+
-    A-   →  HX711 A-
-```
+| MPU-6050 Pin | ESP32 Pin | Wire Color (suggested) |
+|--------------|-----------|------------------------|
+| VCC          | 3.3V      | Red                    |
+| GND          | GND       | Black                  |
+| SDA          | GPIO 21   | Blue                   |
+| SCL          | GPIO 22   | Green                  |
 
-**Notes:**
-- 5KG load cell
-- Calibration required (see calibration section)
-- Outputs weight in kg with 2 decimal places
+**I2C Address**: 0x68
 
 ---
 
-## 4. LDR Light Sensor Module (MD0222)
+## 4. OLED Display 0.96" SSD1306 (SPI Mode)
 
-```
-LDR Module (3-pin)
-    VCC  →  3.3V (ESP32)
-    GND  →  GND (ESP32)
-    OUT  →  GPIO 35 (ESP32 Analog Input)
-```
+| OLED Pin | ESP32 Pin | Wire Color (suggested) |
+|----------|-----------|------------------------|
+| VCC      | 3.3V      | Red                    |
+| GND      | GND       | Black                  |
+| D0 (SCK) | GPIO 16   | Purple                 |
+| D1 (MOSI)| GPIO 17   | Blue                   |
+| RES      | Not connected | -                  |
+| DC       | GPIO 5    | Orange                 |
+| CS       | GPIO 23   | Green                  |
 
-**Notes:**
-- Analog output (0-4095 on ESP32)
-- Higher value = more light
-- Threshold set to 2000 for day/night detection
+**Interface**: SPI (7-pin module)
 
----
-
-## 5. MPU-6050 Accelerometer & Gyroscope
-
-```
-MPU-6050 Module
-    VCC  →  3.3V (ESP32)
-    GND  →  GND (ESP32)
-    SDA  →  GPIO 21 (ESP32 I2C Data)
-    SCL  →  GPIO 22 (ESP32 I2C Clock)
-    INT  →  Not Connected (optional)
-    AD0  →  GND (I2C address 0x68)
-```
-
-**Purpose:**
-- Measures acceleration (m/s²)
-- Measures angular velocity (°/s)
-- Calculates tilt angles
-- Balance control for boat
+**Note**: RES (Reset) pin can be left unconnected (code uses -1).
 
 ---
 
-## 6. L298N Motor Driver Module
+## 5. L298N Motor Driver
 
-```
-L298N Motor Driver
-    12V  →  Battery Positive (12V)
-    GND  →  Battery GND + ESP32 GND (common)
-    5V   →  Not Connected (remove jumper if using)
-    
-Left Motor Control
-    IN1  →  GPIO 25 (ESP32)
-    IN2  →  GPIO 26 (ESP32)
-    ENA  →  GPIO 14 (ESP32 PWM)
-    
-Right Motor Control
-    IN3  →  GPIO 27 (ESP32)
-    IN4  →  GPIO 32 (ESP32)
-    ENB  →  GPIO 33 (ESP32 PWM)
-    
-Motor Outputs
-    OUT1 →  Left Motor +
-    OUT2 →  Left Motor -
-    OUT3 →  Right Motor +
-    OUT4 →  Right Motor -
-```
+### Power Connections
+| L298N Pin | Connection        | Wire Gauge    |
+|-----------|-------------------|---------------|
+| +12V      | Battery Positive  | 18 AWG        |
+| GND       | Battery Negative  | 18 AWG        |
+| +5V       | Not connected     | -             |
 
-**Notes:**
-- ENA and ENB must have PWM signal for speed control
-- Remove 5V jumper if ESP32 has separate power
-- Common ground is essential
+### Motor Connections
+| L298N Output | Motor              |
+|--------------|--------------------|
+| OUT1         | Left Motor (+)     |
+| OUT2         | Left Motor (-)     |
+| OUT3         | Right Motor (+)    |
+| OUT4         | Right Motor (-)    |
+
+### Control Connections (Left Motor)
+| L298N Pin | ESP32 Pin | Function         |
+|-----------|-----------|------------------|
+| IN1       | GPIO 25   | Direction 1      |
+| IN2       | GPIO 26   | Direction 2      |
+| ENA       | GPIO 14   | Speed (PWM)      |
+
+### Control Connections (Right Motor)
+| L298N Pin | ESP32 Pin | Function         |
+|-----------|-----------|------------------|
+| IN3       | GPIO 27   | Direction 1      |
+| IN4       | GPIO 32   | Direction 2      |
+| ENB       | GPIO 33   | Speed (PWM)      |
+
+**Important**: Remove jumpers from ENA and ENB for PWM speed control.
 
 ---
 
-## 7. HC-SR04 Ultrasonic Sensors (4 units)
+## 6. HC-SR04 Ultrasonic Sensors (4 Units)
 
 ### Front Sensor
-```
-HC-SR04 Front
-    VCC   →  5V (ESP32 or external)
-    GND   →  GND (ESP32)
-    TRIG  →  GPIO 18 (ESP32)
-    ECHO  →  GPIO 19 (ESP32)
-```
+| HC-SR04 Pin | ESP32 Pin | Wire Color (suggested) |
+|-------------|-----------|------------------------|
+| VCC         | 5V        | Red                    |
+| GND         | GND       | Black                  |
+| TRIG        | GPIO 18   | Orange                 |
+| ECHO        | GPIO 19   | Yellow                 |
 
 ### Back Sensor
-```
-HC-SR04 Back
-    VCC   →  5V (ESP32 or external)
-    GND   →  GND (ESP32)
-    TRIG  →  GPIO 23 (ESP32)
-    ECHO  →  GPIO 0 (ESP32)
-```
-
-**Note**: GPIO 5 is NOT available on ESP32 38-pin board, using GPIO 0 instead.
+| HC-SR04 Pin | ESP32 Pin | Wire Color (suggested) |
+|-------------|-----------|------------------------|
+| VCC         | 5V        | Red                    |
+| GND         | GND       | Black                  |
+| TRIG        | GPIO 0    | Orange                 |
+| ECHO        | GPIO 35   | Yellow                 |
 
 ### Left Sensor
-```
-HC-SR04 Left
-    VCC   →  5V (ESP32 or external)
-    GND   →  GND (ESP32)
-    TRIG  →  GPIO 4 (ESP32)
-    ECHO  →  GPIO 15 (ESP32)
-```
+| HC-SR04 Pin | ESP32 Pin | Wire Color (suggested) |
+|-------------|-----------|------------------------|
+| VCC         | 5V        | Red                    |
+| GND         | GND       | Black                  |
+| TRIG        | GPIO 4    | Orange                 |
+| ECHO        | GPIO 15   | Yellow                 |
 
 ### Right Sensor
-```
-HC-SR04 Right
-    VCC   →  5V (ESP32 or external)
-    GND   →  GND (ESP32)
-    TRIG  →  GPIO 2 (ESP32)
-    ECHO  →  GPIO 12 (ESP32)
-```
+| HC-SR04 Pin | ESP32 Pin | Wire Color (suggested) |
+|-------------|-----------|------------------------|
+| VCC         | 5V        | Red                    |
+| GND         | GND       | Black                  |
+| TRIG        | GPIO 2    | Orange                 |
+| ECHO        | GPIO 12   | Yellow                 |
 
-**Notes:**
-- HC-SR04 works best with 5V
-- ECHO pin outputs 5V but ESP32 is 3.3V tolerant
-- For safety, use voltage divider on ECHO pins (optional)
-- Range: 2-400 cm
-- 4 sensors provide 360° coverage (front, back, left, right)
+**Note**: HC-SR04 sensors require 5V power but output 5V logic. ESP32 GPIOs are 5V tolerant on input pins.
 
 ---
 
-## 8. DS3231 RTC Module
+## Complete Pin Summary
 
-```
-DS3231 Module
-    VCC  →  3.3V or 5V (ESP32)
-    GND  →  GND (ESP32)
-    SDA  →  GPIO 21 (ESP32 I2C Data - shared with MPU)
-    SCL  →  GPIO 22 (ESP32 I2C Clock - shared with MPU)
-```
+| ESP32 GPIO | Function                    | Module               |
+|------------|-----------------------------|----------------------|
+| 34         | Voltage Sensor (Analog)     | MD0492               |
+| 13         | Relay Control               | Relay Module         |
+| 21         | I2C SDA                     | MPU-6050             |
+| 22         | I2C SCL                     | MPU-6050             |
+| 16         | OLED D0 (SCK)               | SSD1306 OLED         |
+| 17         | OLED D1 (MOSI)              | SSD1306 OLED         |
+| 5          | OLED DC                     | SSD1306 OLED         |
+| 23         | OLED CS                     | SSD1306 OLED         |
+| 25         | Left Motor IN1              | L298N                |
+| 26         | Left Motor IN2              | L298N                |
+| 14         | Left Motor Enable (PWM)     | L298N                |
+| 27         | Right Motor IN1             | L298N                |
+| 32         | Right Motor IN2             | L298N                |
+| 33         | Right Motor Enable (PWM)    | L298N                |
+| 18         | Front Ultrasonic TRIG       | HC-SR04 #1           |
+| 19         | Front Ultrasonic ECHO       | HC-SR04 #1           |
+| 0          | Back Ultrasonic TRIG        | HC-SR04 #2           |
+| 35         | Back Ultrasonic ECHO        | HC-SR04 #2           |
+| 4          | Left Ultrasonic TRIG        | HC-SR04 #3           |
+| 15         | Left Ultrasonic ECHO        | HC-SR04 #3           |
+| 2          | Right Ultrasonic TRIG       | HC-SR04 #4           |
+| 12         | Right Ultrasonic ECHO       | HC-SR04 #4           |
 
-**Notes:**
-- I2C address 0x68 (same as MPU-6050)
-- Both can share the same I2C bus
-- Has backup battery for timekeeping
-- Built-in temperature sensor
-
----
-
-## 9. OLED Display 0.96" SSD1306 (SPI Mode)
-
-```
-OLED Display Module (7-pin SPI)
-    VCC  →  3.3V (ESP32)
-    GND  →  GND (ESP32)
-    D0   →  GPIO 1 (CLK/SCK)
-    D1   →  GPIO 3 (MOSI/SDA)
-    RES  →  3.3V (or dedicated reset pin)
-    DC   →  GPIO 36 (Data/Command)
-    CS   →  GPIO 39 (Chip Select)
-```
-
-**Notes:**
-- Uses SPI interface for fast refresh rate
-- 128x64 pixel resolution
-- 3.3V logic compatible with ESP32
-- Displays real-time sensor data
-- RES can be tied to VCC if not using software reset
-
-**Required Libraries:**
-- Adafruit_GFX
-- Adafruit_SSD1306
-
----
-
-## 10. Fish Feeding System
-
-### A2212/5T 2450KV Brushless Motor with ESC
-
-```
-Brushless Motor Setup
-    Motor Wires (3-phase)
-        Phase A →  ESC Output A
-        Phase B →  ESC Output B  
-        Phase C →  ESC Output C
-    
-    ESC (Electronic Speed Controller)
-        Red Wire    →  12V Battery Positive
-        Black Wire  →  Battery Negative (GND)
-        Signal Wire →  GPIO 9 (ESP32 PWM)
-```
-
-**ESC Calibration (One-time):**
-1. Set PWM to maximum (2000μs)
-2. Connect battery to ESC
-3. Wait for beeps
-4. Set PWM to minimum (1000μs)
-5. Wait for confirmation beeps
-6. ESC is calibrated
-
-**Normal Operation:**
-- Stop: 1000μs (or 0)
-- Slow: 1200μs
-- Medium: 1500μs
-- Fast: 1800μs
-- Max: 2000μs
-
-### A4988 Stepper Motor Driver
-
-```
-A4988 Driver Module
-    VDD   →  3.3V (ESP32 logic power)
-    GND   →  GND (Common ground)
-    VMOT  →  12V (Motor power supply)
-    GND   →  GND (Motor ground)
-    
-    Control Pins
-    STEP  →  GPIO 10 (ESP32)
-    DIR   →  GPIO 11 (ESP32)
-    EN    →  GPIO 8 (ESP32) - LOW=Enabled, HIGH=Disabled
-    
-    Motor Outputs
-    1A    →  Stepper Coil A+
-    1B    →  Stepper Coil A-
-    2A    →  Stepper Coil B+
-    2B    →  Stepper Coil B-
-    
-    Microstepping (Optional)
-    MS1   →  Low/High for step resolution
-    MS2   →  Low/High for step resolution
-    MS3   →  Low/High for step resolution
-```
-
-**Microstepping Configuration:**
-| MS1 | MS2 | MS3 | Resolution |
-|-----|-----|-----|------------|
-| L | L | L | Full step |
-| H | L | L | Half step |
-| L | H | L | Quarter step |
-| H | H | L | Eighth step |
-| H | H | H | Sixteenth step |
-
-**Notes:**
-- Add heatsink to A4988 chip
-- Adjust current limit potentiometer
-- Maximum current: 2A per coil
-- Enable pin: LOW = motor enabled
-
----
-
-## 11. WiFi & MQTT (Reserved for Future)
-
-**WiFi Module:**
-```
-Built-in ESP32 WiFi
-    - No external wiring required
-    - Uses internal antenna
-    - 2.4 GHz WiFi support
-    - Controlled via software only
-```
-
-**Note**: GPIO 36 and GPIO 39 are now used for OLED display.
-
-**Unavailable Pins on 38-Pin Board:**
-```
-GPIO 5  - Not available on this board variant
-```
-
-**Notes:**
-- WiFi functionality built into ESP32 chip
-- No external pins needed for WiFi/Bluetooth
-- MQTT will use WiFi connection (software-based)
-- Reserved pins available for future sensors or controls
-- GPIO 36 & 39 are input-only (good for additional analog sensors)
-
-**Future MQTT Setup:**
-- Connect to WiFi network
-- Configure MQTT broker (e.g., HiveMQ, Mosquitto)
-- Publish sensor data to topics
-- Subscribe to control commands
-
----
-
-## Complete Pin Mapping Table
-
-| ESP32 GPIO | Function | Connected To | Type |
-|------------|----------|--------------|------|
-| 34 | Voltage Sensor | MD0492 OUT | Analog In |
-| 35 | LDR Sensor | MD0222 OUT | Analog In |
-| 13 | Relay Control | Relay Module IN | Digital Out |
-| 16 | HX711 Data | HX711 DT | Digital In |
-| 17 | HX711 Clock | HX711 SCK | Digital Out |
-| 21 | I2C SDA | MPU-6050, DS3231 | I2C Data |
-| 22 | I2C SCL | MPU-6050, DS3231 | I2C Clock |
-| 25 | Left Motor IN1 | L298N IN1 | Digital Out |
-| 26 | Left Motor IN2 | L298N IN2 | Digital Out |
-| 14 | Left Motor EN | L298N ENA | PWM Out |
-| 27 | Right Motor IN1 | L298N IN3 | Digital Out |
-| 32 | Right Motor IN2 | L298N IN4 | Digital Out |
-| 33 | Right Motor EN | L298N ENB | PWM Out |
-| 18 | Front US Trigger | HC-SR04 TRIG | Digital Out |
-| 19 | Front US Echo | HC-SR04 ECHO | Digital In |
-| 23 | Back US Trigger | HC-SR04 TRIG | Digital Out |
-| 0 | Back US Echo | HC-SR04 ECHO | Digital In |
-| 4 | Left US Trigger | HC-SR04 TRIG | Digital Out |
-| 15 | Left US Echo | HC-SR04 ECHO | Digital In |
-| 2 | Right US Trigger | HC-SR04 TRIG | Digital Out |
-| 12 | Right US Echo | HC-SR04 ECHO | Digital In |
-| 3 | OLED MOSI | SSD1306 D1 | SPI Data Out |
-| 1 | OLED CLK | SSD1306 D0 | SPI Clock |
-| 36 | OLED DC | SSD1306 DC | Digital Out |
-| 39 | OLED CS | SSD1306 CS | Digital Out |
-| 9 | Feed Motor ESC | A2212 Signal | PWM Out |
-| 10 | Stepper Step | A4988 STEP | Digital Out |
-| 11 | Stepper Direction | A4988 DIR | Digital Out |
-| 8 | Stepper Enable | A4988 EN | Digital Out |
-
-**Note**: GPIO 5 is NOT available on ESP32 38-pin development board  
-**Total Pins Used**: 28 out of 38 available GPIO pins
-
----
-
-## I2C Bus Configuration
-
-```
-ESP32 I2C Bus (Wire)
-    SDA (GPIO 21)
-        ├─→ MPU-6050 SDA (0x68)
-        └─→ DS3231 SDA (0x68)
-    
-    SCL (GPIO 22)
-        ├─→ MPU-6050 SCL
-        └─→ DS3231 SCL
-```
-
-**Note:** MPU-6050 and DS3231 have the same I2C address (0x68), but they have different registers and can coexist on the same bus.
-
----
-
-## Power Supply Recommendations
-
-### Option 1: Separate Power
-```
-12V Battery
-    ├─→ Buck Converter (12V → 5V) → ESP32 VIN
-    └─→ L298N 12V input → Motors
-```
-
-### Option 2: USB + Battery
-```
-USB Cable → ESP32 USB port (for programming & power)
-12V Battery → L298N only (for motors)
-```
-
-### Option 3: All-in-One
-```
-12V Battery
-    ├─→ Buck Converter (12V → 5V) → ESP32 VIN + Sensors
-    └─→ L298N 12V input → Motors
-```
-
----
-
-## Safety Considerations
-
-1. **Common Ground**: Always connect all GND pins together
-2. **Voltage Levels**: ESP32 is 3.3V logic, be careful with 5V modules
-3. **Power Rating**: Ensure power supply can handle motor current
-4. **Decoupling Capacitors**: Add 100µF capacitor near ESP32 VIN
-5. **Motor Noise**: Add capacitors (100nF) across motor terminals
-6. **Fuse**: Use appropriate fuse on battery positive line
+**Total Pins Used**: 22 out of 38 available
 
 ---
 
 ## Physical Layout Suggestions
 
 ```
-Boat Layout (Top View) - 360° Sensor Coverage
-
-              [Front HC-SR04]
-                    |
-    [Left HC-SR04]  |  [Right HC-SR04]
-           |        |        |
-    ===========================================
-    |         [OLED Display 0.96"]           |
-    |                                         |
-    |  [MPU-6050]      [ESP32]      [RTC]    |
-    |                                         |
-    |  [HX711]    [Voltage Sensor]   [Relay] |
-    |                                         |
-    |       [L298N Motor Driver]              |
-    |                                         |
-    |  [Left Motor]  [A4988]  [Right Motor]   |
-    |                [Stepper]                |
-    |                                         |
-    |      [Feed Motor ESC + A2212]          |
-    ===========================================
-           |        |        |
-       Propeller    |    Propeller
-              [Back HC-SR04]
-
-**Complete System Overview:**
-- 4 Ultrasonic Sensors: 360° obstacle detection
-- OLED Display: Real-time data visualization
-- Feeding System: Automated fish feeding
-- Stepper Motor: Precise feed dispensing
-- Balance Control: MPU-6050 stabilization
+                    [FRONT]
+                  
+            [Front Ultrasonic]
+                  
+    [Left]  [ESP32 + OLED]  [Right]
+    [Ultra]  [MPU-6050]     [Ultra]
+    
+    [Motor]   [L298N]   [Motor]
+     Left               Right
+     
+            [Back Ultrasonic]
+            
+                    [BACK]
+                    
+    [Battery]  [Voltage Sensor]
+    [12V]      [Relay Module]
 ```
 
 ---
 
-## Testing Checklist
+## Mounting Guidelines
 
-- [ ] Check all connections with multimeter
-- [ ] Verify 3.3V on sensor VCC pins
-- [ ] Test each sensor individually
-- [ ] Verify I2C communication (MPU & RTC)
-- [ ] Test motors without propellers first
-- [ ] Calibrate HX711 load cell
-- [ ] Adjust LDR threshold
-- [ ] Verify ultrasonic sensor distances
-- [ ] Test relay operation
-- [ ] Monitor serial output for errors
-
----
-
-## Troubleshooting Guide
-
-| Issue | Possible Cause | Solution |
-|-------|---------------|----------|
-| ESP32 won't boot | Insufficient power | Use adequate power supply (min 500mA) |
-| I2C device not found | Wrong wiring | Check SDA/SCL connections |
-| Motors not spinning | No 12V power | Check battery and L298N connections |
-| HX711 unstable | Poor connections | Use short wires, add capacitor |
-| Wrong ultrasonic readings | Timing issues | Check trigger/echo pins |
-| Relay not switching | Low current | Check relay signal voltage |
+1. **ESP32**: Center of boat, in waterproof enclosure
+2. **MPU-6050**: Close to ESP32, firmly mounted (avoid vibration)
+3. **OLED Display**: Visible through clear window
+4. **Ultrasonic Sensors**: 
+   - Front: Facing forward direction
+   - Back: Facing backward direction
+   - Left: 90° left from forward
+   - Right: 90° right from forward
+5. **Motors**: Bottom of boat, sealed propeller shafts
+6. **L298N**: Close to motors, good ventilation
+7. **Battery**: Lowest point for stability, waterproof
+8. **Voltage Sensor**: Near battery
+9. **Relay**: Accessible for load connection
 
 ---
 
-## Cable Length Recommendations
+## Cable Management
 
-- **I2C Bus**: Keep under 30cm for stability
-- **Motor Wires**: Use thick gauge (16-18 AWG)
-- **Sensor Wires**: 22-24 AWG acceptable
-- **Power Lines**: Use thick gauge (14-16 AWG)
-- **Ground**: Always use thick wire
-
----
-
-## Color Coding Suggestions
-
-- **Red**: Positive power (+3.3V, +5V, +12V)
-- **Black**: Ground (GND)
-- **Yellow**: Signal/Data lines
-- **Green**: I2C SDA
-- **Blue**: I2C SCL
-- **White**: PWM signals
-- **Orange**: Trigger signals
+- **Power Cables**: 18 AWG for motors, 22 AWG for logic
+- **Signal Cables**: 24-26 AWG, twisted pairs for I2C
+- **Length**: Keep sensor cables < 30cm to reduce noise
+- **Labeling**: Label all connections clearly
+- **Waterproofing**: Use heat shrink and silicone sealant
+- **Strain Relief**: Cable ties at entry/exit points
 
 ---
 
-**Document Version:** 1.0  
-**Date:** November 24, 2025  
-**Author:** Koi Fish Friend Team
+## Safety Checklist
+
+- [ ] All GND connections tied together
+- [ ] No short circuits between power rails
+- [ ] Motor driver heatsink installed
+- [ ] Battery fuse/circuit breaker installed
+- [ ] Waterproof enclosure tested
+- [ ] All solder joints insulated
+- [ ] Cable routing prevents chafing
+- [ ] Emergency power disconnect accessible
+
+---
+
+## Testing Procedure
+
+1. **Power Test**: Measure voltages (3.3V, 5V, 12V)
+2. **LED Test**: ESP32 built-in LED blinks
+3. **I2C Test**: MPU-6050 and OLED detected
+4. **Motor Test**: Both motors spin (no propellers yet)
+5. **Sensor Test**: All 4 ultrasonic sensors read distances
+6. **Voltage Test**: Relay activates below 8.6V
+7. **Display Test**: OLED shows sensor data
+8. **Integration Test**: Full system running for 10 minutes
+
+---
+
+## Troubleshooting Wiring Issues
+
+### MPU-6050 Not Detected
+- Check SDA/SCL connections (GPIO 21/22)
+- Verify 3.3V power
+- Try I2C scanner sketch
+
+### OLED Blank Screen
+- Check I2C address (0x3C vs 0x3D)
+- Verify SDA/SCL shared with MPU-6050
+- Check contrast setting in code
+
+### Motors Not Running
+- Check L298N 12V power
+- Verify ENA/ENB jumpers removed
+- Test with multimeter on IN1-IN4
+
+### Ultrasonic Sensors Return 0
+- Check 5V power supply
+- Verify TRIG/ECHO wiring
+- Ensure clear line of sight
+
+### Voltage Sensor Wrong Reading
+- Check voltage divider resistors
+- Adjust VOLTAGE_DIVIDER_RATIO in code
+- Verify connection to GPIO 34
+
+---
+
+## Wire Color Convention (Optional)
+
+| Color  | Purpose              |
+|--------|----------------------|
+| Red    | +3.3V / +5V / +12V   |
+| Black  | Ground (GND)         |
+| Yellow | Analog Signal        |
+| Orange | Digital Signal       |
+| Blue   | I2C SDA              |
+| Green  | I2C SCL              |
+| White  | PWM Signal           |
+
+---
+
+**Created**: December 22, 2025  
+**System**: ESP32 Single-Board Configuration  
+**Author**: Koi Fish Friend Team

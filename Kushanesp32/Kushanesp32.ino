@@ -4,21 +4,19 @@
  * 
  * Features:
  * - Voltage monitoring with relay control
- * - Weight measurement using HX711 and load cell
- * - Day/Night detection using LDR
  * - Motion detection and balance control using MPU-6050
  * - Dual motor control using L298N
- * - Obstacle detection using HC-SR04
- * - RTC with temperature monitoring using DS3231
+ * - Obstacle detection using 4x HC-SR04 ultrasonic sensors
+ * - OLED display for real-time monitoring
  * 
  * Author: Koi Fish Friend Team
- * Date: November 24, 2025
+ * Date: December 22, 2025
  */
 
 #include <Wire.h>
-#include <HX711.h>
 #include <MPU6050.h>
-#include <RTClib.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // ==================== PIN DEFINITIONS ====================
 
@@ -28,84 +26,54 @@
 // Relay Module
 #define RELAY_PIN 13           // G13 for relay control
 
-// HX711 Load Cell
-#define HX711_DOUT_PIN 16      // HX711 DOUT (keep original)
-#define HX711_SCK_PIN 17       // HX711 SCK (keep original)
-
-// LDR Light Sensor
-#define LDR_PIN 35             // Analog pin for LDR
-
 // MPU-6050 (I2C)
 // SDA -> GPIO 21
 // SCL -> GPIO 22
 
 // L298N Motor Driver
-#define MOTOR_LEFT_IN1 25
-#define MOTOR_LEFT_IN2 26
-#define MOTOR_LEFT_EN 14
+#define MOTOR_LEFT_IN1 26
+#define MOTOR_LEFT_IN2 14
+#define MOTOR_LEFT_EN 27
 
-#define MOTOR_RIGHT_IN1 27
-#define MOTOR_RIGHT_IN2 32
+#define MOTOR_RIGHT_IN1 32
+#define MOTOR_RIGHT_IN2 33
 #define MOTOR_RIGHT_EN 33
 
 // HC-SR04 Ultrasonic Sensors (4 units)
 #define ULTRASONIC_FRONT_TRIG 18
 #define ULTRASONIC_FRONT_ECHO 19
-#define ULTRASONIC_BACK_TRIG 23
-#define ULTRASONIC_BACK_ECHO -1   // DISABLED - GPIO 0 causes boot loop
-#define ULTRASONIC_LEFT_TRIG 4
+#define ULTRASONIC_BACK_TRIG 0
+#define ULTRASONIC_BACK_ECHO 35
+#define ULTRASONIC_LEFT_TRIG 36   // Input-only GPIO, safe for TRIG
 #define ULTRASONIC_LEFT_ECHO 15
 #define ULTRASONIC_RIGHT_TRIG 2
 #define ULTRASONIC_RIGHT_ECHO 12
 
-// DS3231 RTC (I2C)
-// SDA -> GPIO 21
-// SCL -> GPIO 22
-
 // OLED Display 0.96" SSD1306 (SPI Mode)
-#define OLED_MOSI 3          // SDA/MOSI
-#define OLED_CLK 1           // SCL/SCK
-#define OLED_DC 36           // Data/Command
-#define OLED_CS 39           // Chip Select
-#define OLED_RESET -1        // Reset (not used, -1)
-
-// Fish Feeding Motor (A2212 Brushless - ESC Control)
-#define FEED_MOTOR_PIN 9     // PWM pin for ESC control
-
-// A4988 Stepper Motor Driver
-#define STEPPER_STEP 10      // Step pin
-#define STEPPER_DIR 11       // Direction pin
-#define STEPPER_EN 8         // Enable pin (optional)
-
-// Arduino Pro Mini Communication (Serial2)
-#define ARDUINO_TX 17          // ESP32 TX2 -> Arduino RX
-#define ARDUINO_RX 18          // ESP32 RX2 -> Arduino TX (conflicts with HX711!)
-// NOTE: Use I2C instead! Arduino as I2C slave on the shared I2C bus
-
-// RESERVED FOR FUTURE WiFi/MQTT
-// Note: WiFi uses internal pins (no external connection needed)
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_MOSI 17    // D1 pin (MOSI)
+#define OLED_CLK 16     // D0 pin (SCK)
+#define OLED_DC 5       // DC pin
+#define OLED_CS 23      // CS pin
+#define OLED_RESET 4    // RES pin - using GPIO 4 temporarily
 
 // ==================== CONSTANTS ====================
 
-#define VOLTAGE_THRESHOLD 8.6       // Voltage threshold for relay
+#define VOLTAGE_THRESHOLD 8.5       // Voltage threshold for relay
 #define VOLTAGE_DIVIDER_RATIO 5.0   // Adjust based on your voltage divider
-#define LDR_DAY_THRESHOLD 2000      // LDR threshold for day/night
 #define OBSTACLE_DISTANCE_CM 30     // Obstacle detection distance
 #define BALANCE_ANGLE_THRESHOLD 15  // Angle threshold for balance control
-#define CALIBRATION_FACTOR -7050.0  // HX711 calibration factor (adjust after calibration)
 
 // ==================== GLOBAL OBJECTS ====================
 
-HX711 scale;
 MPU6050 mpu;
-RTC_DS3231 rtc;
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_MOSI, OLED_CLK, 
+                         OLED_DC, OLED_RESET, OLED_CS);
 
 // ==================== GLOBAL VARIABLES ====================
 
 float voltage = 0.0;
-float weight = 0.0;
-int ldrValue = 0;
-bool isDayTime = false;
 
 // MPU-6050 readings
 float accelX, accelY, accelZ;
@@ -125,18 +93,9 @@ int motorRightSpeed = 0;
 
 // Timing
 unsigned long lastSensorRead = 0;
-unsigned long lastRTCRead = 0;
-const unsigned long SENSOR_READ_INTERVAL = 100;  // 100ms
-const unsigned long RTC_READ_INTERVAL = 1000;     // 1 second
-
-// Feeding motor state (controlled by backend)
-int feedMotorSpeed = 0;  // 0-180 (ESC servo style) or 1000-2000 (PWM microseconds)
-bool feedMotorEnabled = false;
-
-// Stepper motor state (controlled by backend)
-long stepperPosition = 0;
-int stepperSpeed = 1000;  // Microseconds between steps
-bool stepperEnabled = false;
+unsigned long lastDisplayUpdate = 0;
+const unsigned long SENSOR_READ_INTERVAL = 100;   // 100ms
+const unsigned long DISPLAY_UPDATE_INTERVAL = 500; // 500ms
 
 // ==================== SETUP ====================
 
@@ -152,7 +111,6 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
   
-  pinMode(LDR_PIN, INPUT);
   pinMode(VOLTAGE_SENSOR_PIN, INPUT);
   
   // Motor pins
@@ -163,44 +121,15 @@ void setup() {
   pinMode(MOTOR_RIGHT_IN2, OUTPUT);
   pinMode(MOTOR_RIGHT_EN, OUTPUT);
   
-  // Ultrasonic pins (3 sensors - back disabled)
+  // Ultrasonic pins (4 sensors)
   pinMode(ULTRASONIC_FRONT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_FRONT_ECHO, INPUT);
-  // pinMode(ULTRASONIC_BACK_TRIG, OUTPUT);  // Disabled
-  // pinMode(ULTRASONIC_BACK_ECHO, INPUT);   // Disabled
+  pinMode(ULTRASONIC_BACK_TRIG, OUTPUT);
+  pinMode(ULTRASONIC_BACK_ECHO, INPUT);
   pinMode(ULTRASONIC_LEFT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_LEFT_ECHO, INPUT);
   pinMode(ULTRASONIC_RIGHT_TRIG, OUTPUT);
   pinMode(ULTRASONIC_RIGHT_ECHO, INPUT);
-  
-  // OLED Display pins (SPI) - DISABLED (conflicts with flash pins)
-  // pinMode(OLED_MOSI, OUTPUT);
-  // pinMode(OLED_CLK, OUTPUT);
-  // pinMode(OLED_DC, OUTPUT);
-  // pinMode(OLED_CS, OUTPUT);
-  Serial.println("OLED DISABLED - GPIO 1,3,36,39 cause issues");
-  
-  // Fish Feeding Motor (ESC) - DISABLED (GPIO 9 is flash pin)
-  // pinMode(FEED_MOTOR_PIN, OUTPUT);
-  // ledcAttach(FEED_MOTOR_PIN, 50, 16);
-  // ledcWrite(FEED_MOTOR_PIN, 0);
-  Serial.println("Feeding motor DISABLED - GPIO 8-11 are flash pins");
-  
-  // Stepper Motor Driver pins - DISABLED (GPIO 8,10,11 are flash pins)
-  // pinMode(STEPPER_STEP, OUTPUT);
-  // pinMode(STEPPER_DIR, OUTPUT);
-  // pinMode(STEPPER_EN, OUTPUT);
-  // digitalWrite(STEPPER_EN, HIGH);
-  // digitalWrite(STEPPER_STEP, LOW);
-  // digitalWrite(STEPPER_DIR, LOW);
-  Serial.println("Stepper motor DISABLED - GPIO 8-11 are flash pins");
-  
-  // Initialize HX711
-  Serial.println("Initializing HX711...");
-  scale.begin(HX711_DOUT_PIN, HX711_SCK_PIN);
-  scale.set_scale(CALIBRATION_FACTOR);
-  scale.tare();  // Reset scale to 0
-  Serial.println("HX711 initialized!");
   
   // Initialize MPU-6050
   Serial.println("Initializing MPU-6050...");
@@ -211,26 +140,62 @@ void setup() {
     Serial.println("MPU-6050 connection failed!");
   }
   
-  // Initialize RTC
-  Serial.println("Initializing DS3231 RTC...");
-  if (!rtc.begin()) {
-    Serial.println("Couldn't find RTC!");
+  // Initialize OLED with detailed diagnostics
+  Serial.println("Initializing OLED Display (SPI Mode)...");
+  Serial.print("OLED Pins - MOSI:");
+  Serial.print(OLED_MOSI);
+  Serial.print(" CLK:");
+  Serial.print(OLED_CLK);
+  Serial.print(" DC:");
+  Serial.print(OLED_DC);
+  Serial.print(" CS:");
+  Serial.print(OLED_CS);
+  Serial.print(" RESET:");
+  Serial.println(OLED_RESET);
+  
+  // Manual reset pulse
+  pinMode(OLED_RESET, OUTPUT);
+  digitalWrite(OLED_RESET, HIGH);
+  delay(10);
+  digitalWrite(OLED_RESET, LOW);
+  delay(10);
+  digitalWrite(OLED_RESET, HIGH);
+  delay(10);
+  Serial.println("Reset pulse sent to OLED");
+  
+  // Try to initialize
+  bool oledOK = display.begin();
+  Serial.print("Display.begin() returned: ");
+  Serial.println(oledOK ? "SUCCESS" : "FAILED");
+  
+  if(!oledOK) {
+    Serial.println("⚠️ SSD1306 allocation failed!");
+    Serial.println("Troubleshooting:");
+    Serial.println("1. Check if OLED needs 5V power (not 3.3V)");
+    Serial.println("2. Verify all SPI connections");
+    Serial.println("3. Try connecting RES to GPIO 4");
+    Serial.println("4. Check if display is SPI or I2C mode");
   } else {
-    Serial.println("RTC initialized!");
-    
-    // Check if RTC lost power and set the time if needed
-    if (rtc.lostPower()) {
-      Serial.println("RTC lost power, setting the time!");
-      rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    }
+    Serial.println("✓ OLED initialized successfully!");
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("KOI FISH");
+    display.println("FRIEND");
+    display.setTextSize(1);
+    display.println("");
+    display.println("ESP32 System");
+    display.println("Ready!");
+    display.display();
+    Serial.println("✓ Splash screen displayed");
+    delay(3000);
   }
   
   // Stop motors initially
   stopMotors();
   
   Serial.println("Initialization complete!");
-  Serial.println("NOTE: OLED Display requires Adafruit_SSD1306 library for full functionality");
-  Serial.println("NOTE: Feeding motor and stepper are ready for backend control");
   Serial.println("========================================");
 }
 
@@ -245,18 +210,15 @@ void loop() {
     
     // Read all sensors
     readVoltageSensor();
-    readLoadCell();
-    readLDRSensor();
     readMPU6050();
     readUltrasonicSensors();
   }
   
-  // Read RTC less frequently
-  if (currentMillis - lastRTCRead >= RTC_READ_INTERVAL) {
-    lastRTCRead = currentMillis;
-    readRTC();
-    readArduinoProMini();  // Get back ultrasonic distance
+  // Update display and serial output
+  if (currentMillis - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
+    lastDisplayUpdate = currentMillis;
     printSensorData();
+    updateDisplay();
   }
   
   // Control relay based on voltage
@@ -274,21 +236,6 @@ void loop() {
 void readVoltageSensor() {
   int rawValue = analogRead(VOLTAGE_SENSOR_PIN);
   voltage = (rawValue / 4095.0) * 3.3 * VOLTAGE_DIVIDER_RATIO;
-}
-
-void readLoadCell() {
-  if (scale.is_ready()) {
-    weight = scale.get_units(5);  // Average of 5 readings
-    weight = abs(weight);  // Absolute value
-    
-    // Ensure positive and format to 2 decimal places
-    if (weight < 0) weight = 0;
-  }
-}
-
-void readLDRSensor() {
-  ldrValue = analogRead(LDR_PIN);
-  isDayTime = (ldrValue > LDR_DAY_THRESHOLD);
 }
 
 void readMPU6050() {
@@ -316,28 +263,9 @@ void readMPU6050() {
 
 void readUltrasonicSensors() {
   distanceFront = getDistance(ULTRASONIC_FRONT_TRIG, ULTRASONIC_FRONT_ECHO);
-  // distanceBack read from Arduino Pro Mini via I2C
+  distanceBack = getDistance(ULTRASONIC_BACK_TRIG, ULTRASONIC_BACK_ECHO);
   distanceLeft = getDistance(ULTRASONIC_LEFT_TRIG, ULTRASONIC_LEFT_ECHO);
   distanceRight = getDistance(ULTRASONIC_RIGHT_TRIG, ULTRASONIC_RIGHT_ECHO);
-}
-
-void readArduinoProMini() {
-  // Request 2 bytes from Arduino Pro Mini (back distance)
-  Wire.requestFrom(0x08, 2);
-  
-  if (Wire.available() >= 2) {
-    byte highByte = Wire.read();
-    byte lowByte = Wire.read();
-    int distanceInt = (highByte << 8) | lowByte;
-    distanceBack = distanceInt / 10.0;  // Convert back to float
-  }
-}
-
-// Send command to Arduino Pro Mini
-void sendArduinoCommand(const char* command) {
-  Wire.beginTransmission(0x08);
-  Wire.write(command);
-  Wire.endTransmission();
 }
 
 float getDistance(int trigPin, int echoPin) {
@@ -353,37 +281,13 @@ float getDistance(int trigPin, int echoPin) {
   return distance;
 }
 
-void readRTC() {
-  DateTime now = rtc.now();
-  float rtcTemp = rtc.getTemperature();
-  
-  Serial.println("\n========== RTC Information ==========");
-  Serial.print("Date: ");
-  Serial.print(now.year(), DEC);
-  Serial.print('/');
-  Serial.print(now.month(), DEC);
-  Serial.print('/');
-  Serial.println(now.day(), DEC);
-  
-  Serial.print("Time: ");
-  Serial.print(now.hour(), DEC);
-  Serial.print(':');
-  Serial.print(now.minute(), DEC);
-  Serial.print(':');
-  Serial.println(now.second(), DEC);
-  
-  Serial.print("RTC Temperature: ");
-  Serial.print(rtcTemp);
-  Serial.println(" °C");
-}
-
 // ==================== CONTROL FUNCTIONS ====================
 
 void controlRelay() {
   if (voltage < VOLTAGE_THRESHOLD) {
-    digitalWrite(RELAY_PIN, HIGH);  // Turn on relay
+    digitalWrite(RELAY_PIN, LOW);   // Turn off relay (cut power - low voltage)
   } else {
-    digitalWrite(RELAY_PIN, LOW);   // Turn off relay
+    digitalWrite(RELAY_PIN, HIGH);  // Turn on relay (power on - voltage OK)
   }
 }
 
@@ -505,6 +409,68 @@ void stopMotors() {
 
 // ==================== DISPLAY FUNCTIONS ====================
 
+void updateDisplay() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Line 1: Title
+  display.setCursor(0, 0);
+  display.println("Koi Fish Friend");
+  
+  // Line 2: Voltage
+  display.setCursor(0, 10);
+  display.print("V:");
+  display.print(voltage, 1);
+  display.print("V ");
+  display.print(voltage < VOLTAGE_THRESHOLD ? "OFF" : "ON");
+  
+  // Line 3: MPU Acceleration (X, Y, Z on one line)
+  display.setCursor(0, 20);
+  display.print("A:");
+  display.print(accelX, 1);
+  display.print(" ");
+  display.print(accelY, 1);
+  display.print(" ");
+  display.print(accelZ, 1);
+  
+  // Line 4: MPU Gyro (X, Y, Z on one line)
+  display.setCursor(0, 30);
+  display.print("G:");
+  display.print(gyroX, 0);
+  display.print(" ");
+  display.print(gyroY, 0);
+  display.print(" ");
+  display.print(gyroZ, 0);
+  
+  // Line 5: Angles (X, Y on one line)
+  display.setCursor(0, 40);
+  display.print("Angle:");
+  display.print(angleX, 0);
+  display.print(" ");
+  display.print(angleY, 0);
+  
+  // Line 6: Distances
+  display.setCursor(0, 50);
+  display.print("F:");
+  display.print(distanceFront, 0);
+  display.print(" B:");
+  display.print(distanceBack, 0);
+  display.print(" L:");
+  display.print(distanceLeft, 0);
+  display.print(" R:");
+  display.print(distanceRight, 0);
+  
+  // Line 7: Motor speeds
+  display.setCursor(0, 56);
+  display.print("M:");
+  display.print(motorLeftSpeed);
+  display.print(",");
+  display.print(motorRightSpeed);
+  
+  display.display();
+}
+
 void printSensorData() {
   Serial.println("\n========== Sensor Readings ==========");
   
@@ -512,18 +478,7 @@ void printSensorData() {
   Serial.print("Voltage: ");
   Serial.print(voltage, 2);
   Serial.print(" V | Relay: ");
-  Serial.println(voltage < VOLTAGE_THRESHOLD ? "ON" : "OFF");
-  
-  // Weight
-  Serial.print("Weight: ");
-  Serial.print(weight, 2);
-  Serial.println(" kg");
-  
-  // LDR
-  Serial.print("Light: ");
-  Serial.print(ldrValue);
-  Serial.print(" | ");
-  Serial.println(isDayTime ? "DAY" : "NIGHT");
+  Serial.println(voltage < VOLTAGE_THRESHOLD ? "OFF (Low Battery)" : "ON (Power OK)");
   
   // MPU-6050
   Serial.println("\n--- MPU-6050 ---");
@@ -570,17 +525,6 @@ void printSensorData() {
   Serial.print(motorLeftSpeed);
   Serial.print(" | Right Speed: ");
   Serial.println(motorRightSpeed);
-  
-  // Feeding system status
-  Serial.println("\n--- Feeding System ---");
-  Serial.print("Feed Motor: ");
-  Serial.print(feedMotorEnabled ? "ON" : "OFF");
-  Serial.print(" | Speed: ");
-  Serial.println(feedMotorSpeed);
-  Serial.print("Stepper: ");
-  Serial.print(stepperEnabled ? "ENABLED" : "DISABLED");
-  Serial.print(" | Position: ");
-  Serial.println(stepperPosition);
   
   Serial.println("=====================================");
 }

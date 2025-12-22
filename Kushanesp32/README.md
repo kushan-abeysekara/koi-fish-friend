@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a comprehensive ESP32-based autonomous boat control system featuring multiple sensors, motors, and real-time monitoring capabilities. The system is designed for the **ZY-ESP32 WIFI BT 38 PIN BOARD** and controls a dual-propeller boat with advanced sensor integration.
+This is a simplified ESP32-based autonomous boat control system featuring essential sensors, motors, and real-time monitoring capabilities. The system is designed for the **ZY-ESP32 WIFI BT 38 PIN BOARD** and controls a dual-propeller boat with motion tracking and obstacle avoidance.
 
 ## Hardware Components
 
@@ -19,60 +19,33 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
    - Triggers relay based on voltage threshold
    - Range: 0-25V DC
 
-2. **HX711 Load Cell Amplifier (MD0020)**
-   - 24-bit ADC for precise weight measurement
-   - Connected to 5KG load cell
-   - Output format: X.XX kg (2 decimal places)
-
-3. **LDR Light Sensor Module (MD0222)**
-   - 3-pin module
-   - Detects day/night conditions
-   - Analog output
-
-4. **MPU-6050 Accelerometer & Gyroscope**
+2. **MPU-6050 Accelerometer & Gyroscope**
    - 6-axis motion tracking
    - Measures linear acceleration (m/s²)
    - Measures angular velocity (°/s)
    - Calculates tilt angles
    - Used for boat balance control
 
-5. **L298N Motor Driver Module**
+3. **L298N Motor Driver Module**
    - Dual H-bridge motor driver
    - Controls 2x 12V DC motors (propellers)
    - PWM speed control
 
-6. **HC-SR04 Ultrasonic Sensors (4 units)**
+4. **HC-SR04 Ultrasonic Sensors (4 units)**
    - Front, back, left, and right obstacle detection
    - Range: 2-400 cm
    - 360° awareness for comprehensive obstacle avoidance
 
-7. **DS3231 RTC Module**
-   - Real-time clock with date & time
-   - Built-in temperature sensor
-   - Battery backup for timekeeping
-
-8. **Relay Module**
-   - Connected to GPIO 13
-   - Controls external devices based on voltage
-   - Activates when voltage < 8.6V
-
-9. **OLED Display 0.96" (SSD1306)**
+5. **OLED Display 0.96" (SSD1306)**
    - 128x64 pixel resolution
-   - SPI interface (7-pin module)
+   - I2C interface
    - Real-time sensor data visualization
    - Low power consumption
 
-10. **Fish Feeding System**
-   - **A2212/5T 2450KV Brushless Motor**
-   - Drives feeding plate to spread fish feed
-   - ESC (Electronic Speed Controller) required
-   - Controlled via PWM signal from backend
-
-11. **A4988 Stepper Motor Driver**
-   - Controls stepper motor for precise movements
-   - Microstepping capability (up to 1/16 step)
-   - Backend controlled for automated operations
-   - Enable/disable functionality
+6. **Relay Module**
+   - Connected to GPIO 13
+   - Controls external devices based on voltage
+   - Activates when voltage < 8.6V
 
 ## Features
 
@@ -82,63 +55,38 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 - Prevents over-discharge of battery
 - Displays voltage in volts (V)
 
-### 2. Weight Measurement
-- Precise weight measurement using HX711 and load cell
-- Calibrated for accurate readings
-- Displays weight in kg with 2 decimal places
-- Range: 0-5 kg
-
-### 3. Day/Night Detection
-- Uses LDR sensor to detect ambient light
-- Determines day or night condition
-- Can be used for automatic lighting control
-
-### 4. Motion & Balance Control
+### 2. Motion & Balance Control
 - **Linear Acceleration**: Measures acceleration in m/s²
 - **Angular Velocity**: Measures rotation rate in °/s
 - **Tilt Detection**: Calculates X and Y axis angles
 - **Auto-Balance**: Adjusts motor speeds to maintain stability
 - **Temperature Monitoring**: MPU-6050 internal temperature
 
-### 5. Autonomous Navigation
+### 3. Autonomous Navigation
 - **Y-axis Movement**: Forward/backward propulsion
 - **X-axis Movement**: Left/right turning
 - **Balance Maintenance**: Corrects tilt using differential motor control
-- **Obstacle Avoidance**: Detects and avoids obstacles on both sides
+- **Obstacle Avoidance**: Detects and avoids obstacles from all directions
 
-### 6. Motor Control
+### 4. Motor Control
 - Dual propeller control via L298N
 - Independent speed control for each motor
 - PWM-based speed regulation (0-255)
 - Forward, backward, left, and right movements
 
-### 7. Obstacle Detection
+### 5. Obstacle Detection
 - **4 ultrasonic sensors**: Front, back, left, and right
 - **360° coverage**: Complete surrounding awareness
 - Detects obstacles within 30 cm
 - Intelligent evasive maneuvers based on all sensor data
 - Real-time distance monitoring from all directions
 
-### 8. Real-Time Clock
-- Maintains accurate date and time
-- Temperature monitoring from RTC module
-- Battery backup ensures time persistence
-- Logs system events with timestamps
-
-### 9. OLED Display (0.96" SSD1306)
+### 6. OLED Display (0.96" SSD1306)
 - **Real-time visualization** of sensor data
 - **128x64 resolution** for clear display
-- Shows voltage, weight, distances, angles
+- Shows voltage, distances, angles, temperature
 - Low power consumption
-- SPI interface for fast updates
-
-### 10. Automated Fish Feeding System
-- **Brushless motor** (A2212 2450KV) drives feeding plate
-- **Spreads fish feed** across pond surface
-- **Stepper motor** for precise feed dispensing
-- **Backend controlled** for scheduled feeding
-- **ESC control** for smooth motor operation
-- **A4988 driver** for stepper accuracy
+- I2C interface for fast updates
 
 ## Technical Specifications
 
@@ -149,23 +97,20 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 - **Logic Level**: 3.3V
 
 ### Communication Protocols
-- **I2C**: MPU-6050, DS3231
-- **SPI**: OLED Display (SSD1306)
-- **Analog**: Voltage sensor, LDR
-- **Digital**: Ultrasonic sensors, relay, motor control, stepper driver
-- **PWM**: Motor drivers (L298N), ESC (feeding motor)
+- **I2C**: MPU-6050, OLED Display (SSD1306)
+- **Analog**: Voltage sensor
+- **Digital**: Ultrasonic sensors, relay, motor control
+- **PWM**: Motor drivers (L298N)
 
 ### Sampling Rates
 - **Sensor Reading**: 100ms (10 Hz)
-- **RTC Reading**: 1000ms (1 Hz)
+- **Display Update**: 500ms (2 Hz)
 - **Motor Control**: Real-time (as needed)
 
 ### Thresholds & Calibration
 - **Voltage Threshold**: 8.6V
-- **LDR Day Threshold**: 2000 (analog value)
 - **Obstacle Distance**: 30 cm
 - **Balance Angle**: ±15 degrees
-- **HX711 Calibration Factor**: -7050.0 (adjust after testing)
 
 ## Pin Configuration
 
@@ -173,20 +118,17 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 | Pin | Function | Module |
 |-----|----------|--------|
 | GPIO 34 | Voltage Sensor Input | MD0492 |
-| GPIO 35 | LDR Light Sensor | MD0222 |
 
 ### Digital Pins
 | Pin | Function | Module |
 |-----|----------|--------|
 | GPIO 13 | Relay Control | Relay Module |
-| GPIO 16 | HX711 DOUT | Load Cell Amp |
-| GPIO 17 | HX711 SCK | Load Cell Amp |
 
 ### I2C Pins (Shared Bus)
 | Pin | Function | Modules |
 |-----|----------|---------|
-| GPIO 21 | SDA | MPU-6050, DS3231 |
-| GPIO 22 | SCL | MPU-6050, DS3231 |
+| GPIO 21 | SDA | MPU-6050, OLED Display |
+| GPIO 22 | SCL | MPU-6050, OLED Display |
 
 ### Motor Control Pins (L298N)
 | Pin | Function | Motor |
@@ -204,31 +146,13 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
 | GPIO 18 | Front Trigger | Front HC-SR04 |
 | GPIO 19 | Front Echo | Front HC-SR04 |
 | GPIO 23 | Back Trigger | Back HC-SR04 |
-| GPIO 0 | Back Echo | Back HC-SR04 |
+| GPIO 5 | Back Echo | Back HC-SR04 |
 | GPIO 4 | Left Trigger | Left HC-SR04 |
 | GPIO 15 | Left Echo | Left HC-SR04 |
 | GPIO 2 | Right Trigger | Right HC-SR04 |
 | GPIO 12 | Right Echo | Right HC-SR04 |
 
-### OLED Display (SPI)
-| Pin | Function | Module |
-|-----|----------|--------|
-| GPIO 3 | MOSI (SDA) | SSD1306 OLED |
-| GPIO 1 | CLK (SCK) | SSD1306 OLED |
-| GPIO 36 | Data/Command | SSD1306 OLED |
-| GPIO 39 | Chip Select | SSD1306 OLED |
-
-### Fish Feeding System
-| Pin | Function | Module |
-|-----|----------|--------|
-| GPIO 9 | ESC PWM Signal | A2212 Brushless Motor |
-| GPIO 10 | Step Pulse | A4988 Stepper Driver |
-| GPIO 11 | Direction | A4988 Stepper Driver |
-| GPIO 8 | Enable | A4988 Stepper Driver |
-
-**Note**: WiFi uses internal ESP32 hardware (no external pins required)  
-**Important**: GPIO 5 is NOT available on ESP32 38-pin development board  
-**Backend Control**: Feeding motor and stepper are controlled via backend API (functions ready)
+**Note**: WiFi uses internal ESP32 hardware (no external pins required)
 
 ## Software Architecture
 
@@ -244,9 +168,9 @@ This is a comprehensive ESP32-based autonomous boat control system featuring mul
    - Obstacle avoidance logic
    - Motor speed regulation
 
-3. **Data Logging**
+3. **Data Display**
+   - OLED real-time display
    - Serial monitor output
-   - Timestamp integration
    - Sensor data formatting
 
 ### Control Flow
@@ -256,14 +180,11 @@ Initialize Hardware
     ↓
 Read Sensors (100ms interval)
     ├─ Voltage Sensor
-    ├─ Load Cell (HX711)
-    ├─ LDR Sensor
     ├─ MPU-6050 (Accel/Gyro)
-    └─ Ultrasonic Sensors
+    └─ Ultrasonic Sensors (4x)
     ↓
 Process Data
     ├─ Calculate angles
-    ├─ Determine day/night
     └─ Measure distances
     ↓
 Control Actions
@@ -275,7 +196,8 @@ Update Motors
     ├─ Calculate speeds
     └─ Set PWM outputs
     ↓
-Display Data (1s interval)
+Update Display (500ms interval)
+    ├─ OLED Display
     └─ Serial Monitor Output
 ```
 
@@ -287,14 +209,10 @@ Install these libraries via Arduino IDE Library Manager:
 
 ```
 - Wire.h (Built-in)
-- HX711.h (by Bogdan Necula)
 - MPU6050.h (by Electronic Cats)
-- RTClib.h (by Adafruit)
-- Adafruit_GFX.h (by Adafruit) - For OLED
-- Adafruit_SSD1306.h (by Adafruit) - For OLED Display
+- Adafruit_GFX.h (by Adafruit)
+- Adafruit_SSD1306.h (by Adafruit)
 ```
-
-**Note**: OLED display libraries are optional for initial testing. The system will work without them, but display features will be unavailable.
 
 ### Arduino IDE Setup
 
@@ -332,46 +250,21 @@ Install these libraries via Arduino IDE Library Manager:
 
 ## Calibration
 
-### HX711 Load Cell Calibration
-
-1. **Tare the Scale**
-   ```cpp
-   scale.tare();  // Already in setup()
-   ```
-
-2. **Find Calibration Factor**
-   - Place a known weight (e.g., 1.00 kg)
-   - Read the raw value
-   - Calculate: `calibration_factor = raw_value / known_weight`
-   - Update `CALIBRATION_FACTOR` in code
-
-3. **Verify**
-   - Place different known weights
-   - Check if readings match
-
-### LDR Threshold Calibration
-
-1. Test in daylight and darkness
-2. Note analog values
-3. Set `LDR_DAY_THRESHOLD` between day/night values
-
 ### Voltage Sensor Calibration
 
 1. Measure battery voltage with multimeter
 2. Compare with sensor reading
-3. Adjust `VOLTAGE_DIVIDER_RATIO` if needed
+3. Adjust `VOLTAGE_DIVIDER_RATIO` in code if needed
 
 ## Usage
 
 ### Serial Monitor Output
 
-The system displays data every second:
+The system displays data every 500ms:
 
 ```
 ========== Sensor Readings ==========
 Voltage: 12.45 V | Relay: OFF
-Weight: 1.12 kg
-Light: 3500 | DAY
 
 --- MPU-6050 ---
 Accel (m/s²): X=0.05 Y=0.12 Z=9.78
@@ -379,22 +272,25 @@ Gyro (°/s): X=0.23 Y=-0.15 Z=0.08
 Angles: X=1.25° Y=-0.89°
 MPU Temp: 28.50 °C
 
---- Ultrasonic ---
-Left: 45.2 cm | Right: 38.7 cm
+--- Ultrasonic (4 Sensors) ---
+Front: 45.2 cm | Back: 38.7 cm
+Left: 52.3 cm | Right: 41.8 cm
 
 --- Motors ---
 Left Speed: 150 | Right Speed: 150
-
---- Feeding System ---
-Feed Motor: OFF | Speed: 0
-Stepper: DISABLED | Position: 0
-
-========== RTC Information ==========
-Date: 2025/11/24
-Time: 14:35:22
-RTC Temperature: 27.25 °C
 =====================================
 ```
+
+### OLED Display
+
+The OLED shows:
+- Line 1: "Koi Fish Friend"
+- Line 2: Voltage and status
+- Line 3: Tilt angles (X, Y)
+- Line 4: Temperature
+- Line 5: Front and back distances
+- Line 6: Left and right distances
+- Line 7: Motor speeds
 
 ## Troubleshooting
 
@@ -405,25 +301,25 @@ RTC Temperature: 27.25 °C
    - Verify 3.3V power supply
    - Ensure I2C address is 0x68
 
-2. **HX711 Not Ready**
-   - Check wiring (DOUT, SCK)
-   - Verify load cell connections
-   - Run tare command
-
-3. **RTC Not Found**
+2. **OLED Not Working**
    - Check I2C wiring
-   - Verify 3.3V/5V power
-   - Ensure battery is installed
+   - Verify I2C address is 0x3C
+   - Ensure Adafruit libraries installed
 
-4. **Motors Not Running**
+3. **Motors Not Running**
    - Check L298N connections
    - Verify 12V power supply
    - Test PWM pins with LED
 
-5. **Ultrasonic Wrong Readings**
+4. **Ultrasonic Wrong Readings**
    - Check trigger/echo wiring
    - Ensure clear line of sight
    - Verify 5V power
+
+5. **ESP32 Boot Issues**
+   - GPIO 0 may interfere with boot if held LOW
+   - Consider moving back echo to GPIO 5
+   - Disconnect ultrasonic during upload if needed
 
 ## Safety Considerations
 
@@ -442,18 +338,41 @@ RTC Temperature: 27.25 °C
    - Keep hands away from moving parts
    - Emergency stop mechanism recommended
 
+## Total GPIO Usage
+
+### ESP32 Pins Used (18 pins)
+
+| GPIO | Function              |
+|------|-----------------------|
+| 34   | Voltage Sensor (ADC)  |
+| 13   | Relay                 |
+| 21   | I2C SDA (shared)      |
+| 22   | I2C SCL (shared)      |
+| 25   | Motor Left IN1        |
+| 26   | Motor Left IN2        |
+| 14   | Motor Left EN         |
+| 27   | Motor Right IN1       |
+| 32   | Motor Right IN2       |
+| 33   | Motor Right EN        |
+| 18   | Ultrasonic Front TRIG |
+| 19   | Ultrasonic Front ECHO |
+| 23   | Ultrasonic Back TRIG  |
+| 5    | Ultrasonic Back ECHO  |
+| 4    | Ultrasonic Left TRIG  |
+| 15   | Ultrasonic Left ECHO  |
+| 2    | Ultrasonic Right TRIG |
+| 12   | Ultrasonic Right ECHO |
+
 ## Future Enhancements
 
-- [ ] **WiFi connectivity** for remote monitoring (pins reserved)
-- [ ] **MQTT protocol** for IoT integration (pins reserved)
+- [ ] WiFi connectivity for remote monitoring
+- [ ] MQTT protocol for IoT integration
 - [ ] GPS module for location tracking
-- [ ] SD card logging for data storage
 - [ ] Web interface for configuration
 - [ ] Bluetooth app control
 - [ ] Automatic waypoint navigation
 - [ ] Solar panel integration
 - [ ] Water quality sensors
-- [ ] Cloud data synchronization via MQTT
 
 ## Support
 
@@ -470,7 +389,7 @@ MIT License - Free for personal and commercial use
 ## Author
 
 **Koi Fish Friend Team**  
-Date: November 24, 2025
+Date: December 22, 2025
 
 ---
 
