@@ -8,6 +8,13 @@ import Inventory from '../components/Inventory';
 import DeviceManagement from '../components/DeviceManagement';
 import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
+import WaterQualityDashboard from '../components/WaterQualityDashboard';
+import WaterQualityTrends from '../components/WaterQualityTrends';
+import AlertsCenter from '../components/AlertsCenter';
+import TaskCalendar from '../components/TaskCalendar';
+import TreatmentDosingLog from '../components/TreatmentDosingLog';
+import SensorCareCalibration from '../components/SensorCareCalibration';
+import Settings from '../components/Settings';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -40,26 +47,18 @@ const Dashboard: React.FC = () => {
       {/* Main Content */}
       <div className="flex-1 ml-64">
         {/* Top Bar */}
-        <div className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
-          <div className="px-8 py-4 flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
-              <p className="text-sm text-gray-500">Welcome back, {currentUsername}!</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-2 text-sm">
-                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                <span className="text-green-600 font-medium">System Online</span>
-              </span>
-            </div>
-          </div>
-        </div>
 
         {/* Dashboard Content */}
         <div className="p-8">
           <Routes>
             <Route path="/" element={<DashboardHome username={currentUsername} />} />
             <Route path="/fish-count" element={<FishCount />} />
+            <Route path="/water-quality" element={<WaterQualityDashboard />} />
+            <Route path="/water-quality/trends" element={<WaterQualityTrends />} />
+            <Route path="/water-quality/alerts" element={<AlertsCenter />} />
+            <Route path="/water-quality/tasks" element={<TaskCalendar />} />
+            <Route path="/water-quality/dosing" element={<TreatmentDosingLog />} />
+            <Route path="/water-quality/calibration" element={<SensorCareCalibration />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/device-management" element={<DeviceManagement />} />
@@ -77,7 +76,7 @@ const Dashboard: React.FC = () => {
               }
             />
             <Route path="/profile" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Profile - Coming Soon</h2></div>} />
-            <Route path="/settings" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Settings - Coming Soon</h2></div>} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </div>
       </div>

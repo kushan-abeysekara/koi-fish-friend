@@ -73,12 +73,20 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
     location.pathname.includes('/calculate-kwh')
   );
 
+  const [isWaterQualityExpanded, setIsWaterQualityExpanded] = useState(
+    location.pathname.includes('/water-quality')
+  );
+
   const toggleBudgetMenu = () => {
     setIsBudgetExpanded(!isBudgetExpanded);
   };
 
+  const toggleWaterQualityMenu = () => {
+    setIsWaterQualityExpanded(!isWaterQualityExpanded);
+  };
+
   return (
-    <div className="w-64 h-screen bg-slate-800 text-white flex flex-col fixed left-0 top-0">
+    <div className="w-61 h-screen bg-slate-800 text-white flex flex-col fixed left-0 top-0">
       {/* Header */}
       <div className="p-6 border-b border-slate-700">
         <div className="flex items-center gap-3">
@@ -107,6 +115,65 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           path="/dashboard/fish-count"
           active={location.pathname === '/dashboard/fish-count'}
         />
+
+        {/* Water Quality Module with Sub-menu */}
+        <div>
+          <button
+            onClick={toggleWaterQualityMenu}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+              isWaterQualityExpanded || location.pathname.includes('/water-quality')
+                ? 'bg-slate-700 text-white'
+                : 'text-gray-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xl"><i className="fas fa-water"></i></span>
+              <span className="font-medium">Water Quality</span>
+            </div>
+            <i className={`fas fa-chevron-${isWaterQualityExpanded ? 'down' : 'right'} text-sm transition-transform`}></i>
+          </button>
+
+          {isWaterQualityExpanded && (
+            <div className="mt-1 space-y-1">
+              <SubNavItem
+                icon={<i className="fas fa-tachometer-alt"></i>}
+                label="Live Dashboard"
+                path="/dashboard/water-quality"
+                active={location.pathname === '/dashboard/water-quality'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-line"></i>}
+                label="Trends & History"
+                path="/dashboard/water-quality/trends"
+                active={location.pathname === '/dashboard/water-quality/trends'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-bell"></i>}
+                label="Alerts Center"
+                path="/dashboard/water-quality/alerts"
+                active={location.pathname === '/dashboard/water-quality/alerts'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-calendar-check"></i>}
+                label="Task Calendar"
+                path="/dashboard/water-quality/tasks"
+                active={location.pathname === '/dashboard/water-quality/tasks'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-syringe"></i>}
+                label="Dosing Log"
+                path="/dashboard/water-quality/dosing"
+                active={location.pathname === '/dashboard/water-quality/dosing'}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-wrench"></i>}
+                label="Sensor Care"
+                path="/dashboard/water-quality/calibration"
+                active={location.pathname === '/dashboard/water-quality/calibration'}
+              />
+            </div>
+          )}
+        </div>
 
         {/* Budget Management with Sub-menu */}
         <div>
