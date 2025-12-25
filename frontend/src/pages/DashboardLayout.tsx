@@ -11,6 +11,12 @@ import FishCount from '../components/FishCount';
 import ProfitLoss from '../components/ProfitLoss';
 import PondCamera from '../components/PondCamera';
 import BoatNavigation from '../components/BoatNavigation';
+import WaterQualityDashboard from '../components/WaterQualityDashboard';
+import WaterQualityTrends from '../components/WaterQualityTrends';
+import SensorCareCalibration from '../components/SensorCareCalibration';
+import TreatmentDosingLog from '../components/TreatmentDosingLog';
+import AlertsCenter from '../components/AlertsCenter';
+import TaskCalendar from '../components/TaskCalendar';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -80,6 +86,12 @@ const Dashboard: React.FC = () => {
             <Route path="/fish-count" element={<FishCount />} />
             <Route path="/camera" element={<PondCamera />} />
             <Route path="/boat-navigation" element={<BoatNavigation />} />
+            <Route path="/water-quality-dashboard" element={<WaterQualityDashboard />} />
+            <Route path="/water-quality-trends" element={<WaterQualityTrends />} />
+            <Route path="/sensor-care" element={<SensorCareCalibration />} />
+            <Route path="/treatment-dosing" element={<TreatmentDosingLog />} />
+            <Route path="/alerts-center" element={<AlertsCenter />} />
+            <Route path="/task-calendar" element={<TaskCalendar />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />

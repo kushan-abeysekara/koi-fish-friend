@@ -85,8 +85,21 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     location.pathname.includes('/calculate-kwh')
   );
 
+  const [isWaterQualityExpanded, setIsWaterQualityExpanded] = useState(
+    location.pathname.includes('/water-quality-dashboard') || 
+    location.pathname.includes('/water-quality-trends') || 
+    location.pathname.includes('/sensor-care') ||
+    location.pathname.includes('/treatment-dosing') ||
+    location.pathname.includes('/alerts-center') ||
+    location.pathname.includes('/task-calendar')
+  );
+
   const toggleBudgetMenu = () => {
     setIsBudgetExpanded(!isBudgetExpanded);
+  };
+
+  const toggleWaterQualityMenu = () => {
+    setIsWaterQualityExpanded(!isWaterQualityExpanded);
   };
 
   const handleNavigation = (path: string) => {
@@ -165,6 +178,76 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
           active={location.pathname === '/dashboard/boat-navigation'}
           onNavigate={onClose}
         />
+
+        {/* Water Quality Management with Sub-menu */}
+        <div>
+          <button
+            onClick={toggleWaterQualityMenu}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+              isWaterQualityExpanded || 
+              location.pathname.includes('/water-quality-dashboard') || 
+              location.pathname.includes('/water-quality-trends') ||
+              location.pathname.includes('/sensor-care') ||
+              location.pathname.includes('/treatment-dosing') ||
+              location.pathname.includes('/alerts-center') ||
+              location.pathname.includes('/task-calendar')
+                ? 'bg-slate-700 text-white'
+                : 'text-gray-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xl"><i className="fas fa-tint"></i></span>
+              <span className="font-medium">Water Quality</span>
+            </div>
+            <i className={`fas fa-chevron-${isWaterQualityExpanded ? 'down' : 'right'} text-sm transition-transform`}></i>
+          </button>
+          {isWaterQualityExpanded && (
+            <div className="mt-1 space-y-1">
+              <SubNavItem
+                icon={<i className="fas fa-dashboard"></i>}
+                label="Water Quality Dashboard"
+                path="/dashboard/water-quality-dashboard"
+                active={location.pathname === '/dashboard/water-quality-dashboard'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-area"></i>}
+                label="Water Quality Trends"
+                path="/dashboard/water-quality-trends"
+                active={location.pathname === '/dashboard/water-quality-trends'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-tools"></i>}
+                label="Sensor Care & Calibration"
+                path="/dashboard/sensor-care"
+                active={location.pathname === '/dashboard/sensor-care'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-syringe"></i>}
+                label="Treatment & Dosing Log"
+                path="/dashboard/treatment-dosing"
+                active={location.pathname === '/dashboard/treatment-dosing'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-bell"></i>}
+                label="Alerts Center"
+                path="/dashboard/alerts-center"
+                active={location.pathname === '/dashboard/alerts-center'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-calendar-check"></i>}
+                label="Task Calendar"
+                path="/dashboard/task-calendar"
+                active={location.pathname === '/dashboard/task-calendar'}
+                onNavigate={onClose}
+              />
+            </div>
+          )}
+        </div>
 
         {/* Budget Management with Sub-menu */}
         <div>
