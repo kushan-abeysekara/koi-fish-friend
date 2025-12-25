@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 const BoatNavigation: React.FC = () => {
-  const [isConnected, setIsConnected] = useState(true);
+  const [isConnected] = useState(true);
   const [streamError, setStreamError] = useState(false);
   const [lastCommand, setLastCommand] = useState<string>('');
   const [speed, setSpeed] = useState(50);
