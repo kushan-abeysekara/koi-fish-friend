@@ -17,6 +17,12 @@ import SensorCareCalibration from '../components/SensorCareCalibration';
 import TreatmentDosingLog from '../components/TreatmentDosingLog';
 import AlertsCenter from '../components/AlertsCenter';
 import TaskCalendar from '../components/TaskCalendar';
+import Settings from '../components/Settings';
+import FeedingDashboard from '../components/FeedingDashboard';
+import FeedingSchedule from '../components/FeedingSchedule';
+import ManualFeeding from '../components/ManualFeeding';
+import FeedUsageLogs from '../components/FeedUsageLogs';
+import FeederHealthSafety from '../components/FeederHealthSafety';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -92,6 +98,11 @@ const Dashboard: React.FC = () => {
             <Route path="/treatment-dosing" element={<TreatmentDosingLog />} />
             <Route path="/alerts-center" element={<AlertsCenter />} />
             <Route path="/task-calendar" element={<TaskCalendar />} />
+            <Route path="/feeding-dashboard" element={<FeedingDashboard />} />
+            <Route path="/feeding-schedule" element={<FeedingSchedule />} />
+            <Route path="/manual-feeding" element={<ManualFeeding />} />
+            <Route path="/feed-usage-logs" element={<FeedUsageLogs />} />
+            <Route path="/feeder-health-safety" element={<FeederHealthSafety />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />
@@ -110,7 +121,7 @@ const Dashboard: React.FC = () => {
               }
             />
             <Route path="/profile" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Profile - Coming Soon</h2></div>} />
-            <Route path="/settings" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Settings - Coming Soon</h2></div>} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </div>
       </div>

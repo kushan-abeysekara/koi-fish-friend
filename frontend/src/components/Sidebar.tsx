@@ -94,12 +94,24 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     location.pathname.includes('/task-calendar')
   );
 
+  const [isFeedingExpanded, setIsFeedingExpanded] = useState(
+    location.pathname.includes('/feeding-dashboard') || 
+    location.pathname.includes('/feeding-schedule') || 
+    location.pathname.includes('/manual-feeding') ||
+    location.pathname.includes('/feed-usage-logs') ||
+    location.pathname.includes('/feeder-health-safety')
+  );
+
   const toggleBudgetMenu = () => {
     setIsBudgetExpanded(!isBudgetExpanded);
   };
 
   const toggleWaterQualityMenu = () => {
     setIsWaterQualityExpanded(!isWaterQualityExpanded);
+  };
+
+  const toggleFeedingMenu = () => {
+    setIsFeedingExpanded(!isFeedingExpanded);
   };
 
   const handleNavigation = (path: string) => {
@@ -243,6 +255,68 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
                 label="Task Calendar"
                 path="/dashboard/task-calendar"
                 active={location.pathname === '/dashboard/task-calendar'}
+                onNavigate={onClose}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Feeding Management with Sub-menu */}
+        <div>
+          <button
+            onClick={toggleFeedingMenu}
+            className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+              isFeedingExpanded || 
+              location.pathname.includes('/feeding-dashboard') || 
+              location.pathname.includes('/feeding-schedule') ||
+              location.pathname.includes('/manual-feeding') ||
+              location.pathname.includes('/feed-usage-logs') ||
+              location.pathname.includes('/feeder-health-safety')
+                ? 'bg-slate-700 text-white'
+                : 'text-gray-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xl"><i className="fas fa-utensils"></i></span>
+              <span className="font-medium">Feeding Management</span>
+            </div>
+            <i className={`fas fa-chevron-${isFeedingExpanded ? 'down' : 'right'} text-sm transition-transform`}></i>
+          </button>
+          {isFeedingExpanded && (
+            <div className="mt-1 space-y-1">
+              <SubNavItem
+                icon={<i className="fas fa-home"></i>}
+                label="Feeding Dashboard"
+                path="/dashboard/feeding-dashboard"
+                active={location.pathname === '/dashboard/feeding-dashboard'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-calendar-alt"></i>}
+                label="Feeding Schedule"
+                path="/dashboard/feeding-schedule"
+                active={location.pathname === '/dashboard/feeding-schedule'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-hand-pointer"></i>}
+                label="Manual Feeding"
+                path="/dashboard/manual-feeding"
+                active={location.pathname === '/dashboard/manual-feeding'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-bar"></i>}
+                label="Feed Usage & Logs"
+                path="/dashboard/feed-usage-logs"
+                active={location.pathname === '/dashboard/feed-usage-logs'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-shield-alt"></i>}
+                label="Feeder Health & Safety"
+                path="/dashboard/feeder-health-safety"
+                active={location.pathname === '/dashboard/feeder-health-safety'}
                 onNavigate={onClose}
               />
             </div>

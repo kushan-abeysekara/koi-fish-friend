@@ -25,7 +25,7 @@ interface NotificationRecipient {
 }
 
 const Settings: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'bands' | 'alerts' | 'notifications' | 'advanced'>('bands');
+  const [activeTab, setActiveTab] = useState<'bands' | 'alerts' | 'notifications' | 'advanced' | 'feeding'>('bands');
   
   // Safe Bands State
   const [safeBands, setSafeBands] = useState<SafeBands>({
@@ -85,6 +85,19 @@ const Settings: React.FC = () => {
   ]);
 
   const [showAddRecipient, setShowAddRecipient] = useState(false);
+
+  // Feeding Settings State
+  const [feedingSettings, setFeedingSettings] = useState({
+    minFeedAmount: 0.5, // kg
+    maxFeedAmount: 10.0, // kg
+    batteryLowThreshold: 20, // %
+    batteryWarningThreshold: 30, // %
+    hopperEmptyThreshold: 5.0, // kg
+    hopperWarningThreshold: 15.0, // kg
+    plateSpeed: 'Medium' as 'Low' | 'Medium' | 'High',
+    autoFeedingEnabled: true,
+    feedingTimeout: 300, // seconds
+  });
 
   const handleSaveBands = () => {
     // Save to API
@@ -186,6 +199,16 @@ const Settings: React.FC = () => {
               }`}
             >
               <i className="fas fa-cogs mr-2"></i>Advanced
+            </button>
+            <button
+              onClick={() => setActiveTab('feeding')}
+              className={`px-6 py-4 font-semibold transition-colors border-b-2 ${
+                activeTab === 'feeding'
+                  ? 'border-gray-800 text-gray-800'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <i className="fas fa-utensils mr-2"></i>Feeding System
             </button>
           </div>
         </div>
@@ -726,6 +749,265 @@ const Settings: React.FC = () => {
             <div className="flex justify-end gap-3">
               <button
                 onClick={handleSaveAlertSettings}
+                className="px-6 py-3 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors font-semibold"
+              >
+                <i className="fas fa-save mr-2"></i>Save Changes
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Feeding System Settings Tab */}
+        {activeTab === 'feeding' && (
+          <div className="p-6 space-y-6">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+              <p className="text-sm text-green-800">
+                <i className="fas fa-info-circle mr-2"></i>
+                <strong>Feeding System Settings:</strong> Configure feed quantity limits, safety thresholds, and plate speed for the automated feeding system.
+              </p>
+            </div>
+
+            {/* Feed Quantity Limits */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span>⚖️</span> Feed Quantity Limits
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Minimum Feed Amount (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={feedingSettings.minFeedAmount}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      minFeedAmount: parseFloat(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-800"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Minimum allowed feed quantity per feeding</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Maximum Feed Amount (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={feedingSettings.maxFeedAmount}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      maxFeedAmount: parseFloat(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-800"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Maximum allowed feed quantity per feeding</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Battery Thresholds */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span>🔋</span> Battery Safety Thresholds
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Low Battery Threshold (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={feedingSettings.batteryLowThreshold}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      batteryLowThreshold: parseInt(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-red-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  />
+                  <p className="text-xs text-red-600 mt-1">Critical alert - feeding paused</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Battery Warning Threshold (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={feedingSettings.batteryWarningThreshold}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      batteryWarningThreshold: parseInt(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-yellow-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                  />
+                  <p className="text-xs text-yellow-600 mt-1">Warning alert - recharge recommended</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Hopper Thresholds */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span>📦</span> Hopper Level Thresholds
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Empty Hopper Threshold (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={feedingSettings.hopperEmptyThreshold}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      hopperEmptyThreshold: parseFloat(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-red-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  />
+                  <p className="text-xs text-red-600 mt-1">Critical alert - refill required</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Low Hopper Warning (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={feedingSettings.hopperWarningThreshold}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      hopperWarningThreshold: parseFloat(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-yellow-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                  />
+                  <p className="text-xs text-yellow-600 mt-1">Warning alert - refill soon</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Plate Speed */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span>⚡</span> Plate Speed Control
+              </h3>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-3">
+                  Feeding Plate Speed
+                </label>
+                <div className="grid grid-cols-3 gap-4">
+                  <button
+                    onClick={() => setFeedingSettings(prev => ({ ...prev, plateSpeed: 'Low' }))}
+                    className={`py-4 px-6 rounded-lg font-semibold transition-all ${
+                      feedingSettings.plateSpeed === 'Low'
+                        ? 'bg-blue-500 text-white shadow-lg'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <i className="fas fa-turtle mr-2"></i>
+                    Low
+                  </button>
+                  <button
+                    onClick={() => setFeedingSettings(prev => ({ ...prev, plateSpeed: 'Medium' }))}
+                    className={`py-4 px-6 rounded-lg font-semibold transition-all ${
+                      feedingSettings.plateSpeed === 'Medium'
+                        ? 'bg-blue-500 text-white shadow-lg'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <i className="fas fa-walking mr-2"></i>
+                    Medium
+                  </button>
+                  <button
+                    onClick={() => setFeedingSettings(prev => ({ ...prev, plateSpeed: 'High' }))}
+                    className={`py-4 px-6 rounded-lg font-semibold transition-all ${
+                      feedingSettings.plateSpeed === 'High'
+                        ? 'bg-blue-500 text-white shadow-lg'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <i className="fas fa-running mr-2"></i>
+                    High
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  <i className="fas fa-info-circle mr-1"></i>
+                  Plate speed controls how fast feed is dispensed. Higher speeds for larger fish populations.
+                </p>
+              </div>
+            </div>
+
+            {/* Additional Settings */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span>⚙️</span> Additional Settings
+              </h3>
+              <div className="space-y-4">
+                <label className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={feedingSettings.autoFeedingEnabled}
+                    onChange={(e) => setFeedingSettings(prev => ({ ...prev, autoFeedingEnabled: e.target.checked }))}
+                    className="w-5 h-5 text-gray-800 rounded"
+                  />
+                  <div className="flex-1">
+                    <span className="font-semibold text-gray-700">Enable Automatic Feeding</span>
+                    <p className="text-xs text-gray-500">Allow system to feed automatically based on schedule</p>
+                  </div>
+                </label>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Feeding Timeout (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    min="60"
+                    max="600"
+                    value={feedingSettings.feedingTimeout}
+                    onChange={(e) => setFeedingSettings(prev => ({
+                      ...prev,
+                      feedingTimeout: parseInt(e.target.value)
+                    }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-800"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Maximum time allowed for a feeding operation</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setFeedingSettings({
+                    minFeedAmount: 0.5,
+                    maxFeedAmount: 10.0,
+                    batteryLowThreshold: 20,
+                    batteryWarningThreshold: 30,
+                    hopperEmptyThreshold: 5.0,
+                    hopperWarningThreshold: 15.0,
+                    plateSpeed: 'Medium',
+                    autoFeedingEnabled: true,
+                    feedingTimeout: 300,
+                  });
+                  alert('Feeding settings reset to defaults!');
+                }}
+                className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold"
+              >
+                <i className="fas fa-undo mr-2"></i>Reset to Defaults
+              </button>
+              <button
+                onClick={() => alert('Feeding settings saved successfully!')}
                 className="px-6 py-3 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors font-semibold"
               >
                 <i className="fas fa-save mr-2"></i>Save Changes
