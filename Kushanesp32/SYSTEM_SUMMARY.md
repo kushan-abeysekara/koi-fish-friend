@@ -47,7 +47,7 @@ ESP32 (GPIO 21, 22) - I2C Bus
 
 ESP32 Analog/Digital
     ├─ Voltage Sensor (GPIO 34)
-    ├─ 4x Ultrasonic Sensors (GPIOs 18,19,23,5,4,15,2,12)
+    ├─ 4x Ultrasonic Sensors (GPIOs 18,19,0,35,25,39,15,12)
     ├─ L298N Motor Driver (GPIOs 25,26,14,27,32,33)
     └─ Relay Module (GPIO 13)
 ```
@@ -70,11 +70,11 @@ ESP32 Analog/Digital
 | 33 | Right Motor EN (PWM) | L298N |
 | 18 | Front Ultrasonic TRIG | HC-SR04 |
 | 19 | Front Ultrasonic ECHO | HC-SR04 |
-| 23 | Back Ultrasonic TRIG | HC-SR04 |
-| 5 | Back Ultrasonic ECHO | HC-SR04 |
-| 4 | Left Ultrasonic TRIG | HC-SR04 |
-| 15 | Left Ultrasonic ECHO | HC-SR04 |
-| 2 | Right Ultrasonic TRIG | HC-SR04 |
+| 0 | Back Ultrasonic TRIG | HC-SR04 |
+| 35 | Back Ultrasonic ECHO | HC-SR04 |
+| 25 | Left Ultrasonic TRIG | HC-SR04 |
+| 39 | Left Ultrasonic ECHO | HC-SR04 |
+| 15 | Right Ultrasonic TRIG | HC-SR04 |
 | 12 | Right Ultrasonic ECHO | HC-SR04 |
 
 **Available**: 20 GPIO pins remaining for future expansion

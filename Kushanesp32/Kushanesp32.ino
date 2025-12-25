@@ -40,13 +40,14 @@
 #define MOTOR_RIGHT_EN 33
 
 // HC-SR04 Ultrasonic Sensors (4 units)
+// Left sensor relocated to GPIO 25, 39 (previous pins 2, 36 had hardware issues)
 #define ULTRASONIC_FRONT_TRIG 18
 #define ULTRASONIC_FRONT_ECHO 19
 #define ULTRASONIC_BACK_TRIG 0
 #define ULTRASONIC_BACK_ECHO 35
-#define ULTRASONIC_LEFT_TRIG 36   // Input-only GPIO, safe for TRIG
-#define ULTRASONIC_LEFT_ECHO 15
-#define ULTRASONIC_RIGHT_TRIG 2
+#define ULTRASONIC_LEFT_TRIG 25  
+#define ULTRASONIC_LEFT_ECHO 39  
+#define ULTRASONIC_RIGHT_TRIG 15 
 #define ULTRASONIC_RIGHT_ECHO 12
 
 // OLED Display 0.96" SSD1306 (SPI Mode)

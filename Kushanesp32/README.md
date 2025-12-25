@@ -141,16 +141,16 @@ This is a simplified ESP32-based autonomous boat control system featuring essent
 | GPIO 33 | Right Motor EN (PWM) | Right Propeller |
 
 ### Ultrasonic Sensors (4 Units)
-| Pin | Function | Sensor |
-|-----|----------|--------|
-| GPIO 18 | Front Trigger | Front HC-SR04 |
-| GPIO 19 | Front Echo | Front HC-SR04 |
-| GPIO 23 | Back Trigger | Back HC-SR04 |
-| GPIO 5 | Back Echo | Back HC-SR04 |
-| GPIO 4 | Left Trigger | Left HC-SR04 |
-| GPIO 15 | Left Echo | Left HC-SR04 |
-| GPIO 2 | Right Trigger | Right HC-SR04 |
-| GPIO 12 | Right Echo | Right HC-SR04 |
+| Pin | Function | Sensor | Status |
+|-----|----------|--------|--------|
+| GPIO 18 | Front Trigger | Front HC-SR04 | ✅ Working |
+| GPIO 19 | Front Echo | Front HC-SR04 | ✅ Working |
+| GPIO 0 | Back Trigger | Back HC-SR04 | ✅ Working |
+| GPIO 35 | Back Echo | Back HC-SR04 | ✅ Working |
+| GPIO 25 | Left Trigger | Left HC-SR04 | ✅ Working |
+| GPIO 39 | Left Echo | Left HC-SR04 | ✅ Working |
+| GPIO 15 | Right Trigger | Right HC-SR04 | ✅ Working |
+| GPIO 12 | Right Echo | Right HC-SR04 | ✅ Working |
 
 **Note**: WiFi uses internal ESP32 hardware (no external pins required)
 

@@ -140,15 +140,15 @@ Common Ground (GND)
 |-------------|-----------|------------------------|
 | VCC         | 5V        | Red                    |
 | GND         | GND       | Black                  |
-| TRIG        | GPIO 4    | Orange                 |
-| ECHO        | GPIO 15   | Yellow                 |
+| TRIG        | GPIO 25   | Orange                 |
+| ECHO        | GPIO 39   | Yellow                 |
 
 ### Right Sensor
 | HC-SR04 Pin | ESP32 Pin | Wire Color (suggested) |
 |-------------|-----------|------------------------|
 | VCC         | 5V        | Red                    |
 | GND         | GND       | Black                  |
-| TRIG        | GPIO 2    | Orange                 |
+| TRIG        | GPIO 15   | Orange                 |
 | ECHO        | GPIO 12   | Yellow                 |
 
 **Note**: HC-SR04 sensors require 5V power but output 5V logic. ESP32 GPIOs are 5V tolerant on input pins.
@@ -177,9 +177,9 @@ Common Ground (GND)
 | 19         | Front Ultrasonic ECHO       | HC-SR04 #1           |
 | 0          | Back Ultrasonic TRIG        | HC-SR04 #2           |
 | 35         | Back Ultrasonic ECHO        | HC-SR04 #2           |
-| 4          | Left Ultrasonic TRIG        | HC-SR04 #3           |
-| 15         | Left Ultrasonic ECHO        | HC-SR04 #3           |
-| 2          | Right Ultrasonic TRIG       | HC-SR04 #4           |
+| 25         | Left Ultrasonic TRIG        | HC-SR04 #3           |
+| 39         | Left Ultrasonic ECHO        | HC-SR04 #3           |
+| 15         | Right Ultrasonic TRIG       | HC-SR04 #4           |
 | 12         | Right Ultrasonic ECHO       | HC-SR04 #4           |
 
 **Total Pins Used**: 22 out of 38 available

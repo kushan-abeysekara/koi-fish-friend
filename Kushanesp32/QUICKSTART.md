@@ -95,11 +95,11 @@ Connect all GND pins together (ESP32, sensors, battery, motor driver).
 - [ ] ESP32 GPIO 17 → HX711 SCK
 - [ ] ESP32 GPIO 18 → Front Ultrasonic TRIG
 - [ ] ESP32 GPIO 19 → Front Ultrasonic ECHO
-- [ ] ESP32 GPIO 23 → Back Ultrasonic TRIG
-- [ ] ESP32 GPIO 0 → Back Ultrasonic ECHO (GPIO 5 not available)
-- [ ] ESP32 GPIO 4 → Left Ultrasonic TRIG
-- [ ] ESP32 GPIO 15 → Left Ultrasonic ECHO
-- [ ] ESP32 GPIO 2 → Right Ultrasonic TRIG
+- [ ] ESP32 GPIO 0 → Back Ultrasonic TRIG
+- [ ] ESP32 GPIO 35 → Back Ultrasonic ECHO
+- [ ] ESP32 GPIO 25 → Left Ultrasonic TRIG
+- [ ] ESP32 GPIO 39 → Left Ultrasonic ECHO
+- [ ] ESP32 GPIO 15 → Right Ultrasonic TRIG
 - [ ] ESP32 GPIO 12 → Right Ultrasonic ECHO
 
 #### Motor Driver (L298N)
