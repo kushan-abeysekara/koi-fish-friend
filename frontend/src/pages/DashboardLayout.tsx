@@ -10,9 +10,11 @@ import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
 import ProfitLoss from '../components/ProfitLoss';
 import PondCamera from '../components/PondCamera';
+import BoatNavigation from '../components/BoatNavigation';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -37,19 +39,33 @@ const Dashboard: React.FC = () => {
   return (
     <div className="flex min-h-screen bg-gray-50">
       {/* Sidebar */}
-      <Sidebar currentUsername={currentUsername} onLogout={handleLogout} />
+      <Sidebar 
+        currentUsername={currentUsername} 
+        onLogout={handleLogout}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+      />
 
       {/* Main Content */}
-      <div className="flex-1 ml-64">
+      <div className="flex-1 lg:ml-64 transition-all duration-300">
         {/* Top Bar */}
-        <div className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
-          <div className="px-8 py-4 flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
-              <p className="text-sm text-gray-500">Welcome back, {currentUsername}!</p>
+        <div className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-30">
+          <div className="px-4 md:px-8 py-4 flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              {/* Hamburger Menu for Mobile */}
+              <button
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="lg:hidden text-gray-600 hover:text-gray-900 focus:outline-none"
+              >
+                <i className="fas fa-bars text-2xl"></i>
+              </button>
+              <div>
+                <h1 className="text-xl md:text-2xl font-bold text-gray-800">Dashboard</h1>
+                <p className="text-xs md:text-sm text-gray-500">Welcome back, {currentUsername}!</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="flex items-center gap-2 text-sm">
+              <span className="hidden md:flex items-center gap-2 text-sm">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
                 <span className="text-green-600 font-medium">System Online</span>
               </span>
@@ -58,11 +74,12 @@ const Dashboard: React.FC = () => {
         </div>
 
         {/* Dashboard Content */}
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           <Routes>
             <Route path="/" element={<DashboardHome username={currentUsername} />} />
             <Route path="/fish-count" element={<FishCount />} />
             <Route path="/camera" element={<PondCamera />} />
+            <Route path="/boat-navigation" element={<BoatNavigation />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />

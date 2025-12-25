@@ -7,9 +7,10 @@ interface NavItemProps {
   path: string;
   active?: boolean;
   onClick?: () => void;
+  onNavigate?: () => void;
 }
 
-const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick }) => {
+const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick, onNavigate }) => {
   const navigate = useNavigate();
 
   const handleClick = () => {
@@ -17,6 +18,7 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, path, active, onClick })
       onClick();
     } else {
       navigate(path);
+      if (onNavigate) onNavigate();
     }
   };
 
@@ -39,14 +41,20 @@ interface SubNavItemProps {
   label: string;
   path: string;
   active?: boolean;
+  onNavigate?: () => void;
 }
 
-const SubNavItem: React.FC<SubNavItemProps> = ({ icon, label, path, active }) => {
+const SubNavItem: React.FC<SubNavItemProps> = ({ icon, label, path, active, onNavigate }) => {
   const navigate = useNavigate();
+
+  const handleClick = () => {
+    navigate(path);
+    if (onNavigate) onNavigate();
+  };
 
   return (
     <button
-      onClick={() => navigate(path)}
+      onClick={handleClick}
       className={`w-full flex items-center gap-3 pl-12 pr-4 py-2.5 rounded-lg transition-all duration-200 ${active
           ? 'bg-cyan-500 text-white shadow-lg'
           : 'text-gray-300 hover:bg-slate-700 hover:text-white'
@@ -61,10 +69,13 @@ const SubNavItem: React.FC<SubNavItemProps> = ({ icon, label, path, active }) =>
 interface SidebarProps {
   currentUsername: string;
   onLogout: () => void;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
+const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, onClose }) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isBudgetExpanded, setIsBudgetExpanded] = useState(
     location.pathname.includes('/expenditures') || 
     location.pathname.includes('/inventory') || 
@@ -78,28 +89,57 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
     setIsBudgetExpanded(!isBudgetExpanded);
   };
 
+  const handleNavigation = (path: string) => {
+    navigate(path);
+    onClose(); // Close sidebar after navigation on mobile
+  };
+
   return (
-    <div className="w-64 h-screen bg-slate-800 text-white flex flex-col fixed left-0 top-0">
-      {/* Header */}
-      <div className="p-6 border-b border-slate-700">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-cyan-500 rounded-lg flex items-center justify-center">
-            <span className="text-2xl">🐟</span>
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">KoiFishFriend</h1>
-            <p className="text-xs text-gray-400">User Management System</p>
+    <>
+      {/* Backdrop Overlay for Mobile */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          onClick={onClose}
+        ></div>
+      )}
+
+      {/* Sidebar */}
+      <div className={`
+        w-64 h-screen bg-slate-800 text-white flex flex-col fixed left-0 top-0 z-50
+        transform transition-transform duration-300 ease-in-out
+        ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+      `}>
+        {/* Header */}
+        <div className="p-6 border-b border-slate-700">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-cyan-500 rounded-lg flex items-center justify-center">
+                <span className="text-2xl">🐟</span>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold">KoiFishFriend</h1>
+                <p className="text-xs text-gray-400">User Management System</p>
+              </div>
+            </div>
+            {/* Close button for mobile */}
+            <button
+              onClick={onClose}
+              className="lg:hidden text-gray-400 hover:text-white"
+            >
+              <i className="fas fa-times text-xl"></i>
+            </button>
           </div>
         </div>
-      </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+        {/* Navigation */}
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
         <NavItem
           icon={<i className="fas fa-home"></i>}
           label="Dashboard"
           path="/dashboard"
           active={location.pathname === '/dashboard'}
+          onNavigate={onClose}
         />
 
         <NavItem
@@ -107,6 +147,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Fish Count"
           path="/dashboard/fish-count"
           active={location.pathname === '/dashboard/fish-count'}
+          onNavigate={onClose}
         />
 
         <NavItem
@@ -114,6 +155,15 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Camera Monitoring"
           path="/dashboard/camera"
           active={location.pathname === '/dashboard/camera'}
+          onNavigate={onClose}
+        />
+
+        <NavItem
+          icon={<i className="fas fa-ship"></i>}
+          label="Boat Navigation"
+          path="/dashboard/boat-navigation"
+          active={location.pathname === '/dashboard/boat-navigation'}
+          onNavigate={onClose}
         />
 
         {/* Budget Management with Sub-menu */}
@@ -143,18 +193,21 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
                 label="Expenditures"
                 path="/dashboard/expenditures"
                 active={location.pathname === '/dashboard/expenditures'}
+                onNavigate={onClose}
               />
               <SubNavItem
                 icon={<i className="fas fa-boxes"></i>}
                 label="Inventory"
                 path="/dashboard/inventory"
                 active={location.pathname === '/dashboard/inventory'}
+                onNavigate={onClose}
               />
               <SubNavItem
                 icon={<i className="fas fa-chart-pie"></i>}
                 label="Profit & Loss"
                 path="/dashboard/profit-loss"
                 active={location.pathname === '/dashboard/profit-loss'}
+                onNavigate={onClose}
               />
               <SubNavItem
                 icon={<i className="fas fa-bolt"></i>}
@@ -163,6 +216,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
                 active={location.pathname === '/dashboard/energy-monitor' || 
                        location.pathname === '/dashboard/realtime-current' || 
                        location.pathname === '/dashboard/calculate-kwh'}
+                onNavigate={onClose}
               />
             </div>
           )}
@@ -173,6 +227,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Device Management"
           path="/dashboard/device-management"
           active={location.pathname === '/dashboard/device-management'}
+          onNavigate={onClose}
         />
 
         <NavItem
@@ -180,6 +235,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Update Credentials"
           path="/dashboard/credentials"
           active={location.pathname === '/dashboard/credentials'}
+          onNavigate={onClose}
         />
 
         <NavItem
@@ -187,6 +243,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Profile"
           path="/dashboard/profile"
           active={location.pathname === '/dashboard/profile'}
+          onNavigate={onClose}
         />
 
         <NavItem
@@ -194,6 +251,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
           label="Settings"
           path="/dashboard/settings"
           active={location.pathname === '/dashboard/settings'}
+          onNavigate={onClose}
         />
 
         <div className="pt-4 border-t border-slate-700 mt-4">
@@ -201,7 +259,10 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
             icon={<i className="fas fa-sign-out-alt"></i>}
             label="Logout"
             path="/login"
-            onClick={onLogout}
+            onClick={() => {
+              onLogout();
+              onClose();
+            }}
           />
         </div>
       </nav>
@@ -219,6 +280,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout }) => {
         </div>
       </div>
     </div>
+    </>
   );
 };
 

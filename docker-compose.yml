@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # MySQL Database
@@ -19,7 +19,17 @@ services:
     networks:
       - koifish-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-prootpassword",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,7 +49,19 @@ services:
     networks:
       - koifish-network
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      test:
+        [
+          "CMD",
+          "mosquitto_sub",
+          "-t",
+          "$$SYS/#",
+          "-C",
+          "1",
+          "-i",
+          "healthcheck",
+          "-W",
+          "3",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -59,11 +81,11 @@ services:
       SPRING_DATASOURCE_USERNAME: fishfeeduser
       SPRING_DATASOURCE_PASSWORD: fishfeedpass
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      
+
       # MQTT Configuration
       MQTT_BROKER_URL: tcp://mqtt:1883
       MQTT_CLIENT_ID: koifish-backend
-      
+
       # Application Configuration
       SERVER_PORT: 8080
       LOGGING_LEVEL_ROOT: INFO
@@ -75,7 +97,15 @@ services:
     networks:
       - koifish-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/actuator/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -97,7 +127,15 @@ services:
     networks:
       - koifish-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:80",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

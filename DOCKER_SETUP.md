@@ -17,11 +17,13 @@ That's it! Everything else (Node.js, Java, MySQL, MQTT) runs inside containers.
 ### Option 1: Use the Start Script (Easiest)
 
 **Windows:**
+
 ```bash
 docker-start.bat
 ```
 
 **Mac/Linux:**
+
 ```bash
 chmod +x docker-start.sh
 ./docker-start.sh
@@ -124,16 +126,19 @@ backend:
 ## 📊 Monitoring
 
 ### Check Service Health
+
 ```bash
 docker-compose ps
 ```
 
 ### View Resource Usage
+
 ```bash
 docker stats
 ```
 
 ### Access Container Shell
+
 ```bash
 docker exec -it koifish-backend sh
 docker exec -it koifish-frontend sh
@@ -145,17 +150,19 @@ docker exec -it koifish-mysql mysql -u root -p
 ### Services Won't Start
 
 1. **Check if ports are already in use:**
+
    ```bash
    # Windows
    netstat -ano | findstr :3000
    netstat -ano | findstr :8080
-   
+
    # Mac/Linux
    lsof -i :3000
    lsof -i :8080
    ```
 
 2. **View detailed logs:**
+
    ```bash
    docker-compose logs
    ```
@@ -182,6 +189,7 @@ docker-compose logs mysql
 ### Frontend Can't Connect to Backend
 
 1. Check if backend is running:
+
    ```bash
    curl http://localhost:8080/api/login
    ```
@@ -232,7 +240,7 @@ koi-fish-friend/
 ✅ **Isolated**: No conflicts with other projects  
 ✅ **Easy Cleanup**: Remove everything with one command  
 ✅ **Production-Ready**: Use same setup in production  
-✅ **No Installation**: No need for Node.js, Java, MySQL locally  
+✅ **No Installation**: No need for Node.js, Java, MySQL locally
 
 ## 🆘 Getting Help
 
