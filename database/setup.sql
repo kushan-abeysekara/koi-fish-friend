@@ -18,6 +18,23 @@ CREATE TABLE IF NOT EXISTS users (
     CONSTRAINT uk_username UNIQUE (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Sensor devices table (auto-created by JPA)
+-- Note: device_type field added to distinguish between 4 ESP32 module types:
+-- WATER_QUALITY, BUDGET_MANAGEMENT, FEEDING_MANAGEMENT, FISH_ANOMALY_DETECTION
+CREATE TABLE IF NOT EXISTS sensor_devices (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    device_id VARCHAR(255) UNIQUE NOT NULL,
+    device_type VARCHAR(50),
+    pond_id BIGINT,
+    status VARCHAR(50),
+    ip_address VARCHAR(50),
+    rssi INT,
+    energy_wh DOUBLE,
+    last_seen DATETIME,
+    created_at DATETIME,
+    FOREIGN KEY (pond_id) REFERENCES ponds(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Insert demo user (BCrypt hash for 'admin123')
 -- Note: This is done automatically by DataInitializer.java
 -- Including here for reference only

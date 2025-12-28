@@ -8,8 +8,8 @@
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 // ===================== WiFi & MQTT CONFIG =====================
-const char *ssid = "kavish 99";
-const char *password = "kavishka1234";
+const char *ssid = "kavish99";
+const char *password = "kavish99";
 
 // HiveMQ Public Broker
 const char *mqtt_server = "broker.hivemq.com";
@@ -19,6 +19,7 @@ const char *mqtt_password = "";
 
 // Device configuration
 String deviceId = "";
+const char* deviceType = "BUDGET_MANAGEMENT";
 int assignedPondId = 0;
 
 // MQTT Topics
@@ -56,7 +57,7 @@ unsigned long lastDisplay = 0;
 unsigned long lastMqttPublish = 0;
 unsigned long lastStatusPublish = 0;
 const unsigned long MQTT_PUBLISH_INTERVAL = 3000;
-const unsigned long STATUS_PUBLISH_INTERVAL = 10000; // Publish status every 10 seconds
+const unsigned long STATUS_PUBLISH_INTERVAL = 5000; // Publish status every 5 seconds
 
 // ===============================================================
 //                      WiFi CONNECTION
@@ -143,35 +144,43 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         }
 
         assignedPondId = doc["pondId"].as<int>();
+        Serial.print("Assigned to Pond: ");
+        Serial.println(assignedPondId);
 
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Assigned Pond:");
         lcd.setCursor(0, 1);
         lcd.print(assignedPondId);
-        delay(2000);
+        delay(1000);
 
-        publishStatus();
+        // Send status with pond info immediately for confirmation
+        publishStatusWithPond();
     }
     else if (strcmp(command, "reset_energy") == 0)
     {
         energyWh = 0;
+        Serial.println("Energy counter reset");
 
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Energy Reset");
-        delay(2000);
+        delay(1000);
+        
+        publishStatus();
     }
     else if (strcmp(command, "unassign") == 0)
     {
         assignedPondId = 0;
+        Serial.println("Unassigned from pond");
 
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Unassigned");
-        delay(2000);
+        delay(1000);
 
-        publishStatus();
+        // Send status with pondId=0 immediately for confirmation
+        publishStatusWithPond();
     }
     else
     {
@@ -222,6 +231,26 @@ void publishStatus()
 {
     StaticJsonDocument<300> doc;
     doc["deviceId"] = deviceId;
+    doc["deviceType"] = deviceType;
+    // Don't send pondId in regular status - backend manages assignments
+    // Only send it immediately after receiving assign/unassign commands
+    doc["status"] = "online";
+    doc["ipAddress"] = WiFi.localIP().toString();
+    doc["rssi"] = WiFi.RSSI();
+    doc["energyWh"] = energyWh;
+
+    String json;
+    serializeJson(doc, json);
+
+    client.publish(statusTopic.c_str(), json.c_str(), true);
+}
+
+// Publish status with pond assignment info (only after assign/unassign commands)
+void publishStatusWithPond()
+{
+    StaticJsonDocument<300> doc;
+    doc["deviceId"] = deviceId;
+    doc["deviceType"] = deviceType;
     doc["pondId"] = assignedPondId;
     doc["status"] = "online";
     doc["ipAddress"] = WiFi.localIP().toString();
@@ -232,6 +261,7 @@ void publishStatus()
     serializeJson(doc, json);
 
     client.publish(statusTopic.c_str(), json.c_str(), true);
+    Serial.println("Status with pond assignment sent: " + json);
 }
 
 // ===============================================================
@@ -299,8 +329,11 @@ void setup()
     pinMode(RELAY_PIN, OUTPUT);
     digitalWrite(RELAY_PIN, HIGH);
 
-    deviceId = WiFi.macAddress();
-    deviceId.replace(":", "");
+    // Generate device ID with BM prefix (Budget Management)
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    deviceId = "BM_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
+    deviceId.toUpperCase();
 
     statusTopic = "koi/sensors/" + deviceId + "/status";
     dataTopic = "koi/sensors/" + deviceId + "/data";

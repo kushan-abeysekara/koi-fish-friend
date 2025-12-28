@@ -12,7 +12,7 @@ const api: AxiosInstance = axios.create({
 });
 
 // Define types for API responses
-interface ApiResponse<T = unknown> {
+export interface ApiResponse<T = unknown> {
   success: boolean;
   message: string;
   data?: T;
@@ -562,9 +562,12 @@ export const stockTransactionApi = {
 };
 
 // ==================== Sensor Device Management ====================
+export type DeviceType = 'WATER_QUALITY' | 'BUDGET_MANAGEMENT' | 'FEEDING_MANAGEMENT' | 'FISH_ANOMALY_DETECTION';
+
 export interface SensorDevice {
   id: number;
   deviceId: string;
+  deviceType: DeviceType;
   pond: Pond | null;
   status: string;
   ipAddress: string;
@@ -615,6 +618,11 @@ export interface SensorData {
   current: number;
   power: number;
   energyWh: number;
+  // Water quality parameters
+  phValue?: number;
+  turbidity?: number;
+  airQuality?: number;
+  waterQualityStatus?: string;
   status: string;
   timestamp: string;
 }
@@ -757,6 +765,154 @@ export const cameraApi = {
   // Update alert status
   updateAlertStatus: async (alertId: number, status: 'acknowledged' | 'resolved'): Promise<ApiResponse> => {
     const response = await api.put<ApiResponse>(`/camera/alerts/${alertId}/status`, { status });
+    return response.data;
+  },
+};
+
+// ==================== Treatment & Dosing Logs ====================
+export interface TreatmentLog {
+  id: number;
+  pondId: number;
+  timestamp: string;
+  treatmentType: string;
+  dosage: number;
+  unit: string;
+  reason: string;
+  notes?: string;
+  recordedBy: string;
+  parameter?: string;
+  targetValue?: number;
+  beforeValue?: number;
+  afterValue?: number;
+  photoUrl?: string;
+  status: 'logged' | 'verified' | 'flagged' | 'completed';
+  verifiedAt?: string;
+  verifiedBy?: string;
+  completedAt?: string;
+  completedBy?: string;
+}
+
+export interface TreatmentStats {
+  total: number;
+  thisWeek: number;
+  avgPerWeek: number;
+}
+
+export const treatmentLogApi = {
+  // Get all logs for a pond
+  getByPond: async (pondId: number): Promise<ApiResponse<TreatmentLog[]>> => {
+    const response = await api.get<ApiResponse<TreatmentLog[]>>(`/treatment-logs/pond/${pondId}`);
+    return response.data;
+  },
+
+  // Get logs filtered by treatment type
+  getByType: async (pondId: number, treatmentType: string): Promise<ApiResponse<TreatmentLog[]>> => {
+    const response = await api.get<ApiResponse<TreatmentLog[]>>(`/treatment-logs/pond/${pondId}/type/${encodeURIComponent(treatmentType)}`);
+    return response.data;
+  },
+
+  // Get logs filtered by parameter
+  getByParameter: async (pondId: number, parameter: string): Promise<ApiResponse<TreatmentLog[]>> => {
+    const response = await api.get<ApiResponse<TreatmentLog[]>>(`/treatment-logs/pond/${pondId}/parameter/${encodeURIComponent(parameter)}`);
+    return response.data;
+  },
+
+  // Create new treatment log
+  create: async (data: Omit<TreatmentLog, 'id'>): Promise<ApiResponse<TreatmentLog>> => {
+    const response = await api.post<ApiResponse<TreatmentLog>>('/treatment-logs', data);
+    return response.data;
+  },
+
+  // Update treatment log
+  update: async (id: number, data: Partial<TreatmentLog>): Promise<ApiResponse<TreatmentLog>> => {
+    const response = await api.put<ApiResponse<TreatmentLog>>(`/treatment-logs/${id}`, data);
+    return response.data;
+  },
+
+  // Delete treatment log
+  delete: async (id: number): Promise<ApiResponse> => {
+    const response = await api.delete<ApiResponse>(`/treatment-logs/${id}`);
+    return response.data;
+  },
+
+  // Get statistics
+  getStats: async (pondId: number): Promise<ApiResponse<TreatmentStats>> => {
+    const response = await api.get<ApiResponse<TreatmentStats>>(`/treatment-logs/pond/${pondId}/stats`);
+    return response.data;
+  },
+};
+
+// ==================== Task Management ====================
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in-progress' | 'completed' | 'snoozed';
+  type: 'calibration' | 'maintenance' | 'cleaning' | 'inspection' | 'treatment';
+  dueDate: string;
+  createdDate: string;
+  completedDate?: string;
+  snoozeUntil?: string;
+  notes: string[];
+  linkedParameter?: string;
+  autoCloseEnabled: boolean;
+  assignedTo?: string;
+  pondId?: number;
+}
+
+export const taskApi = {
+  // Get all tasks
+  getAll: async (): Promise<ApiResponse<Task[]>> => {
+    const response = await api.get<ApiResponse<Task[]>>('/tasks');
+    return response.data;
+  },
+
+  // Get task by ID
+  getById: async (id: string): Promise<ApiResponse<Task>> => {
+    const response = await api.get<ApiResponse<Task>>(`/tasks/${id}`);
+    return response.data;
+  },
+
+  // Get tasks by status
+  getByStatus: async (status: string): Promise<ApiResponse<Task[]>> => {
+    const response = await api.get<ApiResponse<Task[]>>(`/tasks/status/${status}`);
+    return response.data;
+  },
+
+  // Get tasks by priority
+  getByPriority: async (priority: string): Promise<ApiResponse<Task[]>> => {
+    const response = await api.get<ApiResponse<Task[]>>(`/tasks/priority/${priority}`);
+    return response.data;
+  },
+
+  // Get overdue tasks
+  getOverdue: async (): Promise<ApiResponse<Task[]>> => {
+    const response = await api.get<ApiResponse<Task[]>>('/tasks/overdue');
+    return response.data;
+  },
+
+  // Create new task
+  create: async (data: Omit<Task, 'id' | 'createdDate'>): Promise<ApiResponse<Task>> => {
+    const response = await api.post<ApiResponse<Task>>('/tasks', data);
+    return response.data;
+  },
+
+  // Update task
+  update: async (id: string, data: Partial<Task>): Promise<ApiResponse<Task>> => {
+    const response = await api.put<ApiResponse<Task>>(`/tasks/${id}`, data);
+    return response.data;
+  },
+
+  // Add note to task
+  addNote: async (id: string, note: string): Promise<ApiResponse<Task>> => {
+    const response = await api.post<ApiResponse<Task>>(`/tasks/${id}/notes`, { note });
+    return response.data;
+  },
+
+  // Delete task
+  delete: async (id: string): Promise<ApiResponse> => {
+    const response = await api.delete<ApiResponse>(`/tasks/${id}`);
     return response.data;
   },
 };

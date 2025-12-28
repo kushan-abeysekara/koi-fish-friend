@@ -1,120 +1,67 @@
 import React, { useState, useEffect } from 'react';
+import { taskApi, type Task, type ApiResponse } from '../services/api';
 
-interface Task {
-  id: string;
-  title: string;
-  description: string;
-  priority: 'high' | 'medium' | 'low';
-  status: 'pending' | 'in-progress' | 'completed' | 'snoozed';
-  type: 'calibration' | 'maintenance' | 'cleaning' | 'inspection' | 'treatment';
+interface LocalTask extends Omit<Task, 'dueDate' | 'createdDate' | 'completedDate' | 'snoozeUntil'> {
   dueDate: Date;
   createdDate: Date;
   completedDate?: Date;
   snoozeUntil?: Date;
-  notes: string[];
-  linkedParameter?: string;
-  autoCloseEnabled: boolean;
-  assignedTo?: string;
 }
 
 type ViewMode = 'calendar' | 'list' | 'kanban';
 
 const TaskCalendar: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<LocalTask[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in-progress' | 'completed' | 'snoozed'>('all');
   const [filterPriority, setFilterPriority] = useState<'all' | 'high' | 'medium' | 'low'>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTask, setSelectedTask] = useState<LocalTask | null>(null);
   const [showTaskDetail, setShowTaskDetail] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Generate mock tasks
+  // Form state for creating tasks
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    priority: 'medium' as 'high' | 'medium' | 'low',
+    type: 'maintenance' as 'calibration' | 'maintenance' | 'cleaning' | 'inspection' | 'treatment',
+    dueDate: '',
+    linkedParameter: '',
+    autoCloseEnabled: true,
+    assignedTo: '',
+  });
+
+  // Load tasks from API
+  const loadTasks = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await taskApi.getAll();
+      if (response.success && response.data) {
+        const localTasks: LocalTask[] = response.data.map(task => ({
+          ...task,
+          dueDate: new Date(task.dueDate),
+          createdDate: new Date(task.createdDate),
+          completedDate: task.completedDate ? new Date(task.completedDate) : undefined,
+          snoozeUntil: task.snoozeUntil ? new Date(task.snoozeUntil) : undefined,
+        }));
+        setTasks(localTasks);
+      } else {
+        setError(response.message || 'Failed to load tasks');
+      }
+    } catch (err) {
+      console.error('Error loading tasks:', err);
+      setError('Failed to load tasks. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const mockTasks: Task[] = [
-      {
-        id: 'task-1',
-        title: 'pH Sensor Calibration',
-        description: 'Quarterly calibration of pH sensor using standard buffer solutions (pH 4, 7, 10)',
-        priority: 'high',
-        status: 'pending',
-        type: 'calibration',
-        dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-        notes: ['Last calibration showed drift of 0.2 pH units', 'New buffer solutions ordered'],
-        linkedParameter: 'pH Level',
-        autoCloseEnabled: true,
-      },
-      {
-        id: 'task-2',
-        title: 'Filter System Maintenance',
-        description: 'Clean mechanical filter, replace filter media, check pump operation',
-        priority: 'high',
-        status: 'in-progress',
-        type: 'maintenance',
-        dueDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-        notes: ['Started maintenance at 10:00 AM', 'Filter media ordered, arriving tomorrow'],
-        linkedParameter: 'Turbidity',
-        autoCloseEnabled: true,
-        assignedTo: 'John Doe',
-      },
-      {
-        id: 'task-3',
-        title: 'Turbidity Sensor Cleaning',
-        description: 'Clean turbidity sensor lens and check alignment',
-        priority: 'medium',
-        status: 'pending',
-        type: 'cleaning',
-        dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-        notes: [],
-        linkedParameter: 'Turbidity',
-        autoCloseEnabled: true,
-      },
-      {
-        id: 'task-4',
-        title: 'DO Membrane Replacement',
-        description: 'Replace dissolved oxygen sensor membrane and recalibrate',
-        priority: 'medium',
-        status: 'snoozed',
-        type: 'maintenance',
-        dueDate: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
-        snoozeUntil: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-        notes: ['Waiting for replacement membranes to arrive'],
-        linkedParameter: 'Dissolved Oxygen',
-        autoCloseEnabled: false,
-      },
-      {
-        id: 'task-5',
-        title: 'Weekly Water Quality Inspection',
-        description: 'Visual inspection of water clarity, fish behavior, and equipment operation',
-        priority: 'low',
-        status: 'completed',
-        type: 'inspection',
-        dueDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000),
-        completedDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-        notes: ['All parameters normal', 'Fish showing healthy behavior', 'No equipment issues detected'],
-        autoCloseEnabled: false,
-        assignedTo: 'Jane Smith',
-      },
-      {
-        id: 'task-6',
-        title: 'Temperature Sensor Check',
-        description: 'Verify temperature sensor accuracy against reference thermometer',
-        priority: 'low',
-        status: 'pending',
-        type: 'inspection',
-        dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
-        createdDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
-        notes: [],
-        linkedParameter: 'Temperature',
-        autoCloseEnabled: true,
-      },
-    ];
-    setTasks(mockTasks);
+    loadTasks();
   }, []);
 
   const getPriorityColor = (priority: string) => {
@@ -170,43 +117,114 @@ const TaskCalendar: React.FC = () => {
     return icons[type as keyof typeof icons] || '📋';
   };
 
-  const handleStatusChange = (taskId: string, newStatus: 'in-progress' | 'completed') => {
-    setTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
-          ? {
-              ...task,
-              status: newStatus,
-              completedDate: newStatus === 'completed' ? new Date() : undefined,
-            }
-          : task
-      )
-    );
+  const handleStatusChange = async (taskId: string, newStatus: 'in-progress' | 'completed') => {
+    try {
+      const response = await taskApi.update(taskId, { status: newStatus });
+      if (response.success) {
+        await loadTasks(); // Reload to get updated data
+      } else {
+        alert(response.message || 'Failed to update task status');
+      }
+    } catch (err) {
+      console.error('Error updating task status:', err);
+      alert('Failed to update task status');
+    }
   };
 
-  const handleSnooze = (taskId: string, hours: number) => {
-    setTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
-          ? {
-              ...task,
-              status: 'snoozed',
-              snoozeUntil: new Date(Date.now() + hours * 60 * 60 * 1000),
-            }
-          : task
-      )
-    );
+  const handleSnooze = async (taskId: string, hours: number) => {
+    try {
+      const snoozeUntil = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      const response = await taskApi.update(taskId, { 
+        status: 'snoozed', 
+        snoozeUntil 
+      });
+      if (response.success) {
+        await loadTasks();
+      } else {
+        alert(response.message || 'Failed to snooze task');
+      }
+    } catch (err) {
+      console.error('Error snoozing task:', err);
+      alert('Failed to snooze task');
+    }
   };
 
-  const handleAddNote = (taskId: string, note: string) => {
+  const handleAddNote = async (taskId: string, note: string) => {
     if (!note.trim()) return;
-    setTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
-          ? { ...task, notes: [...task.notes, `${new Date().toLocaleString()}: ${note}`] }
-          : task
-      )
-    );
+    try {
+      const response = await taskApi.addNote(taskId, note);
+      if (response.success) {
+        await loadTasks();
+      } else {
+        alert(response.message || 'Failed to add note');
+      }
+    } catch (err) {
+      console.error('Error adding note:', err);
+      alert('Failed to add note');
+    }
+  };
+
+  const handleCreateTask = async () => {
+    if (!formData.title.trim() || !formData.dueDate) {
+      alert('Please fill in all required fields (Title and Due Date)');
+      return;
+    }
+
+    try {
+      const taskData = {
+        title: formData.title,
+        description: formData.description,
+        priority: formData.priority,
+        type: formData.type,
+        status: 'pending' as const,
+        dueDate: new Date(formData.dueDate).toISOString(),
+        linkedParameter: formData.linkedParameter || undefined,
+        autoCloseEnabled: formData.autoCloseEnabled,
+        assignedTo: formData.assignedTo || undefined,
+        notes: [],
+      };
+
+      const response = await taskApi.create(taskData);
+      if (response.success) {
+        setShowCreateModal(false);
+        setFormData({
+          title: '',
+          description: '',
+          priority: 'medium',
+          type: 'maintenance',
+          dueDate: '',
+          linkedParameter: '',
+          autoCloseEnabled: true,
+          assignedTo: '',
+        });
+        await loadTasks();
+      } else {
+        alert(response.message || 'Failed to create task');
+      }
+    } catch (err) {
+      console.error('Error creating task:', err);
+      alert('Failed to create task');
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm('Are you sure you want to delete this task?')) return;
+    
+    try {
+      const response = await taskApi.delete(taskId);
+      if (response.success) {
+        await loadTasks();
+        if (showTaskDetail) {
+          setShowTaskDetail(false);
+          setSelectedTask(null);
+        }
+      } else {
+        alert(response.message || 'Failed to delete task');
+      }
+    } catch (err) {
+      console.error('Error deleting task:', err);
+      alert('Failed to delete task');
+    }
   };
 
   const filteredTasks = tasks.filter(task => {
@@ -351,6 +369,32 @@ const TaskCalendar: React.FC = () => {
         </div>
       </div>
 
+      {/* Loading/Error State */}
+      {loading && (
+        <div className="bg-white rounded-xl shadow-sm p-12 border border-gray-100 text-center">
+          <i className="fas fa-spinner fa-spin text-4xl text-cyan-500 mb-4"></i>
+          <p className="text-gray-600">Loading tasks...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <div className="flex items-center gap-3">
+            <i className="fas fa-exclamation-circle text-red-500 text-xl"></i>
+            <div>
+              <p className="font-semibold text-red-800">Error Loading Tasks</p>
+              <p className="text-sm text-red-600">{error}</p>
+            </div>
+            <button 
+              onClick={loadTasks}
+              className="ml-auto px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* View Mode & Filters */}
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -431,7 +475,7 @@ const TaskCalendar: React.FC = () => {
       </div>
 
       {/* List View */}
-      {viewMode === 'list' && (
+      {viewMode === 'list' && !loading && !error && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-6 border-b border-gray-100">
             <h3 className="text-lg font-semibold text-gray-800">Task List ({filteredTasks.length})</h3>
@@ -565,7 +609,7 @@ const TaskCalendar: React.FC = () => {
       )}
 
       {/* Kanban View */}
-      {viewMode === 'kanban' && (
+      {viewMode === 'kanban' && !loading && !error && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {kanbanColumns.map((column) => (
             <div key={column.status} className={`${column.color} rounded-xl p-4 border border-gray-200`}>
@@ -612,7 +656,7 @@ const TaskCalendar: React.FC = () => {
       )}
 
       {/* Calendar View */}
-      {viewMode === 'calendar' && (
+      {viewMode === 'calendar' && !loading && !error && (
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-6">
             <button
@@ -707,6 +751,8 @@ const TaskCalendar: React.FC = () => {
                   <input
                     type="text"
                     placeholder="e.g., pH Sensor Calibration"
+                    value={formData.title}
+                    onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
@@ -715,13 +761,19 @@ const TaskCalendar: React.FC = () => {
                   <textarea
                     rows={3}
                     placeholder="Detailed description of the task..."
+                    value={formData.description}
+                    onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   ></textarea>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Priority</label>
-                    <select className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                    <select 
+                      value={formData.priority}
+                      onChange={(e) => setFormData(prev => ({ ...prev, priority: e.target.value as any }))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    >
                       <option value="high">High</option>
                       <option value="medium">Medium</option>
                       <option value="low">Low</option>
@@ -729,7 +781,11 @@ const TaskCalendar: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Type</label>
-                    <select className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                    <select 
+                      value={formData.type}
+                      onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value as any }))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    >
                       <option value="calibration">Calibration</option>
                       <option value="maintenance">Maintenance</option>
                       <option value="cleaning">Cleaning</option>
@@ -743,12 +799,18 @@ const TaskCalendar: React.FC = () => {
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Due Date</label>
                     <input
                       type="datetime-local"
+                      value={formData.dueDate}
+                      onChange={(e) => setFormData(prev => ({ ...prev, dueDate: e.target.value }))}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Linked Parameter</label>
-                    <select className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                    <select 
+                      value={formData.linkedParameter}
+                      onChange={(e) => setFormData(prev => ({ ...prev, linkedParameter: e.target.value }))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    >
                       <option value="">None</option>
                       <option value="pH Level">pH Level</option>
                       <option value="Turbidity">Turbidity</option>
@@ -758,15 +820,33 @@ const TaskCalendar: React.FC = () => {
                   </div>
                 </div>
                 <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Assigned To (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., John Doe"
+                    value={formData.assignedTo}
+                    onChange={(e) => setFormData(prev => ({ ...prev, assignedTo: e.target.value }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  />
+                </div>
+                <div>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" className="w-4 h-4 text-cyan-500" defaultChecked />
+                    <input 
+                      type="checkbox" 
+                      checked={formData.autoCloseEnabled}
+                      onChange={(e) => setFormData(prev => ({ ...prev, autoCloseEnabled: e.target.checked }))}
+                      className="w-4 h-4 text-cyan-500" 
+                    />
                     <span className="text-sm font-semibold text-gray-700">
                       Enable auto-close when parameter returns to normal
                     </span>
                   </label>
                 </div>
                 <div className="flex gap-3 pt-4">
-                  <button className="flex-1 px-4 py-2 bg-cyan-500 text-white rounded-lg hover:bg-cyan-600 transition-colors font-medium">
+                  <button 
+                    onClick={handleCreateTask}
+                    className="flex-1 px-4 py-2 bg-cyan-500 text-white rounded-lg hover:bg-cyan-600 transition-colors font-medium"
+                  >
                     Create Task
                   </button>
                   <button
@@ -882,6 +962,12 @@ const TaskCalendar: React.FC = () => {
                     <i className="fas fa-check mr-2"></i>Mark Complete
                   </button>
                 )}
+                <button
+                  onClick={() => handleDeleteTask(selectedTask.id)}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
+                >
+                  <i className="fas fa-trash mr-2"></i>Delete
+                </button>
                 <button
                   onClick={() => setShowTaskDetail(false)}
                   className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium"

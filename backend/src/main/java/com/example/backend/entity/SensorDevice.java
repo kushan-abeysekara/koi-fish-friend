@@ -6,12 +6,24 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "sensor_devices")
 public class SensorDevice {
+    
+    public enum DeviceType {
+        WATER_QUALITY,
+        BUDGET_MANAGEMENT,
+        FEEDING_MANAGEMENT,
+        FISH_ANOMALY_DETECTION
+    }
+    
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false, unique = true)
     private String deviceId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "device_type")
+    private DeviceType deviceType;
 
     @ManyToOne
     @JoinColumn(name = "pond_id")
@@ -54,6 +66,14 @@ public class SensorDevice {
 
     public void setDeviceId(String deviceId) {
         this.deviceId = deviceId;
+    }
+
+    public DeviceType getDeviceType() {
+        return deviceType;
+    }
+
+    public void setDeviceType(DeviceType deviceType) {
+        this.deviceType = deviceType;
     }
 
     public Pond getPond() {

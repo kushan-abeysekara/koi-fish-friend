@@ -22,6 +22,13 @@ public class SensorData {
     private Double current;
     private Double power;
     private Double energyWh;
+    
+    // Water quality parameters
+    private Double phValue;
+    private Double turbidity;
+    private Double airQuality;
+    private String waterQualityStatus; // normal, warning, critical
+    
     private String status; // normal, warning, critical
 
     @Column(name = "timestamp")
@@ -99,6 +106,38 @@ public class SensorData {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Double getPhValue() {
+        return phValue;
+    }
+
+    public void setPhValue(Double phValue) {
+        this.phValue = phValue;
+    }
+
+    public Double getTurbidity() {
+        return turbidity;
+    }
+
+    public void setTurbidity(Double turbidity) {
+        this.turbidity = turbidity;
+    }
+
+    public Double getAirQuality() {
+        return airQuality;
+    }
+
+    public void setAirQuality(Double airQuality) {
+        this.airQuality = airQuality;
+    }
+
+    public String getWaterQualityStatus() {
+        return waterQualityStatus;
+    }
+
+    public void setWaterQualityStatus(String waterQualityStatus) {
+        this.waterQualityStatus = waterQualityStatus;
     }
 
     public LocalDateTime getTimestamp() {

@@ -84,23 +84,34 @@ public class MqttService {
         device.setStatus(json.get("status").asText());
         device.setIpAddress(json.has("ipAddress") ? json.get("ipAddress").asText() : null);
         device.setRssi(json.has("rssi") ? json.get("rssi").asInt() : null);
-        device.setEnergyWh(json.has("energyWh") ? json.get("energyWh").asDouble() : null);
+        device.setEnergyWh(json.has("energyWh") ? json.get("energyWh").asDouble() : 0.0);
         device.setLastSeen(LocalDateTime.now());
-
-        // Handle pond assignment/unassignment
-        if (json.has("pondId")) {
-            int pondId = json.get("pondId").asInt();
-            if (pondId > 0) {
-                // Assign to pond
-                pondRepository.findById((long) pondId).ifPresent(device::setPond);
-            } else {
-                // Unassign from pond (pondId = 0)
-                device.setPond(null);
+        
+        // Handle device type (check both "type" and "deviceType" for compatibility)
+        if (json.has("deviceType")) {
+            String typeStr = json.get("deviceType").asText();
+            try {
+                device.setDeviceType(SensorDevice.DeviceType.valueOf(typeStr));
+            } catch (IllegalArgumentException e) {
+                System.err.println("Invalid device type: " + typeStr);
+            }
+        } else if (json.has("type")) {
+            String typeStr = json.get("type").asText();
+            try {
+                device.setDeviceType(SensorDevice.DeviceType.valueOf(typeStr));
+            } catch (IllegalArgumentException e) {
+                System.err.println("Invalid device type: " + typeStr);
             }
         }
 
+        // DO NOT automatically assign/unassign based on pondId in status messages
+        // The pondId in status is informational only (shows what the ESP32 thinks it's assigned to)
+        // Actual assignment is controlled only by explicit assign/unassign API calls
+        // This prevents devices from auto-reassigning themselves after manual unassignment
+
         deviceRepository.save(device);
-        System.out.println("Device status updated: " + deviceId);
+        System.out.println("Device status updated: " + deviceId + " (Pond: " + 
+                (device.getPond() != null ? device.getPond().getId() : "None") + ")");
     }
 
     private void handleSensorData(String deviceId, JsonNode json) {
@@ -113,19 +124,39 @@ public class MqttService {
         SensorData data = new SensorData();
         data.setDevice(device);
         data.setPond(device.getPond());
-        data.setVoltage(json.get("voltage").asDouble());
-        data.setCurrent(json.get("current").asDouble());
-        data.setPower(json.get("power").asDouble());
-        data.setEnergyWh(json.get("energyWh").asDouble());
         data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
+
+        // Check device type and store appropriate data
+        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY) {
+            // Store water quality data
+            if (json.has("phValue")) data.setPhValue(json.get("phValue").asDouble());
+            if (json.has("turbidity")) data.setTurbidity(json.get("turbidity").asDouble());
+            if (json.has("airQuality")) data.setAirQuality(json.get("airQuality").asDouble());
+            if (json.has("waterQualityStatus")) data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
+            
+            System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
+                    (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
+                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " Air:" + data.getAirQuality());
+        } else if (json.has("voltage") && json.has("current") && json.has("power")) {
+            // Store voltage/current data for budget management devices
+            data.setVoltage(json.get("voltage").asDouble());
+            data.setCurrent(json.get("current").asDouble());
+            data.setPower(json.get("power").asDouble());
+            data.setEnergyWh(json.get("energyWh").asDouble());
+            
+            System.out.println("Energy data saved: " + deviceId + " - Pond: " +
+                    (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
+                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() + " P:" + data.getPower());
+        } else {
+            // No relevant data to store
+            device.setLastSeen(LocalDateTime.now());
+            deviceRepository.save(device);
+            return;
+        }
 
         dataRepository.save(data);
         device.setLastSeen(LocalDateTime.now());
         deviceRepository.save(device);
-
-        System.out.println("Sensor data saved: " + deviceId + " - Pond: " +
-                (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
-                " - V:" + data.getVoltage() + " I:" + data.getCurrent() + " P:" + data.getPower());
     }
 
     public void sendCommand(String deviceId, String command, Object data) {
@@ -162,10 +193,10 @@ public class MqttService {
         }
     }
 
-    // Check for offline devices every 3 seconds for faster detection
-    @Scheduled(fixedRate = 3000)
+    // Check for offline devices every 2 seconds for real-time detection
+    @Scheduled(fixedRate = 2000)
     public void checkOfflineDevices() {
-        LocalDateTime timeout = LocalDateTime.now().minusSeconds(15); // 15 second timeout
+        LocalDateTime timeout = LocalDateTime.now().minusSeconds(15); // 15 second timeout (3x status interval)
         List<SensorDevice> allDevices = deviceRepository.findAll();
 
         for (SensorDevice device : allDevices) {

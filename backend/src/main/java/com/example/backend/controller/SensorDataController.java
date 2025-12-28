@@ -40,15 +40,13 @@ public class SensorDataController {
     @GetMapping("/pond/{pondId}/latest")
     public ResponseEntity<ApiResponse> getLatestDataByPond(@PathVariable Long pondId) {
         try {
-            // Check if there's an online device assigned to this pond
-            SensorDevice device = deviceRepository.findByPondIdAndStatus(pondId, "online").orElse(null);
-
-            if (device == null) {
-                // No online device for this pond
-                return ResponseEntity.ok(new ApiResponse(true, "No active device for this pond", null));
+            // Get latest water quality data only
+            SensorData data = dataRepository.findLatestByPondAndDeviceType(pondId, SensorDevice.DeviceType.WATER_QUALITY);
+            
+            if (data == null) {
+                // No water quality data for this pond
+                return ResponseEntity.ok(new ApiResponse(true, "No water quality data available", null));
             }
-
-            SensorData data = dataRepository.findLatestByPond(pondId);
 
             // Check if data is recent (within last 2 minutes)
             if (data != null && data.getTimestamp() != null) {

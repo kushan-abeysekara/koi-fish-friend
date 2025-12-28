@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { sensorDataApi, pondApi } from '../services/api';
+import type { Pond, SensorData } from '../services/api';
 
 interface WaterParameter {
   id: string;
@@ -13,90 +15,144 @@ interface WaterParameter {
 }
 
 const WaterQualityDashboard: React.FC = () => {
-  const [connectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('connected');
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
   const [lastSync, setLastSync] = useState<Date>(new Date());
-  const [selectedPond, setSelectedPond] = useState('Pond 1');
+  const [selectedPond, setSelectedPond] = useState<number | null>(null);
+  const [ponds, setPonds] = useState<Pond[]>([]);
+  const [latestData, setLatestData] = useState<SensorData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Mock real-time data - replace with actual API calls
-  const [parameters, setParameters] = useState<WaterParameter[]>([
-    {
-      id: 'turbidity',
-      name: 'Turbidity',
-      value: 15.2,
-      unit: 'NTU',
-      status: 'normal',
-      icon: '💧',
-      safeRange: { min: 0, max: 25 },
-      warningRange: { min: 0, max: 40 },
-      lastUpdated: new Date(),
-    },
-    {
-      id: 'ph',
-      name: 'pH Level',
-      value: 7.4,
-      unit: 'pH',
-      status: 'normal',
-      icon: '⚗️',
-      safeRange: { min: 6.5, max: 8.5 },
-      warningRange: { min: 6.0, max: 9.0 },
-      lastUpdated: new Date(),
-    },
-    {
-      id: 'temperature',
-      name: 'Temperature',
-      value: 24.5,
-      unit: '°C',
-      status: 'normal',
-      icon: '🌡️',
-      safeRange: { min: 15, max: 28 },
-      warningRange: { min: 10, max: 32 },
-      lastUpdated: new Date(),
-    },
-    {
-      id: 'do',
-      name: 'Dissolved Oxygen',
-      value: 7.8,
-      unit: 'mg/L',
-      status: 'normal',
-      icon: '🫧',
-      safeRange: { min: 6, max: 12 },
-      warningRange: { min: 4, max: 15 },
-      lastUpdated: new Date(),
-    },
-  ]);
-
-  // Simulate real-time updates
+  // Fetch ponds on mount
   useEffect(() => {
-    const interval = setInterval(() => {
-      setParameters(prev =>
-        prev.map(param => {
-          // Simulate small random changes
-          const change = (Math.random() - 0.5) * 0.5;
-          const newValue = Number((param.value + change).toFixed(2));
-          
-          // Determine status based on ranges
-          let status: 'normal' | 'warning' | 'danger' = 'normal';
-          if (newValue < param.safeRange.min || newValue > param.safeRange.max) {
-            if (newValue < param.warningRange.min || newValue > param.warningRange.max) {
-              status = 'danger';
-            } else {
-              status = 'warning';
-            }
+    const fetchPonds = async () => {
+      try {
+        const response = await pondApi.getAll();
+        if (response.success && response.data) {
+          setPonds(response.data);
+          if (response.data.length > 0 && !selectedPond) {
+            setSelectedPond(response.data[0].id);
           }
-
-          return {
-            ...param,
-            value: newValue,
-            status,
-            lastUpdated: new Date(),
-          };
-        })
-      );
-      setLastSync(new Date());
-    }, 3000); // Update every 3 seconds
-
-    return () => clearInterval(interval);
+        }
+      } catch (error) {
+        console.error('Error fetching ponds:', error);
+      }
+    };
+    fetchPonds();
   }, []);
+
+  // Fetch sensor data for selected pond
+  useEffect(() => {
+    if (!selectedPond) return;
+
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const response = await sensorDataApi.getLatestByPond(selectedPond);
+        if (response.success && response.data) {
+          setLatestData(response.data);
+          setConnectionStatus('connected');
+          setLastSync(new Date());
+        } else {
+          setConnectionStatus('disconnected');
+        }
+      } catch (error) {
+        console.error('Error fetching sensor data:', error);
+        setConnectionStatus('disconnected');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 3000); // Refresh every 3 seconds
+    return () => clearInterval(interval);
+  }, [selectedPond]);
+
+  // Convert sensor data to parameter format
+  const parameters: WaterParameter[] = React.useMemo(() => {
+    if (!latestData || !latestData.phValue) {
+      // Return default values if no data
+      return [
+        {
+          id: 'turbidity',
+          name: 'Turbidity',
+          value: 0,
+          unit: 'NTU',
+          status: 'normal',
+          icon: '💧',
+          safeRange: { min: 0, max: 25 },
+          warningRange: { min: 0, max: 40 },
+          lastUpdated: new Date(),
+        },
+        {
+          id: 'ph',
+          name: 'pH Level',
+          value: 7.0,
+          unit: 'pH',
+          status: 'normal',
+          icon: '⚗️',
+          safeRange: { min: 6.5, max: 8.5 },
+          warningRange: { min: 6.0, max: 9.0 },
+          lastUpdated: new Date(),
+        },
+        {
+          id: 'airQuality',
+          name: 'Air Quality',
+          value: 0,
+          unit: 'PPM',
+          status: 'normal',
+          icon: '🫧',
+          safeRange: { min: 0, max: 500 },
+          warningRange: { min: 0, max: 800 },
+          lastUpdated: new Date(),
+        },
+      ];
+    }
+
+    const getStatus = (value: number, safe: {min: number, max: number}, warning: {min: number, max: number}): 'normal' | 'warning' | 'danger' => {
+      if (value >= safe.min && value <= safe.max) return 'normal';
+      if (value >= warning.min && value <= warning.max) return 'warning';
+      return 'danger';
+    };
+
+    const timestamp = new Date(latestData.timestamp);
+
+    return [
+      {
+        id: 'turbidity',
+        name: 'Turbidity',
+        value: latestData.turbidity || 0,
+        unit: 'NTU',
+        status: getStatus(latestData.turbidity || 0, { min: 0, max: 25 }, { min: 0, max: 40 }),
+        icon: '💧',
+        safeRange: { min: 0, max: 25 },
+        warningRange: { min: 0, max: 40 },
+        lastUpdated: timestamp,
+      },
+      {
+        id: 'ph',
+        name: 'pH Level',
+        value: latestData.phValue || 7.0,
+        unit: 'pH',
+        status: getStatus(latestData.phValue || 7.0, { min: 6.5, max: 8.5 }, { min: 6.0, max: 9.0 }),
+        icon: '⚗️',
+        safeRange: { min: 6.5, max: 8.5 },
+        warningRange: { min: 6.0, max: 9.0 },
+        lastUpdated: timestamp,
+      },
+      {
+        id: 'airQuality',
+        name: 'Air Quality',
+        value: latestData.airQuality || 0,
+        unit: 'PPM',
+        status: getStatus(latestData.airQuality || 0, { min: 0, max: 500 }, { min: 0, max: 800 }),
+        icon: '🌬️',
+        safeRange: { min: 0, max: 500 },
+        warningRange: { min: 0, max: 800 },
+        lastUpdated: timestamp,
+      },
+    ];
+  }, [latestData]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -167,15 +223,25 @@ const WaterQualityDashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             <select
-              value={selectedPond}
-              onChange={(e) => setSelectedPond(e.target.value)}
+              value={selectedPond || ''}
+              onChange={(e) => setSelectedPond(Number(e.target.value))}
               className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
+              disabled={ponds.length === 0}
             >
-              <option value="Pond 1">Pond 1</option>
-              <option value="Pond 2">Pond 2</option>
-              <option value="Pond 3">Pond 3</option>
+              {ponds.length === 0 ? (
+                <option value="">No ponds available</option>
+              ) : (
+                ponds.map(pond => (
+                  <option key={pond.id} value={pond.id}>
+                    {pond.name}
+                  </option>
+                ))
+              )}
             </select>
             {getConnectionStatusBadge()}
+            {loading && (
+              <span className="text-sm text-gray-500">Loading...</span>
+            )}
           </div>
         </div>
       </div>
