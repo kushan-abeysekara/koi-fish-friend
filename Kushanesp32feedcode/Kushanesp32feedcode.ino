@@ -180,12 +180,12 @@ void stepperDemoSequence() {
   
   // Very slow speed (2000 microseconds)
   Serial.println("Very Slow CW: 1 revolution (testing)...");
-  stepperRotateRevolutions(1.0, 2000, true);
+  stepperRotateRevolutions(6.0, 200, true);
   delay(1000);
   
   // Slow speed (1500 microseconds)
   Serial.println("Slow CCW: 1 revolution");
-  stepperRotateRevolutions(1.0, 1500, false);
+  stepperRotateRevolutions(8.0, 700, false);
   delay(1000);
   
   // Medium speed (1000 microseconds)
@@ -200,7 +200,7 @@ void stepperDemoSequence() {
   
   // Very fast (500 microseconds)
   Serial.println("Very Fast CW: 0.5 revolution");
-  stepperRotateRevolutions(0.5, 500, true);
+  stepperRotateRevolutions(8.5, 500, true);
   delay(2000);
   
   Serial.println("Demo complete!\n");
@@ -365,7 +365,7 @@ void loop() {
   if (millis() - lastStepperRun > 7000) {
     Serial.print(" | Stepper: Dispensing");
     feedCount++;
-    stepperRotateRevolutions(0.5, 1000, true); // Half revolution at medium speed
+    stepperRotateRevolutions(9.0, 500, true); // 5 full revolutions at 600 RPM
     Serial.print(" ✓");
     lastStepperRun = millis();
   }
