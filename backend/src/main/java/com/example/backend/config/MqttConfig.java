@@ -19,7 +19,11 @@ public class MqttConfig {
 
     private static final String BROKER_URL = "tcp://broker.hivemq.com:1883"; // HiveMQ public broker
     private static final String CLIENT_ID = "spring-server";
-    private static final String[] TOPICS = { "koi/sensors/+/data", "koi/sensors/+/status" };
+    private static final String[] TOPICS = { 
+        "koi/sensors/+/data", 
+        "koi/sensors/+/status",
+        "koi/devices/+/feeding/status"  // Subscribe to feeding device status
+    };
 
     @Bean
     public MqttPahoClientFactory mqttClientFactory() {
