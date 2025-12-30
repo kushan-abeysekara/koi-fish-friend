@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { pondApi, fishCountApi } from '../services/api';
 
 interface FishCountRecord {
-  id: string;
-  pondId: string;
+  id: number;
+  pondId: number;
   pondName: string;
   count: number;
   countDate: string;
@@ -13,20 +14,17 @@ interface FishCountRecord {
 }
 
 interface Pond {
-  id: string;
+  id: number;
   name: string;
   color: string;
 }
 
 const FishCount: React.FC = () => {
   const [fishCountRecords, setFishCountRecords] = useState<FishCountRecord[]>([]);
-  const [ponds, setPonds] = useState<Pond[]>([
-    { id: '1', name: 'Pond 1', color: 'blue' },
-    { id: '2', name: 'Pond 2', color: 'green' },
-  ]);
+  const [ponds, setPonds] = useState<Pond[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPondModalOpen, setIsPondModalOpen] = useState(false);
-  const [selectedPond, setSelectedPond] = useState<string>('all');
+  const [selectedPond, setSelectedPond] = useState<number | 'all'>('all');
   const [newPondName, setNewPondName] = useState('');
   const [newPondColor, setNewPondColor] = useState('blue');
   const [formData, setFormData] = useState({
@@ -38,6 +36,55 @@ const FishCount: React.FC = () => {
     notes: '',
     countMethod: 'manual',
   });
+
+  // Load ponds and fish counts from API on mount
+  useEffect(() => {
+    const loadData = async () => {
+      await loadPonds();
+      await loadFishCounts();
+    };
+    loadData();
+  }, []);
+
+  const loadPonds = async () => {
+    try {
+      const response = await pondApi.getAll();
+      if (response.success && response.data) {
+        setPonds(response.data);
+      }
+    } catch (error) {
+      console.error('Error loading ponds:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load ponds: ' + errorMessage);
+    }
+  };
+
+  const loadFishCounts = async () => {
+    try {
+      const response = await fishCountApi.getAll();
+      if (response.success && response.data) {
+        // Transform backend data to match frontend interface
+        const records: FishCountRecord[] = response.data.map(fc => {
+          return {
+            id: fc.id,
+            pondId: fc.pond.id,
+            pondName: fc.pond.name,
+            count: fc.count,
+            countDate: fc.date,
+            countTime: fc.createdAt ? new Date(fc.createdAt).toTimeString().slice(0, 5) : '00:00',
+            countedBy: fc.countedBy || 'Admin',
+            notes: fc.notes || '',
+            countMethod: fc.countMethod || 'manual',
+          };
+        });
+        setFishCountRecords(records);
+      }
+    } catch (error) {
+      console.error('Error loading fish counts:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to load fish counts: ' + errorMessage);
+    }
+  };
 
   const pondColors: Record<string, { bg: string; text: string; border: string }> = {
     blue: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
@@ -57,27 +104,37 @@ const FishCount: React.FC = () => {
     { value: 'drain', label: 'Drain & Count', icon: '🚰' },
   ];
 
-  const handleAddPond = () => {
+  const handleAddPond = async () => {
     if (!newPondName.trim()) {
       alert('Please enter a pond name');
       return;
     }
 
-    const newPond: Pond = {
-      id: Date.now().toString(),
-      name: newPondName.trim(),
-      color: newPondColor,
-    };
+    try {
+      const response = await pondApi.create({
+        name: newPondName.trim(),
+        color: newPondColor,
+      });
 
-    setPonds([...ponds, newPond]);
-    setIsPondModalOpen(false);
-    setNewPondName('');
-    setNewPondColor('blue');
+      if (response.success) {
+        // Reload ponds from database
+        await loadPonds();
+        setIsPondModalOpen(false);
+        setNewPondName('');
+        setNewPondColor('blue');
+      } else {
+        alert(response.message || 'Failed to create pond');
+      }
+    } catch (error) {
+      console.error('Error creating pond:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to create pond: ' + errorMessage);
+    }
   };
 
   const openModal = () => {
     setFormData({
-      pondId: selectedPond === 'all' ? '' : selectedPond,
+      pondId: selectedPond === 'all' ? '' : selectedPond.toString(),
       count: '',
       countDate: new Date().toISOString().split('T')[0],
       countTime: new Date().toTimeString().slice(0, 5),
@@ -88,46 +145,67 @@ const FishCount: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleAddFishCount = () => {
+  const handleAddFishCount = async () => {
     if (!formData.pondId || !formData.count || !formData.countedBy) {
       alert('Please fill all required fields (Pond, Count, and Counted By)');
       return;
     }
 
-    const pond = ponds.find(p => p.id === formData.pondId);
+    const pond = ponds.find(p => p.id === parseInt(formData.pondId));
     if (!pond) {
       alert('Invalid pond selection');
       return;
     }
 
-    const newRecord: FishCountRecord = {
-      id: Date.now().toString(),
-      pondId: formData.pondId,
-      pondName: pond.name,
-      count: parseInt(formData.count),
-      countDate: formData.countDate,
-      countTime: formData.countTime,
-      countedBy: formData.countedBy,
-      notes: formData.notes,
-      countMethod: formData.countMethod,
-    };
+    try {
+      const response = await fishCountApi.create({
+        date: formData.countDate,
+        pondId: parseInt(formData.pondId),
+        count: parseInt(formData.count),
+        notes: formData.notes || undefined,
+        countMethod: formData.countMethod,
+        countedBy: formData.countedBy,
+      });
 
-    setFishCountRecords([newRecord, ...fishCountRecords]);
-    setIsModalOpen(false);
-    setFormData({
-      pondId: '',
-      count: '',
-      countDate: new Date().toISOString().split('T')[0],
-      countTime: new Date().toTimeString().slice(0, 5),
-      countedBy: '',
-      notes: '',
-      countMethod: 'manual',
-    });
+      if (response.success) {
+        // Reload fish counts from database
+        await loadFishCounts();
+        setIsModalOpen(false);
+        setFormData({
+          pondId: '',
+          count: '',
+          countDate: new Date().toISOString().split('T')[0],
+          countTime: new Date().toTimeString().slice(0, 5),
+          countedBy: '',
+          notes: '',
+          countMethod: 'manual',
+        });
+      } else {
+        alert(response.message || 'Failed to add fish count');
+      }
+    } catch (error) {
+      console.error('Error adding fish count:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to add fish count: ' + errorMessage);
+    }
   };
 
-  const handleDeleteRecord = (id: string) => {
+  const handleDeleteRecord = async (id: number) => {
     if (window.confirm('Are you sure you want to delete this fish count record?')) {
-      setFishCountRecords(fishCountRecords.filter(record => record.id !== id));
+      try {
+        const response = await fishCountApi.delete(id);
+        
+        if (response.success) {
+          // Reload fish counts from database
+          await loadFishCounts();
+        } else {
+          alert(response.message || 'Failed to delete fish count');
+        }
+      } catch (error) {
+        console.error('Error deleting fish count:', error);
+        const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+        alert('Failed to delete fish count: ' + errorMessage);
+      }
     }
   };
 
@@ -138,7 +216,7 @@ const FishCount: React.FC = () => {
     return fishCountRecords.filter(record => record.pondId === selectedPond);
   };
 
-  const getLatestCountByPond = (pondId: string) => {
+  const getLatestCountByPond = (pondId: number) => {
     const pondRecords = fishCountRecords.filter(record => record.pondId === pondId);
     if (pondRecords.length === 0) return null;
     return pondRecords.reduce((latest, current) => {
@@ -146,13 +224,6 @@ const FishCount: React.FC = () => {
       const currentDateTime = new Date(`${current.countDate}T${current.countTime}`);
       return currentDateTime > latestDateTime ? current : latest;
     });
-  };
-
-  const getAverageCountByPond = (pondId: string) => {
-    const pondRecords = fishCountRecords.filter(record => record.pondId === pondId);
-    if (pondRecords.length === 0) return 0;
-    const total = pondRecords.reduce((sum, record) => sum + record.count, 0);
-    return Math.round(total / pondRecords.length);
   };
 
   const getTotalCountAllPonds = () => {
@@ -163,7 +234,7 @@ const FishCount: React.FC = () => {
     return latestCounts.reduce((sum, count) => sum + count, 0);
   };
 
-  const getCountTrend = (pondId: string) => {
+  const getCountTrend = (pondId: number) => {
     const pondRecords = fishCountRecords
       .filter(record => record.pondId === pondId)
       .sort((a, b) => {
@@ -198,7 +269,7 @@ const FishCount: React.FC = () => {
               {selectedPond === 'all' ? 'Total Fish Count' : `${ponds.find(p => p.id === selectedPond)?.name} Count`}
             </p>
             <p className="text-4xl font-bold">
-              {selectedPond === 'all' 
+              {selectedPond === 'all'
                 ? getTotalCountAllPonds().toLocaleString()
                 : (getLatestCountByPond(selectedPond)?.count || 0).toLocaleString()
               }
@@ -228,11 +299,10 @@ const FishCount: React.FC = () => {
         <div className="flex flex-wrap gap-3">
           <button
             onClick={() => setSelectedPond('all')}
-            className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
-              selectedPond === 'all'
+            className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${selectedPond === 'all'
                 ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+              }`}
           >
             <i className="fas fa-globe mr-2"></i>
             All Ponds ({fishCountRecords.length} records)
@@ -242,16 +312,15 @@ const FishCount: React.FC = () => {
             const pondColorClasses = pondColors[pond.color];
             const latestCount = getLatestCountByPond(pond.id);
             const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
-            
+
             return (
               <button
                 key={pond.id}
                 onClick={() => setSelectedPond(pond.id)}
-                className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
-                  selectedPond === pond.id
+                className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${selectedPond === pond.id
                     ? `${pondColorClasses.bg} ${pondColorClasses.text} border-2 ${pondColorClasses.border} shadow-lg`
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                  }`}
               >
                 <i className="fas fa-water mr-2"></i>
                 {pond.name} ({recordCount})
@@ -286,7 +355,7 @@ const FishCount: React.FC = () => {
                 </div>
               </div>
               <h3 className={`text-lg font-bold ${pondColorClasses.text} mb-2`}>{pond.name}</h3>
-              
+
               <div className="space-y-2">
                 <div>
                   <p className="text-xs text-gray-600">Latest Count</p>
@@ -294,12 +363,11 @@ const FishCount: React.FC = () => {
                     {latestCount ? latestCount.count.toLocaleString() : 'N/A'}
                   </p>
                 </div>
-                
+
                 {recordCount > 0 && trend.change !== 0 && (
                   <div className="flex items-center gap-1">
-                    <span className={`text-sm font-semibold ${
-                      trend.trend === 'increase' ? 'text-green-600' : 'text-red-600'
-                    }`}>
+                    <span className={`text-sm font-semibold ${trend.trend === 'increase' ? 'text-green-600' : 'text-red-600'
+                      }`}>
                       {trend.trend === 'increase' ? '↑' : '↓'} {Math.abs(trend.change)}
                     </span>
                     <span className="text-xs text-gray-500">vs last count</span>
@@ -339,8 +407,8 @@ const FishCount: React.FC = () => {
             <div className="p-12 text-center">
               <div className="text-6xl mb-4">🐟</div>
               <p className="text-gray-500 text-lg mb-2">
-                {selectedPond === 'all' 
-                  ? 'No fish count records yet' 
+                {selectedPond === 'all'
+                  ? 'No fish count records yet'
                   : `No counts recorded for ${ponds.find(p => p.id === selectedPond)?.name}`}
               </p>
               <p className="text-gray-400">Click "Add Fish Count" to start tracking</p>
@@ -363,7 +431,7 @@ const FishCount: React.FC = () => {
                   const pond = ponds.find(p => p.id === record.pondId);
                   const pondColorClasses = pond ? pondColors[pond.color] : pondColors.blue;
                   const method = countMethods.find(m => m.value === record.countMethod);
-                  
+
                   return (
                     <tr key={record.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
@@ -510,11 +578,10 @@ const FishCount: React.FC = () => {
                       key={method.value}
                       type="button"
                       onClick={() => setFormData({ ...formData, countMethod: method.value })}
-                      className={`p-3 rounded-lg border-2 transition-all ${
-                        formData.countMethod === method.value
+                      className={`p-3 rounded-lg border-2 transition-all ${formData.countMethod === method.value
                           ? 'border-blue-500 bg-blue-50 text-blue-700 ring-2 ring-blue-200'
                           : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center gap-2">
                         <span className="text-2xl">{method.icon}</span>
@@ -619,11 +686,10 @@ const FishCount: React.FC = () => {
                       key={colorName}
                       type="button"
                       onClick={() => setNewPondColor(colorName)}
-                      className={`p-4 rounded-lg border-2 transition-all ${
-                        newPondColor === colorName
+                      className={`p-4 rounded-lg border-2 transition-all ${newPondColor === colorName
                           ? `${colorClasses.border} ${colorClasses.bg} ring-2 ring-offset-2`
                           : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
-                      }`}
+                        }`}
                     >
                       <div className={`w-full h-8 rounded ${colorClasses.bg} ${colorClasses.border} border-2`}></div>
                     </button>
@@ -658,9 +724,9 @@ const FishCount: React.FC = () => {
           <div className="text-sm text-blue-800">
             <p className="font-semibold mb-1">About Fish Count Tracking</p>
             <p>
-              Track fish population counts over time for each pond. Record multiple counts to monitor growth trends, 
-              mortality rates, and population changes. Use different counting methods based on your situation 
-              (manual count, net count, visual estimate, or drain & count). The system automatically calculates 
+              Track fish population counts over time for each pond. Record multiple counts to monitor growth trends,
+              mortality rates, and population changes. Use different counting methods based on your situation
+              (manual count, net count, visual estimate, or drain & count). The system automatically calculates
               averages and trends to help you analyze population dynamics.
             </p>
           </div>
