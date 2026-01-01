@@ -82,7 +82,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     location.pathname.includes('/profit-loss') ||
     location.pathname.includes('/energy-monitor') ||
     location.pathname.includes('/realtime-current') ||
-    location.pathname.includes('/calculate-kwh')
+    location.pathname.includes('/calculate-kwh') ||
+    location.pathname.includes('/budget-forecasting')
   );
 
   const [isWaterQualityExpanded, setIsWaterQualityExpanded] = useState(
@@ -332,7 +333,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
               location.pathname.includes('/expenditures') || 
               location.pathname.includes('/inventory') ||
               location.pathname.includes('/profit-loss') ||
-              location.pathname.includes('/energy-monitor')
+              location.pathname.includes('/energy-monitor') ||
+              location.pathname.includes('/budget-forecasting')
                 ? 'bg-slate-700 text-white'
                 : 'text-gray-300 hover:bg-slate-700 hover:text-white'
             }`}
@@ -373,6 +375,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
                 active={location.pathname === '/dashboard/energy-monitor' || 
                        location.pathname === '/dashboard/realtime-current' || 
                        location.pathname === '/dashboard/calculate-kwh'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-line"></i>}
+                label="Budget Forecasting"
+                path="/dashboard/budget-forecasting"
+                active={location.pathname === '/dashboard/budget-forecasting'}
                 onNavigate={onClose}
               />
             </div>

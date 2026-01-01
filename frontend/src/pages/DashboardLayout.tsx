@@ -23,6 +23,7 @@ import FeedingSchedule from '../components/FeedingSchedule';
 import ManualFeeding from '../components/ManualFeeding';
 import FeedUsageLogs from '../components/FeedUsageLogs';
 import FeederHealthSafety from '../components/FeederHealthSafety';
+import BudgetForecasting from '../components/BudgetForecasting';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -106,6 +107,7 @@ const Dashboard: React.FC = () => {
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />
+            <Route path="/budget-forecasting" element={<BudgetForecasting />} />
             <Route path="/device-management" element={<DeviceManagement />} />
             <Route path="/energy-monitor" element={<EnergyMonitor />} />
             <Route path="/realtime-current" element={<EnergyMonitor />} />
