@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import api from '../services/api';
 
 interface Schedule {
   id: string;
@@ -11,67 +12,47 @@ interface Schedule {
 }
 
 const FeedingSchedule: React.FC = () => {
-  const [schedules, setSchedules] = useState<Schedule[]>([
-    {
-      id: '1',
-      timeOfDay: '06:00',
-      fishStage: 'Juvenile',
-      feedAmount: 3.5,
-      ruleNote: 'Morning feeding - High protein',
-      status: 'Active',
-      pond: 'Pond A',
-    },
-    {
-      id: '2',
-      timeOfDay: '12:00',
-      fishStage: 'Adult',
-      feedAmount: 5.0,
-      ruleNote: 'Midday feeding - Standard mix',
-      status: 'Active',
-      pond: 'Pond A',
-    },
-    {
-      id: '3',
-      timeOfDay: '18:00',
-      fishStage: 'Adult',
-      feedAmount: 4.5,
-      ruleNote: 'Evening feeding - Light portion',
-      status: 'Active',
-      pond: 'Pond A',
-    },
-    {
-      id: '4',
-      timeOfDay: '07:00',
-      fishStage: 'Mixed',
-      feedAmount: 4.0,
-      ruleNote: 'Morning feeding',
-      status: 'Active',
-      pond: 'Pond B',
-    },
-    {
-      id: '5',
-      timeOfDay: '14:00',
-      fishStage: 'Adult',
-      feedAmount: 5.5,
-      ruleNote: 'Afternoon feeding',
-      status: 'Disabled',
-      pond: 'Pond B',
-    },
-  ]);
-
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [deviceId] = useState('feed_device_001');
+  const [loading, setLoading] = useState(false);
+
+  // Load schedules from localStorage on mount
+  useEffect(() => {
+    const savedSchedules = localStorage.getItem('feedingSchedules');
+    if (savedSchedules) {
+      try {
+        setSchedules(JSON.parse(savedSchedules));
+      } catch (error) {
+        console.error('Failed to load schedules:', error);
+      }
+    }
+  }, []);
+
+  // Save schedules to localStorage whenever they change
+  useEffect(() => {
+    if (schedules.length > 0) {
+      localStorage.setItem('feedingSchedules', JSON.stringify(schedules));
+    }
+  }, [schedules]);
 
   const [formData, setFormData] = useState<Omit<Schedule, 'id'>>({
     timeOfDay: '08:00',
     fishStage: 'Adult',
-    feedAmount: 5.0,
+    feedAmount: 100,
     ruleNote: '',
     status: 'Active',
     pond: 'Pond A',
   });
 
   const handleCreateSchedule = () => {
+    if (!formData.timeOfDay || !formData.feedAmount || formData.feedAmount <= 0) {
+      alert('Please fill in all required fields correctly');
+      return;
+    }
+
     const newSchedule: Schedule = {
       id: Date.now().toString(),
       ...formData,
@@ -81,31 +62,38 @@ const FeedingSchedule: React.FC = () => {
     setFormData({
       timeOfDay: '08:00',
       fishStage: 'Adult',
-      feedAmount: 5.0,
+      feedAmount: 100,
       ruleNote: '',
       status: 'Active',
       pond: 'Pond A',
     });
-    alert('Schedule created successfully!');
+    alert('Schedule created successfully! Remember to sync to device.');
   };
 
   const handleUpdateSchedule = () => {
+    if (!formData.timeOfDay || !formData.feedAmount || formData.feedAmount <= 0) {
+      alert('Please fill in all required fields correctly');
+      return;
+    }
+
     if (!editingSchedule) return;
+
     setSchedules(
       schedules.map((schedule) =>
-        schedule.id === editingSchedule.id ? { ...editingSchedule, ...formData } : schedule
+        schedule.id === editingSchedule.id ? { ...schedule, ...formData } : schedule
       )
     );
     setEditingSchedule(null);
+    setShowCreateForm(false);
     setFormData({
       timeOfDay: '08:00',
       fishStage: 'Adult',
-      feedAmount: 5.0,
+      feedAmount: 100,
       ruleNote: '',
       status: 'Active',
       pond: 'Pond A',
     });
-    alert('Schedule updated successfully!');
+    alert('Schedule updated successfully! Remember to sync to device.');
   };
 
   const handleEdit = (schedule: Schedule) => {
@@ -147,11 +135,57 @@ const FeedingSchedule: React.FC = () => {
     setFormData({
       timeOfDay: '08:00',
       fishStage: 'Adult',
-      feedAmount: 5.0,
+      feedAmount: 100,
       ruleNote: '',
       status: 'Active',
       pond: 'Pond A',
     });
+  };
+
+  // Sync schedules to ESP32 device
+  const syncSchedulesToDevice = async () => {
+    setSyncStatus('syncing');
+    try {
+      const activeSchedules = schedules.filter(s => s.status === 'Active');
+      
+      const schedulesData = {
+        schedules: activeSchedules.map(s => ({
+          time: s.timeOfDay,
+          amount: s.feedAmount, // Already in grams
+          enabled: true,
+          pondId: s.pond
+        }))
+      };
+
+      await api.post(`/feeding/schedule?deviceId=${deviceId}`, schedulesData);
+      setSyncStatus('success');
+      setTimeout(() => setSyncStatus('idle'), 3000);
+      alert('Schedules synced to device successfully!');
+    } catch (error) {
+      console.error('Failed to sync schedules:', error);
+      setSyncStatus('error');
+      setTimeout(() => setSyncStatus('idle'), 3000);
+      alert('Failed to sync schedules to device');
+    }
+  };
+
+  // Manual feed now with weight control
+  const feedNow = async (schedule: Schedule) => {
+    if (confirm(`Feed ${schedule.feedAmount}g now for ${schedule.pond}?`)) {
+      try {
+        await api.post('/feeding/start', null, {
+          params: {
+            deviceId: deviceId,
+            targetWeight: schedule.feedAmount, // Already in grams
+            stepperSpeed: 500
+          }
+        });
+        alert(`Feeding started! Target: ${schedule.feedAmount}g`);
+      } catch (error) {
+        console.error('Failed to start feeding:', error);
+        alert('Failed to start feeding');
+      }
+    }
   };
 
   return (
@@ -174,6 +208,22 @@ const FeedingSchedule: React.FC = () => {
           >
             <i className="fas fa-plus-circle"></i>
             {showCreateForm ? 'Cancel' : 'Add New Schedule'}
+          </button>
+          <button
+            onClick={syncSchedulesToDevice}
+            disabled={syncStatus === 'syncing'}
+            className={`px-6 py-3 rounded-lg font-semibold flex items-center gap-2 shadow-lg transition-colors ${
+              syncStatus === 'syncing' 
+                ? 'bg-gray-400 text-white cursor-not-allowed' 
+                : syncStatus === 'success'
+                ? 'bg-green-500 text-white'
+                : syncStatus === 'error'
+                ? 'bg-red-500 text-white'
+                : 'bg-purple-500 text-white hover:bg-purple-600'
+            }`}
+          >
+            <i className={`fas fa-${syncStatus === 'syncing' ? 'spinner fa-spin' : syncStatus === 'success' ? 'check' : 'sync'}`}></i>
+            {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : 'Sync to Device'}
           </button>
         </div>
       </div>
@@ -234,16 +284,18 @@ const FeedingSchedule: React.FC = () => {
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
                 <i className="fas fa-weight mr-2 text-purple-500"></i>
-                Feed Amount (kg)
+                Feed Amount (grams)
               </label>
               <input
                 type="number"
-                step="0.1"
+                step="10"
                 min="0"
                 value={formData.feedAmount}
                 onChange={(e) => setFormData({ ...formData, feedAmount: parseFloat(e.target.value) })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="e.g., 100 for 100 grams"
               />
+              <p className="text-xs text-gray-500 mt-1">Enter weight in grams (e.g., 100g, 250g)</p>
             </div>
 
             <div className="md:col-span-2">
@@ -299,7 +351,29 @@ const FeedingSchedule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {schedules.map((schedule) => (
+              {schedules.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                      <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center">
+                        <i className="fas fa-calendar-times text-gray-400 text-3xl"></i>
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-700 mb-2">No Schedules Yet</h3>
+                        <p className="text-gray-500 mb-4">Create your first feeding schedule to get started</p>
+                        <button
+                          onClick={() => setShowCreateForm(true)}
+                          className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-semibold"
+                        >
+                          <i className="fas fa-plus-circle mr-2"></i>
+                          Create Schedule
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                schedules.map((schedule) => (
                 <tr key={schedule.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-6 py-4">
                     <span className="font-medium text-gray-800">{schedule.pond}</span>
@@ -316,7 +390,7 @@ const FeedingSchedule: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <span className="font-semibold text-gray-800">{schedule.feedAmount} kg</span>
+                    <span className="font-semibold text-gray-800">{schedule.feedAmount}g</span>
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-gray-600 text-sm">{schedule.ruleNote}</span>
@@ -334,6 +408,14 @@ const FeedingSchedule: React.FC = () => {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => feedNow(schedule)}
+                        className="p-2 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-colors"
+                        title="Feed Now"
+                        disabled={schedule.status === 'Disabled'}
+                      >
+                        <i className="fas fa-play"></i>
+                      </button>
                       <button
                         onClick={() => handleEdit(schedule)}
                         className="p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
@@ -362,7 +444,7 @@ const FeedingSchedule: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>
@@ -392,8 +474,7 @@ const FeedingSchedule: React.FC = () => {
                 {schedules
                   .filter((s) => s.status === 'Active')
                   .reduce((sum, s) => sum + s.feedAmount, 0)
-                  .toFixed(1)}{' '}
-                kg
+                  .toFixed(0)}g
               </p>
             </div>
             <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
