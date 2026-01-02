@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import api from '../services/api';
 
 interface FeederStatus {
   pond: string;
@@ -13,6 +14,7 @@ interface FeederStatus {
 const FeedingDashboard: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [feedingInProgress, setFeedingInProgress] = useState(false);
+  const [deviceId] = useState('feed_device_001');
 
   // Mock data for feeder status
   const [feederData, setFeederData] = useState<Record<string, FeederStatus>>({
@@ -63,62 +65,89 @@ const FeedingDashboard: React.FC = () => {
     return 'text-red-600';
   };
 
-  const handleStartFeeding = () => {
+  const handleStartFeeding = async () => {
     if (currentFeeder.status === 'Ready') {
-      setFeedingInProgress(true);
-      setFeederData(prev => ({
-        ...prev,
-        [selectedPond]: {
-          ...prev[selectedPond],
-          status: 'Feeding',
-        },
-      }));
+      try {
+        setFeedingInProgress(true);
+        setFeederData(prev => ({
+          ...prev,
+          [selectedPond]: {
+            ...prev[selectedPond],
+            status: 'Feeding',
+          },
+        }));
 
-      // Simulate feeding completion after 5 seconds
-      setTimeout(() => {
+        // Send MQTT command to start feeding
+        const response = await api.post(`/feeding/start?deviceId=${deviceId}`);
+        console.log('Feeding started:', response.data);
+        
+        alert('Feeding started successfully! Motors running at configured speeds.');
+      } catch (error) {
+        console.error('Failed to start feeding:', error);
+        alert('Failed to start feeding. Please check backend connection.');
         setFeedingInProgress(false);
         setFeederData(prev => ({
           ...prev,
           [selectedPond]: {
             ...prev[selectedPond],
             status: 'Ready',
-            lastFeedingTime: new Date().toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
           },
         }));
-        alert(`Feeding completed for ${selectedPond}!`);
-      }, 5000);
+      }
     }
   };
 
-  const handleStopFeeding = () => {
-    setFeedingInProgress(false);
-    setFeederData(prev => ({
-      ...prev,
-      [selectedPond]: {
-        ...prev[selectedPond],
-        status: 'Ready',
-      },
-    }));
-    alert('Feeding stopped');
-  };
-
-  const handleEmergencyStop = () => {
-    if (confirm('Are you sure you want to execute EMERGENCY STOP?')) {
+  const handleStopFeeding = async () => {
+    try {
       setFeedingInProgress(false);
+      
+      // Send MQTT command to stop feeding
+      const response = await api.post(`/feeding/stop?deviceId=${deviceId}`);
+      console.log('Feeding stopped:', response.data);
+
       setFeederData(prev => ({
         ...prev,
         [selectedPond]: {
           ...prev[selectedPond],
-          status: 'Blocked',
+          status: 'Ready',
+          lastFeedingTime: new Date().toLocaleString('en-US', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
         },
       }));
-      alert('EMERGENCY STOP activated! Feeder blocked.');
+      
+      alert('Feeding stopped successfully. Motors are in sleep mode.');
+    } catch (error) {
+      console.error('Failed to stop feeding:', error);
+      alert('Failed to stop feeding. Please check backend connection.');
+    }
+  };
+
+  const handleEmergencyStop = async () => {
+    if (confirm('Are you sure you want to execute EMERGENCY STOP?')) {
+      try {
+        setFeedingInProgress(false);
+        
+        // Send MQTT command to stop feeding immediately
+        await api.post(`/feeding/stop?deviceId=${deviceId}`);
+        
+        setFeederData(prev => ({
+          ...prev,
+          [selectedPond]: {
+            ...prev[selectedPond],
+            status: 'Blocked',
+          },
+        }));
+        
+        alert('EMERGENCY STOP activated! All motors stopped immediately.');
+      } catch (error) {
+        console.error('Emergency stop failed:', error);
+        alert('Emergency stop command sent, but response failed. Motors should still stop.');
+      }
     }
   };
 

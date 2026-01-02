@@ -193,6 +193,55 @@ public class MqttService {
         }
     }
 
+    /**
+     * Send raw MQTT message to a specific topic (for schedules, etc.)
+     */
+    public void sendMqttMessage(String topic, Map<String, Object> data) {
+        try {
+            String payloadStr = objectMapper.writeValueAsString(data);
+
+            System.out.println("Sending MQTT message:");
+            System.out.println("  Topic: " + topic);
+            System.out.println("  Payload: " + payloadStr);
+
+            mqttOutboundChannel.send(
+                    MessageBuilder.withPayload(payloadStr)
+                            .setHeader(MqttHeaders.TOPIC, topic)
+                            .build());
+
+            System.out.println("MQTT message sent successfully to topic: " + topic);
+        } catch (Exception e) {
+            System.err.println("Error sending MQTT message: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void sendFeedingCommand(String deviceId, String command, Map<String, Object> data) {
+        try {
+            String topic = "koi/devices/" + deviceId + "/feeding/command";
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("command", command);
+            payload.put("data", data);
+
+            String payloadStr = objectMapper.writeValueAsString(payload);
+
+            System.out.println("Sending Feeding MQTT command:");
+            System.out.println("  Topic: " + topic);
+            System.out.println("  Payload: " + payloadStr);
+
+            mqttOutboundChannel.send(
+                    MessageBuilder.withPayload(payloadStr)
+                            .setHeader(MqttHeaders.TOPIC, topic)
+                            .build());
+
+            System.out.println("Feeding command sent successfully to device " + deviceId + ": " + command);
+        } catch (Exception e) {
+            System.err.println("Error sending feeding command: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
     // Check for offline devices every 2 seconds for real-time detection
     @Scheduled(fixedRate = 2000)
     public void checkOfflineDevices() {
