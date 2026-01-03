@@ -53,13 +53,41 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define I2C_SCL 22
 
 // HX711 Load Cell Pins
-#define HX711_DT 39   // Data pin (input-only GPIO)
+#define HX711_DT 39   // Data pin (input-only GPIO) - Feed Output (1kg)
 #define HX711_SCK 16  // Clock pin (safe GPIO)
 
-// HX711 Object and Calibration
-HX711 scale;
-float calibrationFactor = -7050.0;
-float currentWeight = 0.0;
+#define HX711_TANK_A_DT 34   // Tank Sensor A (5kg)
+#define HX711_TANK_A_SCK 17
+
+#define HX711_TANK_B_DT 35   // Tank Sensor B (5kg)
+#define HX711_TANK_B_SCK 5
+
+#define HX711_TANK_C_DT 32   // Tank Sensor C (5kg)
+#define HX711_TANK_C_SCK 33
+
+#define HX711_TANK_D_DT 14   // Tank Sensor D (5kg)
+#define HX711_TANK_D_SCK 15
+
+// HX711 Objects and Calibration
+HX711 scale;           // Feed output scale (1kg)
+HX711 scaleTankA;      // Tank sensor A (5kg)
+HX711 scaleTankB;      // Tank sensor B (5kg)
+HX711 scaleTankC;      // Tank sensor C (5kg)
+HX711 scaleTankD;      // Tank sensor D (5kg)
+
+float calibrationFactor = -2520.0;        // Feed output calibration
+float calibrationFactorTankA = -7050.0;  // Tank A calibration (adjust as needed)
+float calibrationFactorTankB = -7050.0;  // Tank B calibration (adjust as needed)
+float calibrationFactorTankC = -7050.0;  // Tank C calibration (adjust as needed)
+float calibrationFactorTankD = -7050.0;  // Tank D calibration (adjust as needed)
+
+float currentWeight = 0.0;        // Feed output weight
+float tankWeightA = 0.0;          // Tank A weight
+float tankWeightB = 0.0;          // Tank B weight
+float tankWeightC = 0.0;          // Tank C weight
+float tankWeightD = 0.0;          // Tank D weight
+float totalTankWeight = 0.0;      // Combined tank weight
+const float maxTankCapacity = 20000.0;  // 20kg = 20000g
 float targetWeight = 0.0;           // Target weight in grams
 bool weightBasedFeeding = false;    // Enable weight-based feeding mode
 unsigned long lastWeightCheck = 0;
@@ -71,8 +99,8 @@ const int escPin = 25;   // ESC signal
 // ESC parameters
 const int pwmFreq = 50;       // 50Hz (servo/ESC)
 const int pwmResolution = 16; // 16-bit
-const int minUs = 1000;       // Min throttle
-const int maxUs = 2000;       // Max throttle
+const int minUs = 800;       // Min throttle
+const int maxUs = 1200;       // Max throttle
 
 // Variable Resistor for ESC Speed Control
 const int variableResistorPin = 36;  // GPIO 36 (ADC1_0)
@@ -91,7 +119,7 @@ bool feedingActive = false;
 bool stepperActive = false;
 int stepperSpeed = 500; // Delay in microseconds
 int currentESCPercent = 0;
-int targetESCPercent = 35;
+int targetESCPercent = 25;
 unsigned long escRampStartTime = 0;
 unsigned long escRampDuration = 8000; // 8 seconds
 
@@ -457,8 +485,13 @@ void publishStatus(String status) {
   doc["timeInitialized"] = timeInitialized;
   doc["currentTime"] = getCurrentTime();
   doc["scheduleCount"] = scheduleCount;
+  doc["hopperLevel"] = totalTankWeight;
+  doc["hopperCapacity"] = maxTankCapacity;
+  doc["hopperPercentage"] = (totalTankWeight / maxTankCapacity) * 100.0;
+  doc["plateSpeed"] = calculateStepperRPM(stepperSpeed);
+  doc["motorStatus"] = stepperActive ? "RUNNING" : "STOPPED";
   
-  char buffer[256];
+  char buffer[512];
   serializeJson(doc, buffer);
   mqttClient.publish(statusTopic.c_str(), buffer);
   Serial.print("Published status: ");
@@ -519,15 +552,60 @@ void setup() {
 
   // ===== HX711 Load Cell Setup =====
   Serial.println("\n[Load Cell Setup]");
-  scale.begin(HX711_DT, HX711_SCK);
   
+  // Feed Output Scale (1kg)
+  scale.begin(HX711_DT, HX711_SCK);
   if (scale.is_ready()) {
-    Serial.println("HX711 Connected ✓");
+    Serial.println("HX711 #1 (Feed Output) Connected ✓");
     scale.set_scale(calibrationFactor);
     scale.tare(10);
-    Serial.println("HX711 Ready ✓");
+    Serial.println("HX711 #1 Ready ✓");
   } else {
-    Serial.println("⚠ HX711 NOT RESPONDING!");
+    Serial.println("⚠ HX711 #1 NOT RESPONDING!");
+  }
+  
+  // Tank Sensor A (5kg)
+  scaleTankA.begin(HX711_TANK_A_DT, HX711_TANK_A_SCK);
+  if (scaleTankA.is_ready()) {
+    Serial.println("HX711 #2 (Tank A) Connected ✓");
+    scaleTankA.set_scale(calibrationFactorTankA);
+    scaleTankA.tare(10);
+    Serial.println("HX711 #2 Ready ✓");
+  } else {
+    Serial.println("⚠ HX711 #2 NOT RESPONDING!");
+  }
+  
+  // Tank Sensor B (5kg)
+  scaleTankB.begin(HX711_TANK_B_DT, HX711_TANK_B_SCK);
+  if (scaleTankB.is_ready()) {
+    Serial.println("HX711 #3 (Tank B) Connected ✓");
+    scaleTankB.set_scale(calibrationFactorTankB);
+    scaleTankB.tare(10);
+    Serial.println("HX711 #3 Ready ✓");
+  } else {
+    Serial.println("⚠ HX711 #3 NOT RESPONDING!");
+  }
+  
+  // Tank Sensor C (5kg)
+  scaleTankC.begin(HX711_TANK_C_DT, HX711_TANK_C_SCK);
+  if (scaleTankC.is_ready()) {
+    Serial.println("HX711 #4 (Tank C) Connected ✓");
+    scaleTankC.set_scale(calibrationFactorTankC);
+    scaleTankC.tare(10);
+    Serial.println("HX711 #4 Ready ✓");
+  } else {
+    Serial.println("⚠ HX711 #4 NOT RESPONDING!");
+  }
+  
+  // Tank Sensor D (5kg)
+  scaleTankD.begin(HX711_TANK_D_DT, HX711_TANK_D_SCK);
+  if (scaleTankD.is_ready()) {
+    Serial.println("HX711 #5 (Tank D) Connected ✓");
+    scaleTankD.set_scale(calibrationFactorTankD);
+    scaleTankD.tare(10);
+    Serial.println("HX711 #5 Ready ✓");
+  } else {
+    Serial.println("⚠ HX711 #5 NOT RESPONDING!");
   }
 
   // ===== ESC Setup =====
@@ -586,15 +664,64 @@ void loop() {
   // ===== Load Cell Weight Reading =====
   static unsigned long lastWeightRead = 0;
   if (millis() - lastWeightRead > 1000) {
+    // Read feed output weight
     if (scale.is_ready()) {
       currentWeight = scale.get_units(3);
       if (currentWeight < 0) currentWeight = 0;
       
       // Real-time Serial print of load cell value
-      Serial.print("[Load Cell] ");
+      Serial.print("[Feed Output] ");
       Serial.print(currentWeight, 2);
-      Serial.println(" grams");
+      Serial.println(" g");
     }
+    
+    // Read tank sensor A
+    if (scaleTankA.is_ready()) {
+      tankWeightA = scaleTankA.get_units(3);
+      if (tankWeightA < 0) tankWeightA = 0;
+      Serial.print("[Tank A] ");
+      Serial.print(tankWeightA, 2);
+      Serial.println(" g");
+    }
+    
+    // Read tank sensor B
+    if (scaleTankB.is_ready()) {
+      tankWeightB = scaleTankB.get_units(3);
+      if (tankWeightB < 0) tankWeightB = 0;
+      Serial.print("[Tank B] ");
+      Serial.print(tankWeightB, 2);
+      Serial.println(" g");
+    }
+    
+    // Read tank sensor C
+    if (scaleTankC.is_ready()) {
+      tankWeightC = scaleTankC.get_units(3);
+      if (tankWeightC < 0) tankWeightC = 0;
+      Serial.print("[Tank C] ");
+      Serial.print(tankWeightC, 2);
+      Serial.println(" g");
+    }
+    
+    // Read tank sensor D
+    if (scaleTankD.is_ready()) {
+      tankWeightD = scaleTankD.get_units(3);
+      if (tankWeightD < 0) tankWeightD = 0;
+      Serial.print("[Tank D] ");
+      Serial.print(tankWeightD, 2);
+      Serial.println(" g");
+    }
+    
+    // Calculate total tank weight from all 4 tank sensors
+    totalTankWeight = tankWeightA + tankWeightB + tankWeightC + tankWeightD;
+    Serial.print("[Total Tank] ");
+    Serial.print(totalTankWeight, 2);
+    Serial.print(" g / ");
+    Serial.print(maxTankCapacity, 0);
+    Serial.print(" g (");
+    Serial.print((totalTankWeight / maxTankCapacity) * 100.0, 1);
+    Serial.println("%)" );
+    Serial.println("---");
+    
     lastWeightRead = millis();
   }
   

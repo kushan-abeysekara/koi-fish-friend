@@ -78,14 +78,39 @@ public class MqttService {
                 .orElseGet(() -> {
                     SensorDevice newDevice = new SensorDevice();
                     newDevice.setDeviceId(deviceId);
+                    // Set feeding device type by default for feed_device_001
+                    if (deviceId.contains("feed_device")) {
+                        newDevice.setDeviceType(SensorDevice.DeviceType.FEEDING_MANAGEMENT);
+                    }
                     return newDevice;
                 });
 
-        device.setStatus(json.get("status").asText());
+        // Set device status to online when receiving status messages
+        device.setStatus("online");
         device.setIpAddress(json.has("ipAddress") ? json.get("ipAddress").asText() : null);
         device.setRssi(json.has("rssi") ? json.get("rssi").asInt() : null);
         device.setEnergyWh(json.has("energyWh") ? json.get("energyWh").asDouble() : 0.0);
         device.setLastSeen(LocalDateTime.now());
+        
+        // Handle feeding device specific fields from status messages
+        if (json.has("hopperLevel")) {
+            device.setHopperLevel(json.get("hopperLevel").asDouble());
+        }
+        if (json.has("hopperCapacity")) {
+            device.setHopperCapacity(json.get("hopperCapacity").asDouble());
+        }
+        if (json.has("hopperPercentage")) {
+            device.setHopperPercentage(json.get("hopperPercentage").asDouble());
+        }
+        if (json.has("plateSpeed")) {
+            device.setPlateSpeed(json.get("plateSpeed").asDouble());
+        }
+        if (json.has("motorStatus")) {
+            device.setMotorStatus(json.get("motorStatus").asText());
+        }
+        if (json.has("feedingActive")) {
+            device.setFeedingActive(json.get("feedingActive").asBoolean());
+        }
         
         // Handle device type (check both "type" and "deviceType" for compatibility)
         if (json.has("deviceType")) {
@@ -110,8 +135,17 @@ public class MqttService {
         // This prevents devices from auto-reassigning themselves after manual unassignment
 
         deviceRepository.save(device);
-        System.out.println("Device status updated: " + deviceId + " (Pond: " + 
-                (device.getPond() != null ? device.getPond().getId() : "None") + ")");
+        
+        if (deviceId.contains("feed_device")) {
+            System.out.println("Feeding device status updated: " + deviceId + 
+                    " - Status: online" +
+                    " - Hopper: " + device.getHopperLevel() + "g (" + device.getHopperPercentage() + "%)" +
+                    " - Motor: " + device.getMotorStatus() + 
+                    " - Plate: " + device.getPlateSpeed() + " RPM");
+        } else {
+            System.out.println("Device status updated: " + deviceId + " (Pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "None") + ")");
+        }
     }
 
     private void handleSensorData(String deviceId, JsonNode json) {
@@ -137,6 +171,34 @@ public class MqttService {
             System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
                     " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " Air:" + data.getAirQuality());
+        } else if (device.getDeviceType() == SensorDevice.DeviceType.FEEDING_MANAGEMENT) {
+            // Store feeding device status
+            device.setStatus("online");
+            if (json.has("hopperLevel")) {
+                device.setHopperLevel(json.get("hopperLevel").asDouble());
+            }
+            if (json.has("hopperCapacity")) {
+                device.setHopperCapacity(json.get("hopperCapacity").asDouble());
+            }
+            if (json.has("hopperPercentage")) {
+                device.setHopperPercentage(json.get("hopperPercentage").asDouble());
+            }
+            if (json.has("plateSpeed")) {
+                device.setPlateSpeed(json.get("plateSpeed").asDouble());
+            }
+            if (json.has("motorStatus")) {
+                device.setMotorStatus(json.get("motorStatus").asText());
+            }
+            if (json.has("feedingActive")) {
+                device.setFeedingActive(json.get("feedingActive").asBoolean());
+            }
+            
+            System.out.println("Feeding device data updated: " + deviceId + 
+                    " - Status: online" +
+                    " - Hopper: " + device.getHopperLevel() + "g (" + device.getHopperPercentage() + "%)" +
+                    " - Motor: " + device.getMotorStatus() + 
+                    " - Plate: " + device.getPlateSpeed() + " RPM");
+                    
         } else if (json.has("voltage") && json.has("current") && json.has("power")) {
             // Store voltage/current data for budget management devices
             data.setVoltage(json.get("voltage").asDouble());
@@ -154,7 +216,12 @@ public class MqttService {
             return;
         }
 
-        dataRepository.save(data);
+        // Save sensor data if applicable
+        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY || 
+            json.has("voltage")) {
+            dataRepository.save(data);
+        }
+        
         device.setLastSeen(LocalDateTime.now());
         deviceRepository.save(device);
     }

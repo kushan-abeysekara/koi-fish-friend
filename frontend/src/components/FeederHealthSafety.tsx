@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import api from '../services/api';
 
 interface StatusIndicator {
   id: string;
@@ -7,6 +8,16 @@ interface StatusIndicator {
   value: string;
   icon: string;
   color: string;
+}
+
+interface DeviceStatus {
+  hopperLevel?: number;
+  hopperCapacity?: number;
+  hopperPercentage?: number;
+  plateSpeed?: number;
+  motorStatus?: string;
+  feedingActive?: boolean;
+  connected?: boolean;
 }
 
 interface SafetyEvent {
@@ -21,110 +32,119 @@ interface SafetyEvent {
 
 const FeederHealthSafety: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
+  const [deviceId] = useState('feed_device_001');
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
+  const [statusIndicators, setStatusIndicators] = useState<Record<string, StatusIndicator[]>>({});
 
-  // Mock status indicators
-  const [statusIndicators] = useState<Record<string, StatusIndicator[]>>({
-    'Pond A': [
-      {
-        id: '1',
-        name: 'Battery Status',
-        status: 'OK',
-        value: '87%',
-        icon: 'fa-battery-three-quarters',
-        color: 'green',
-      },
-      {
-        id: '2',
-        name: 'Hopper Level',
-        status: 'OK',
-        value: '45.5 kg',
-        icon: 'fa-box',
-        color: 'green',
-      },
-      {
-        id: '3',
-        name: 'Motor Status',
-        status: 'OK',
-        value: 'Normal',
-        icon: 'fa-cog',
-        color: 'green',
-      },
-      {
-        id: '4',
-        name: 'Connection',
-        status: 'OK',
-        value: 'Online',
-        icon: 'fa-wifi',
-        color: 'green',
-      },
-      {
-        id: '5',
-        name: 'Plate Speed',
-        status: 'OK',
-        value: 'Medium',
-        icon: 'fa-tachometer-alt',
-        color: 'green',
-      },
-      {
-        id: '6',
-        name: 'Temperature',
-        status: 'OK',
-        value: '24°C',
-        icon: 'fa-thermometer-half',
-        color: 'green',
-      },
-    ],
-    'Pond B': [
-      {
-        id: '1',
-        name: 'Battery Status',
-        status: 'Warning',
-        value: '18%',
-        icon: 'fa-battery-quarter',
-        color: 'yellow',
-      },
-      {
-        id: '2',
-        name: 'Hopper Level',
-        status: 'Critical',
-        value: '2.1 kg',
-        icon: 'fa-box',
-        color: 'red',
-      },
-      {
-        id: '3',
-        name: 'Motor Status',
-        status: 'OK',
-        value: 'Normal',
-        icon: 'fa-cog',
-        color: 'green',
-      },
-      {
-        id: '4',
-        name: 'Connection',
-        status: 'OK',
-        value: 'Online',
-        icon: 'fa-wifi',
-        color: 'green',
-      },
-      {
-        id: '5',
-        name: 'Plate Speed',
-        status: 'OK',
-        value: 'High',
-        icon: 'fa-tachometer-alt',
-        color: 'green',
-      },
-      {
-        id: '6',
-        name: 'Temperature',
-        status: 'Warning',
-        value: '32°C',
-        icon: 'fa-thermometer-half',
-        color: 'yellow',
-      },
-    ],
-  });
+  // Fetch device status every 3 seconds for real-time updates
+  useEffect(() => {
+    const fetchDeviceStatus = async () => {
+      try {
+        const response = await api.get(`/sensors/device/${deviceId}`);
+        if (response.data.success && response.data.data) {
+          const device = response.data.data;
+          const isOnline = device.status === 'online';
+          
+          setDeviceStatus({
+            hopperLevel: device.hopperLevel || 0,
+            hopperCapacity: device.hopperCapacity || 20000,
+            hopperPercentage: device.hopperPercentage || 0,
+            plateSpeed: device.plateSpeed || 0,
+            motorStatus: device.motorStatus || 'STOPPED',
+            feedingActive: device.feedingActive || false,
+            connected: isOnline
+          });
+
+          // Update status indicators with real data
+          const hopperKg = (device.hopperLevel || 0) / 1000;
+          const hopperPercent = device.hopperPercentage || 0;
+          
+          const indicators: StatusIndicator[] = [
+            {
+              id: '1',
+              name: 'Hopper Feed Level',
+              status: isOnline ? (hopperPercent > 30 ? 'OK' : hopperPercent > 10 ? 'Warning' : 'Critical') : 'Critical',
+              value: isOnline ? `${hopperKg.toFixed(2)} kg (${hopperPercent.toFixed(1)}%)` : 'Offline',
+              icon: 'fa-box',
+              color: isOnline ? (hopperPercent > 30 ? 'green' : hopperPercent > 10 ? 'yellow' : 'red') : 'gray',
+            },
+            {
+              id: '2',
+              name: 'Connection',
+              status: isOnline ? 'OK' : 'Critical',
+              value: isOnline ? 'Online' : 'Offline',
+              icon: 'fa-wifi',
+              color: isOnline ? 'green' : 'red',
+            },
+            {
+              id: '3',
+              name: 'Plate Speed',
+              status: isOnline ? 'OK' : 'Critical',
+              value: isOnline ? `${(device.plateSpeed || 0).toFixed(0)} RPM` : 'Offline',
+              icon: 'fa-tachometer-alt',
+              color: isOnline ? 'green' : 'gray',
+            },
+            {
+              id: '4',
+              name: 'Motor Status (NEMA17)',
+              status: isOnline ? (device.motorStatus === 'RUNNING' ? 'OK' : 'OK') : 'Critical',
+              value: isOnline ? (device.motorStatus || 'STOPPED') : 'Offline',
+              icon: 'fa-cog',
+              color: isOnline ? (device.motorStatus === 'RUNNING' ? 'blue' : 'green') : 'gray',
+            },
+            {
+              id: '5',
+              name: 'Feeding Status',
+              status: isOnline ? (device.feedingActive ? 'OK' : 'OK') : 'Critical',
+              value: isOnline ? (device.feedingActive ? 'Active' : 'Idle') : 'Offline',
+              icon: 'fa-fish',
+              color: isOnline ? (device.feedingActive ? 'blue' : 'green') : 'gray',
+            },
+            {
+              id: '6',
+              name: 'Temperature',
+              status: 'OK',
+              value: '24°C',
+              icon: 'fa-thermometer-half',
+              color: 'green',
+            },
+          ];
+
+          setStatusIndicators(prev => ({
+            ...prev,
+            [selectedPond]: indicators
+          }));
+        } else {
+          // Handle case when device data is not available
+          const offlineIndicators: StatusIndicator[] = [
+            { id: '1', name: 'Hopper Feed Level', status: 'Critical', value: 'Offline', icon: 'fa-box', color: 'gray' },
+            { id: '2', name: 'Connection', status: 'Critical', value: 'Offline', icon: 'fa-wifi', color: 'red' },
+            { id: '3', name: 'Plate Speed', status: 'Critical', value: 'Offline', icon: 'fa-tachometer-alt', color: 'gray' },
+            { id: '4', name: 'Motor Status (NEMA17)', status: 'Critical', value: 'Offline', icon: 'fa-cog', color: 'gray' },
+            { id: '5', name: 'Feeding Status', status: 'Critical', value: 'Offline', icon: 'fa-fish', color: 'gray' },
+            { id: '6', name: 'Temperature', status: 'OK', value: '24°C', icon: 'fa-thermometer-half', color: 'green' },
+          ];
+          setStatusIndicators(prev => ({ ...prev, [selectedPond]: offlineIndicators }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch device status:', error);
+        // Set offline indicators on error
+        const offlineIndicators: StatusIndicator[] = [
+          { id: '1', name: 'Hopper Feed Level', status: 'Critical', value: 'Offline', icon: 'fa-box', color: 'gray' },
+          { id: '2', name: 'Connection', status: 'Critical', value: 'Offline', icon: 'fa-wifi', color: 'red' },
+          { id: '3', name: 'Plate Speed', status: 'Critical', value: 'Offline', icon: 'fa-tachometer-alt', color: 'gray' },
+          { id: '4', name: 'Motor Status (NEMA17)', status: 'Critical', value: 'Offline', icon: 'fa-cog', color: 'gray' },
+          { id: '5', name: 'Feeding Status', status: 'Critical', value: 'Offline', icon: 'fa-fish', color: 'gray' },
+          { id: '6', name: 'Temperature', status: 'OK', value: '24°C', icon: 'fa-thermometer-half', color: 'green' },
+        ];
+        setStatusIndicators(prev => ({ ...prev, [selectedPond]: offlineIndicators }));
+      }
+    };
+
+    fetchDeviceStatus();
+    const interval = setInterval(fetchDeviceStatus, 3000); // Update every 3 seconds
+    return () => clearInterval(interval);
+  }, [deviceId, selectedPond]);
 
   // Mock safety events history
   const [safetyEvents] = useState<SafetyEvent[]>([
@@ -184,7 +204,7 @@ const FeederHealthSafety: React.FC = () => {
     },
   ]);
 
-  const currentIndicators = statusIndicators[selectedPond];
+  const currentIndicators = statusIndicators[selectedPond] || [];
 
   const getStatusBgColor = (status: string) => {
     switch (status) {
@@ -325,88 +345,97 @@ const FeederHealthSafety: React.FC = () => {
 
       {/* Status Indicators Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {currentIndicators.map((indicator) => (
-          <div
-            key={indicator.id}
-            className={`bg-gradient-to-br rounded-xl p-6 border ${getStatusBgColor(indicator.status)}`}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-gray-800">{indicator.name}</h3>
-              <div className={`w-10 h-10 ${getStatusIconColor(indicator.color)} rounded-full flex items-center justify-center`}>
-                <i className={`fas ${indicator.icon} text-white`}></i>
+        {currentIndicators.length === 0 ? (
+          <div className="col-span-full text-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto mb-4"></div>
+            <p className="text-gray-500">Loading device status...</p>
+          </div>
+        ) : (
+          currentIndicators.map((indicator) => (
+            <div
+              key={indicator.id}
+              className={`bg-gradient-to-br rounded-xl p-6 border ${getStatusBgColor(indicator.status)}`}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-800">{indicator.name}</h3>
+                <div className={`w-10 h-10 ${getStatusIconColor(indicator.color)} rounded-full flex items-center justify-center`}>
+                  <i className={`fas ${indicator.icon} text-white`}></i>
+                </div>
+              </div>
+              <p className="text-2xl font-bold text-gray-900 mb-2">{indicator.value}</p>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    indicator.status === 'OK'
+                      ? 'bg-green-500'
+                      : indicator.status === 'Warning'
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  } ${indicator.status !== 'OK' ? 'animate-pulse' : ''}`}
+                ></span>
+                <span
+                  className={`text-sm font-semibold ${
+                    indicator.status === 'OK'
+                      ? 'text-green-700'
+                      : indicator.status === 'Warning'
+                      ? 'text-yellow-700'
+                      : 'text-red-700'
+                  }`}
+                >
+                  {indicator.status}
+                </span>
               </div>
             </div>
-            <p className="text-2xl font-bold text-gray-900 mb-2">{indicator.value}</p>
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  indicator.status === 'OK'
-                    ? 'bg-green-500'
-                    : indicator.status === 'Warning'
-                    ? 'bg-yellow-500'
-                    : 'bg-red-500'
-                } ${indicator.status !== 'OK' ? 'animate-pulse' : ''}`}
-              ></span>
-              <span
-                className={`text-sm font-semibold ${
-                  indicator.status === 'OK'
-                    ? 'text-green-700'
-                    : indicator.status === 'Warning'
-                    ? 'text-yellow-700'
-                    : 'text-red-700'
-                }`}
-              >
-                {indicator.status}
-              </span>
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
 
       {/* Overall System Health */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <i className="fas fa-heartbeat text-red-500"></i>
-          Overall System Health
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-green-700 font-medium mb-1">OK Status</p>
-                <p className="text-3xl font-bold text-green-800">
-                  {currentIndicators.filter((i) => i.status === 'OK').length}
-                </p>
+      {currentIndicators.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <i className="fas fa-heartbeat text-red-500"></i>
+            Overall System Health
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-green-700 font-medium mb-1">OK Status</p>
+                  <p className="text-3xl font-bold text-green-800">
+                    {currentIndicators.filter((i) => i.status === 'OK').length}
+                  </p>
+                </div>
+                <i className="fas fa-check-circle text-green-500 text-3xl"></i>
               </div>
-              <i className="fas fa-check-circle text-green-500 text-3xl"></i>
             </div>
-          </div>
 
-          <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-yellow-700 font-medium mb-1">Warnings</p>
-                <p className="text-3xl font-bold text-yellow-800">
-                  {currentIndicators.filter((i) => i.status === 'Warning').length}
-                </p>
+            <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-yellow-700 font-medium mb-1">Warnings</p>
+                  <p className="text-3xl font-bold text-yellow-800">
+                    {currentIndicators.filter((i) => i.status === 'Warning').length}
+                  </p>
+                </div>
+                <i className="fas fa-exclamation-triangle text-yellow-500 text-3xl"></i>
               </div>
-              <i className="fas fa-exclamation-triangle text-yellow-500 text-3xl"></i>
             </div>
-          </div>
 
-          <div className="bg-red-50 rounded-lg p-4 border border-red-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-red-700 font-medium mb-1">Critical</p>
-                <p className="text-3xl font-bold text-red-800">
-                  {currentIndicators.filter((i) => i.status === 'Critical').length}
-                </p>
+            <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-red-700 font-medium mb-1">Critical</p>
+                  <p className="text-3xl font-bold text-red-800">
+                    {currentIndicators.filter((i) => i.status === 'Critical').length}
+                  </p>
+                </div>
+                <i className="fas fa-times-circle text-red-500 text-3xl"></i>
               </div>
-              <i className="fas fa-times-circle text-red-500 text-3xl"></i>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Safety Events History */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

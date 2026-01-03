@@ -54,6 +54,21 @@ public class SensorDeviceController {
         }
     }
 
+    @GetMapping("/device/{deviceId}")
+    public ResponseEntity<ApiResponse> getDeviceByDeviceId(@PathVariable String deviceId) {
+        try {
+            SensorDevice device = deviceRepository.findByDeviceId(deviceId).orElse(null);
+            if (device == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(new ApiResponse(false, "Device not found with device_id: " + deviceId, null));
+            }
+            return ResponseEntity.ok(new ApiResponse(true, "Device retrieved successfully", device));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving device: " + e.getMessage(), null));
+        }
+    }
+
     @GetMapping("/pond/{pondId}")
     public ResponseEntity<ApiResponse> getDevicesByPond(@PathVariable Long pondId) {
         try {

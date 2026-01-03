@@ -35,6 +35,25 @@ public class SensorDevice {
     private Integer rssi;
     private Double energyWh;
 
+    // Feeding device specific fields
+    @Column(name = "hopper_level")
+    private Double hopperLevel;  // Current hopper weight in grams
+    
+    @Column(name = "hopper_capacity")
+    private Double hopperCapacity;  // Maximum capacity in grams (20000g = 20kg)
+    
+    @Column(name = "hopper_percentage")
+    private Double hopperPercentage;  // Percentage of capacity
+    
+    @Column(name = "plate_speed")
+    private Double plateSpeed;  // NEMA17 stepper motor RPM
+    
+    @Column(name = "motor_status")
+    private String motorStatus;  // "RUNNING" or "STOPPED"
+    
+    @Column(name = "feeding_active")
+    private Boolean feedingActive;  // Whether feeding is in progress
+
     @Column(name = "last_seen")
     private LocalDateTime lastSeen;
 
@@ -130,5 +149,53 @@ public class SensorDevice {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Double getHopperLevel() {
+        return hopperLevel;
+    }
+
+    public void setHopperLevel(Double hopperLevel) {
+        this.hopperLevel = hopperLevel;
+    }
+
+    public Double getHopperCapacity() {
+        return hopperCapacity;
+    }
+
+    public void setHopperCapacity(Double hopperCapacity) {
+        this.hopperCapacity = hopperCapacity;
+    }
+
+    public Double getHopperPercentage() {
+        return hopperPercentage;
+    }
+
+    public void setHopperPercentage(Double hopperPercentage) {
+        this.hopperPercentage = hopperPercentage;
+    }
+
+    public Double getPlateSpeed() {
+        return plateSpeed;
+    }
+
+    public void setPlateSpeed(Double plateSpeed) {
+        this.plateSpeed = plateSpeed;
+    }
+
+    public String getMotorStatus() {
+        return motorStatus;
+    }
+
+    public void setMotorStatus(String motorStatus) {
+        this.motorStatus = motorStatus;
+    }
+
+    public Boolean getFeedingActive() {
+        return feedingActive;
+    }
+
+    public void setFeedingActive(Boolean feedingActive) {
+        this.feedingActive = feedingActive;
     }
 }
