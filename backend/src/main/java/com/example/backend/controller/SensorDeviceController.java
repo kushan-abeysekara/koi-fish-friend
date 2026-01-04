@@ -79,18 +79,28 @@ public class SensorDeviceController {
                         .body(new ApiResponse(false, "Device not found", null));
             }
 
+            System.out.println("ASSIGN: Before - Device " + deviceId + " pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "null") + 
+                    ", Target pondId: " + pondId);
+
             if (pondId == null || pondId == 0) {
                 device.setPond(null);
             } else {
                 pondRepository.findById(pondId).ifPresent(device::setPond);
             }
 
-            deviceRepository.save(device);
+            device = deviceRepository.save(device);
+            
+            System.out.println("ASSIGN: After save - Device " + deviceId + " pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "null"));
 
             // Send MQTT command to device
             Map<String, Object> commandData = new HashMap<>();
             commandData.put("pondId", pondId != null ? pondId : 0);
             mqttService.sendCommand(deviceId, "assign", commandData);
+
+            // Re-fetch to ensure proper state
+            device = deviceRepository.findByDeviceId(deviceId).orElse(device);
 
             return ResponseEntity.ok(new ApiResponse(true, "Device assigned successfully", device));
         } catch (Exception e) {
@@ -108,13 +118,25 @@ public class SensorDeviceController {
                         .body(new ApiResponse(false, "Device not found", null));
             }
 
-            device.setPond(null);
-            deviceRepository.save(device);
+            System.out.println("UNASSIGN: Before - Device " + deviceId + " pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "null"));
 
+            device.setPond(null);
+            device = deviceRepository.save(device);
+            
+            System.out.println("UNASSIGN: After save - Device " + deviceId + " pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "null"));
+            
             // Send MQTT command to device
             Map<String, Object> commandData = new HashMap<>();
             commandData.put("pondId", 0);
             mqttService.sendCommand(deviceId, "unassign", commandData);
+
+            // Re-fetch the device to ensure pond is null in the response
+            device = deviceRepository.findByDeviceId(deviceId).orElse(device);
+            
+            System.out.println("UNASSIGN: After re-fetch - Device " + deviceId + " pond: " + 
+                    (device.getPond() != null ? device.getPond().getId() : "null"));
 
             return ResponseEntity.ok(new ApiResponse(true, "Device unassigned successfully", device));
         } catch (Exception e) {

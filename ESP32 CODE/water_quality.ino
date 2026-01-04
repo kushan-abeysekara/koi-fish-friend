@@ -31,7 +31,7 @@ void publishStatusWithPond();
 
 // ===================== PIN MAPPING =====================
 #define PH_PIN 32          // pH sensor analog input (GPIO 32 / ADC1_CH4)
-#define MQ135_PIN 33       // MQ135 air quality sensor (GPIO 33 / ADC1_CH5)
+#define MQ135_PIN 33       // MQ135 ammonia sensor (GPIO 33 / ADC1_CH5) - NH3 detection
 #define TURBIDITY_PIN 34   // Turbidity sensor analog input (GPIO 34 / ADC1_CH6)
 
 // ===================== CALIBRATION =====================
@@ -49,13 +49,13 @@ const float TURBIDITY_MAX_NTU = 3000.0;
 // ===================== VARIABLES =====================
 float phValue = 7.0;
 float turbidity = 0.0;
-float airQuality = 0.0;
+float ammonia = 0.0;  // NH3 in PPM
 String waterQualityStatus = "normal";
 
 unsigned long lastMqttPublish = 0;
 unsigned long lastStatusPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 5000;      // Publish data every 5 seconds
-const unsigned long STATUS_PUBLISH_INTERVAL = 5000;    // Publish status every 5 seconds
+const unsigned long MQTT_PUBLISH_INTERVAL = 2000;      // Publish data every 2 seconds for real-time updates
+const unsigned long STATUS_PUBLISH_INTERVAL = 2000;    // Publish status every 2 seconds
 
 // ===============================================================
 //                      WiFi CONNECTION
@@ -248,7 +248,7 @@ void publishSensorData()
     doc["pondId"] = assignedPondId;
     doc["phValue"] = phValue;
     doc["turbidity"] = turbidity;
-    doc["airQuality"] = airQuality;
+    doc["ammonia"] = ammonia;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["status"] = "normal";
 
@@ -256,8 +256,21 @@ void publishSensorData()
     serializeJson(doc, json);
 
     client.publish(dataTopic.c_str(), json.c_str());
-    Serial.print("✓ Sensor data: ");
+    Serial.println("=====================================");
+    Serial.println("✓ MQTT Data Published:");
+    Serial.print("  Topic: ");
+    Serial.println(dataTopic);
+    Serial.print("  JSON: ");
     Serial.println(json);
+    Serial.print("  pH Value: ");
+    Serial.println(phValue, 3);
+    Serial.print("  Turbidity: ");
+    Serial.print(turbidity, 2);
+    Serial.println(" NTU");
+    Serial.print("  Ammonia: ");
+    Serial.print(ammonia, 3);
+    Serial.println(" PPM");
+    Serial.println("=====================================");
 }
 
 // ===============================================================
@@ -336,7 +349,7 @@ float readTurbidity(int pin, int samples = 50)
     return ntu;
 }
 
-float readAirQuality(int pin, int samples = 50)
+float readAmmonia(int pin, int samples = 50)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -354,24 +367,29 @@ float readAirQuality(int pin, int samples = 50)
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
     
-    // Convert to PPM (parts per million) - simplified calculation
-    // Higher voltage = worse air quality
-    float ppm = (voltage / V_REF) * 1000.0;
+    // Convert voltage to ammonia PPM (NH3)
+    // MQ135 sensor: Higher voltage = higher ammonia concentration
+    // Typical range: 10-300 PPM for aquaculture
+    // Safe level for koi: < 0.5 PPM (we'll scale this)
+    
+    // Calibration formula for MQ135 ammonia detection
+    // This is a simplified linear approximation
+    float ppm = (voltage / V_REF) * 5.0; // Scale to 0-5 PPM range
     
     // Sensor connection check
     if (maxRaw >= 4090 || maxRaw <= 5) {
-        Serial.println("⚠️ WARNING: MQ135 Sensor may be disconnected!");
+        Serial.println("⚠️ WARNING: MQ135 Ammonia Sensor may be disconnected!");
     }
     
     return ppm;
 }
 
-String evaluateWaterQuality(float ph, float turb)
+String evaluateWaterQuality(float ph, float turb, float nh3)
 {
-    // Ideal koi pond: pH 7.0-8.5, turbidity < 50 NTU
-    if (ph < 6.5 || ph > 9.0 || turb > 100)
+    // Ideal koi pond: pH 7.0-8.5, turbidity < 50 NTU, ammonia < 0.5 PPM
+    if (ph < 6.5 || ph > 9.0 || turb > 100 || nh3 > 1.0)
         return "critical";
-    else if (ph < 7.0 || ph > 8.5 || turb > 50)
+    else if (ph < 7.0 || ph > 8.5 || turb > 50 || nh3 > 0.5)
         return "warning";
     else
         return "normal";
@@ -457,12 +475,12 @@ void loop()
     // Read water quality sensors from actual hardware
     phValue = readPH(PH_PIN);
     turbidity = readTurbidity(TURBIDITY_PIN);
-    airQuality = readAirQuality(MQ135_PIN);
-    waterQualityStatus = evaluateWaterQuality(phValue, turbidity);
+    ammonia = readAmmonia(MQ135_PIN);
+    waterQualityStatus = evaluateWaterQuality(phValue, turbidity, ammonia);
 
     // Print to Serial Monitor only when publishing data (reduce serial spam)
     static unsigned long lastSerialPrint = 0;
-    if (now - lastSerialPrint >= 5000) {
+    if (now - lastSerialPrint >= 2000) {
         lastSerialPrint = now;
         Serial.print("Pond: ");
         Serial.print(assignedPondId);
@@ -470,9 +488,9 @@ void loop()
         Serial.print(phValue, 2);
         Serial.print(" | Turb: ");
         Serial.print(turbidity, 1);
-        Serial.print(" NTU | Air: ");
-        Serial.print(airQuality, 0);
-        Serial.print(" | ");
+        Serial.print(" NTU | NH3: ");
+        Serial.print(ammonia, 2);
+        Serial.print(" PPM | ");
         Serial.println(waterQualityStatus);
     }
 

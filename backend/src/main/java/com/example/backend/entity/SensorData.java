@@ -26,7 +26,7 @@ public class SensorData {
     // Water quality parameters
     private Double phValue;
     private Double turbidity;
-    private Double airQuality;
+    private Double ammonia;  // NH3 in PPM
     private String waterQualityStatus; // normal, warning, critical
     
     private String status; // normal, warning, critical
@@ -124,12 +124,12 @@ public class SensorData {
         this.turbidity = turbidity;
     }
 
-    public Double getAirQuality() {
-        return airQuality;
+    public Double getAmmonia() {
+        return ammonia;
     }
 
-    public void setAirQuality(Double airQuality) {
-        this.airQuality = airQuality;
+    public void setAmmonia(Double ammonia) {
+        this.ammonia = ammonia;
     }
 
     public String getWaterQualityStatus() {

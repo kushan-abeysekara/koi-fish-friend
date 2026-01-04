@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { sensorDataApi, pondApi } from '../services/api';
+import { sensorDataApi, pondApi, sensorDeviceApi } from '../services/api';
 import type { Pond, SensorData } from '../services/api';
 
 interface WaterParameter {
@@ -22,22 +22,50 @@ const WaterQualityDashboard: React.FC = () => {
   const [latestData, setLatestData] = useState<SensorData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch ponds on mount
+  // Fetch only ponds with WATER_QUALITY devices assigned
   useEffect(() => {
-    const fetchPonds = async () => {
+    const fetchPondsWithWaterQualityDevices = async () => {
       try {
-        const response = await pondApi.getAll();
-        if (response.success && response.data) {
-          setPonds(response.data);
-          if (response.data.length > 0 && !selectedPond) {
-            setSelectedPond(response.data[0].id);
+        // Fetch all devices
+        const devicesResponse = await sensorDeviceApi.getAll();
+        if (devicesResponse.success && devicesResponse.data) {
+          // Filter for WATER_QUALITY devices that are assigned to ponds
+          const waterQualityDevices = devicesResponse.data.filter(
+            device => device.deviceType === 'WATER_QUALITY' && 
+                     device.pond !== null &&
+                     device.status?.toLowerCase() === 'online'
+          );
+
+          // Extract unique pond IDs
+          const pondIds = [...new Set(waterQualityDevices.map(device => device.pond!.id))];
+
+          // Fetch all ponds and filter to only those with water quality devices
+          const pondsResponse = await pondApi.getAll();
+          if (pondsResponse.success && pondsResponse.data) {
+            const filteredPonds = pondsResponse.data.filter(pond => pondIds.includes(pond.id));
+            setPonds(filteredPonds);
+            
+            // Auto-select first pond if none selected
+            if (filteredPonds.length > 0 && !selectedPond) {
+              setSelectedPond(filteredPonds[0].id);
+            } else if (filteredPonds.length === 0) {
+              // Clear selection if no ponds with water quality devices
+              setSelectedPond(null);
+            } else if (selectedPond && !pondIds.includes(selectedPond)) {
+              // If currently selected pond no longer has water quality device, switch to first available
+              setSelectedPond(filteredPonds[0].id);
+            }
           }
         }
       } catch (error) {
-        console.error('Error fetching ponds:', error);
+        console.error('Error fetching ponds with water quality devices:', error);
       }
     };
-    fetchPonds();
+    fetchPondsWithWaterQualityDevices();
+    
+    // Refresh the list every 10 seconds to detect newly assigned devices
+    const interval = setInterval(fetchPondsWithWaterQualityDevices, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // Fetch sensor data for selected pond
@@ -48,15 +76,38 @@ const WaterQualityDashboard: React.FC = () => {
       try {
         setLoading(true);
         const response = await sensorDataApi.getLatestByPond(selectedPond);
+        
+        console.log('🔍 Water Quality API Response:', {
+          success: response.success,
+          message: response.message,
+          hasData: !!response.data,
+          data: response.data
+        });
+        
         if (response.success && response.data) {
+          console.log('✅ Received water quality data:', {
+            pondId: selectedPond,
+            deviceId: response.data.device?.deviceId,
+            deviceType: response.data.device?.deviceType,
+            pH: response.data.phValue,
+            turbidity: response.data.turbidity,
+            ammonia: response.data.ammonia,
+            timestamp: response.data.timestamp
+          });
+          
           setLatestData(response.data);
           setConnectionStatus('connected');
           setLastSync(new Date());
         } else {
+          console.warn('⚠️ No water quality data available:', response.message);
+          // Clear data if no sensor data available for this pond
+          setLatestData(null);
           setConnectionStatus('disconnected');
         }
       } catch (error) {
-        console.error('Error fetching sensor data:', error);
+        console.error('❌ Error fetching sensor data:', error);
+        // Clear data on error to prevent showing stale/wrong data
+        setLatestData(null);
         setConnectionStatus('disconnected');
       } finally {
         setLoading(false);
@@ -64,49 +115,17 @@ const WaterQualityDashboard: React.FC = () => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 3000); // Refresh every 3 seconds
+    const interval = setInterval(fetchData, 2000); // Refresh every 2 seconds for real-time updates
     return () => clearInterval(interval);
   }, [selectedPond]);
 
-  // Convert sensor data to parameter format
+  // Check if we have real data
+  const hasRealData = latestData && latestData.phValue !== undefined && latestData.phValue !== null;
+
+  // Convert sensor data to parameter format - only when real data exists
   const parameters: WaterParameter[] = React.useMemo(() => {
-    if (!latestData || !latestData.phValue) {
-      // Return default values if no data
-      return [
-        {
-          id: 'turbidity',
-          name: 'Turbidity',
-          value: 0,
-          unit: 'NTU',
-          status: 'normal',
-          icon: '💧',
-          safeRange: { min: 0, max: 25 },
-          warningRange: { min: 0, max: 40 },
-          lastUpdated: new Date(),
-        },
-        {
-          id: 'ph',
-          name: 'pH Level',
-          value: 7.0,
-          unit: 'pH',
-          status: 'normal',
-          icon: '⚗️',
-          safeRange: { min: 6.5, max: 8.5 },
-          warningRange: { min: 6.0, max: 9.0 },
-          lastUpdated: new Date(),
-        },
-        {
-          id: 'airQuality',
-          name: 'Air Quality',
-          value: 0,
-          unit: 'PPM',
-          status: 'normal',
-          icon: '🫧',
-          safeRange: { min: 0, max: 500 },
-          warningRange: { min: 0, max: 800 },
-          lastUpdated: new Date(),
-        },
-      ];
+    if (!hasRealData) {
+      return []; // Return empty array when no real data
     }
 
     const getStatus = (value: number, safe: {min: number, max: number}, warning: {min: number, max: number}): 'normal' | 'warning' | 'danger' => {
@@ -121,7 +140,7 @@ const WaterQualityDashboard: React.FC = () => {
       {
         id: 'turbidity',
         name: 'Turbidity',
-        value: latestData.turbidity || 0,
+        value: Number((latestData.turbidity || 0).toFixed(2)),
         unit: 'NTU',
         status: getStatus(latestData.turbidity || 0, { min: 0, max: 25 }, { min: 0, max: 40 }),
         icon: '💧',
@@ -132,7 +151,7 @@ const WaterQualityDashboard: React.FC = () => {
       {
         id: 'ph',
         name: 'pH Level',
-        value: latestData.phValue || 7.0,
+        value: Number((latestData.phValue || 7.0).toFixed(2)),
         unit: 'pH',
         status: getStatus(latestData.phValue || 7.0, { min: 6.5, max: 8.5 }, { min: 6.0, max: 9.0 }),
         icon: '⚗️',
@@ -141,18 +160,18 @@ const WaterQualityDashboard: React.FC = () => {
         lastUpdated: timestamp,
       },
       {
-        id: 'airQuality',
-        name: 'Air Quality',
-        value: latestData.airQuality || 0,
+        id: 'ammonia',
+        name: 'Ammonia (NH₃)',
+        value: Number((latestData.ammonia || 0).toFixed(3)),
         unit: 'PPM',
-        status: getStatus(latestData.airQuality || 0, { min: 0, max: 500 }, { min: 0, max: 800 }),
-        icon: '🌬️',
-        safeRange: { min: 0, max: 500 },
-        warningRange: { min: 0, max: 800 },
+        status: getStatus(latestData.ammonia || 0, { min: 0, max: 0.5 }, { min: 0, max: 1.0 }),
+        icon: '⚠️',
+        safeRange: { min: 0, max: 0.5 },
+        warningRange: { min: 0, max: 1.0 },
         lastUpdated: timestamp,
       },
     ];
-  }, [latestData]);
+  }, [latestData, hasRealData]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -229,7 +248,7 @@ const WaterQualityDashboard: React.FC = () => {
               disabled={ponds.length === 0}
             >
               {ponds.length === 0 ? (
-                <option value="">No ponds available</option>
+                <option value="">No water quality sensors assigned</option>
               ) : (
                 ponds.map(pond => (
                   <option key={pond.id} value={pond.id}>
@@ -253,13 +272,45 @@ const WaterQualityDashboard: React.FC = () => {
           <p className="text-sm text-blue-800">
             <span className="font-semibold">Last updated:</span> {formatTimestamp(lastSync)}
           </p>
-          <p className="text-xs text-blue-600 mt-1">Data refreshes automatically every 3 seconds</p>
+          <p className="text-xs text-blue-600 mt-1">Data refreshes automatically every 2 seconds (real-time)</p>
         </div>
       </div>
 
       {/* Water Quality Parameter Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {parameters.map((param) => (
+      {!hasRealData ? (
+        <div className="bg-white rounded-xl shadow-sm p-12 border-2 border-dashed border-gray-300 text-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center">
+              <i className="fas fa-plug-circle-xmark text-4xl text-gray-400"></i>
+            </div>
+            <div>
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">No Sensor Data Available</h3>
+              <p className="text-gray-500 mb-1">
+                {selectedPond 
+                  ? 'Water quality sensor is not connected or not sending data' 
+                  : ponds.length === 0
+                    ? 'No ponds have a water quality sensor assigned yet'
+                    : 'Please select a pond to view water quality data'}
+              </p>
+              <p className="text-sm text-gray-400">
+                {ponds.length === 0 
+                  ? 'Assign a WATER_QUALITY device to a pond in Device Management'
+                  : 'Make sure the ESP32 device is powered on and connected to WiFi'}
+              </p>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
+                <i className="fas fa-sync-alt mr-2"></i>Retry Connection
+              </button>
+              <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors">
+                <i className="fas fa-book mr-2"></i>Troubleshooting Guide
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {parameters.map((param) => (
           <div
             key={param.id}
             className={`bg-white rounded-xl shadow-sm border-2 p-6 transition-all duration-300 hover:shadow-lg ${
@@ -283,7 +334,9 @@ const WaterQualityDashboard: React.FC = () => {
             {/* Value Display */}
             <div className="mb-4">
               <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-bold text-gray-800">{param.value}</span>
+                <span className="text-4xl font-bold text-gray-800">
+                  {param.id === 'ammonia' ? param.value.toFixed(3) : param.value.toFixed(2)}
+                </span>
                 <span className="text-lg text-gray-600">{param.unit}</span>
               </div>
             </div>
@@ -333,8 +386,9 @@ const WaterQualityDashboard: React.FC = () => {
               </button>
             </div>
           </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Quick Actions Panel */}
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
@@ -361,48 +415,50 @@ const WaterQualityDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Status Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-check-circle text-2xl text-green-600"></i>
+      {/* Status Summary - Only show when data is available */}
+      {hasRealData && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <i className="fas fa-check-circle text-2xl text-green-600"></i>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Normal Parameters</p>
+                <p className="text-2xl font-bold text-gray-800">
+                  {parameters.filter(p => p.status === 'normal').length}/{parameters.length}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-gray-600">Normal Parameters</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {parameters.filter(p => p.status === 'normal').length}/{parameters.length}
-              </p>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
+                <i className="fas fa-exclamation-triangle text-2xl text-yellow-600"></i>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Warnings</p>
+                <p className="text-2xl font-bold text-gray-800">
+                  {parameters.filter(p => p.status === 'warning').length}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                <i className="fas fa-exclamation-circle text-2xl text-red-600"></i>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Critical Alerts</p>
+                <p className="text-2xl font-bold text-gray-800">
+                  {parameters.filter(p => p.status === 'danger').length}
+                </p>
+              </div>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-exclamation-triangle text-2xl text-yellow-600"></i>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Warnings</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {parameters.filter(p => p.status === 'warning').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-exclamation-circle text-2xl text-red-600"></i>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Critical Alerts</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {parameters.filter(p => p.status === 'danger').length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -40,25 +40,52 @@ public class SensorDataController {
     @GetMapping("/pond/{pondId}/latest")
     public ResponseEntity<ApiResponse> getLatestDataByPond(@PathVariable Long pondId) {
         try {
-            // Get latest water quality data only
+            System.out.println("📊 Fetching latest water quality data for pond: " + pondId);
+            
+            // Get latest water quality data only for this specific pond
             SensorData data = dataRepository.findLatestByPondAndDeviceType(pondId, SensorDevice.DeviceType.WATER_QUALITY);
             
             if (data == null) {
-                // No water quality data for this pond
-                return ResponseEntity.ok(new ApiResponse(true, "No water quality data available", null));
+                System.out.println("⚠️ No water quality data found for pond: " + pondId);
+                return ResponseEntity.ok(new ApiResponse(true, 
+                    "No water quality sensor assigned to this pond or no data received yet", null));
             }
 
-            // Check if data is recent (within last 2 minutes)
-            if (data != null && data.getTimestamp() != null) {
-                LocalDateTime twoMinutesAgo = LocalDateTime.now().minusMinutes(2);
-                if (data.getTimestamp().isBefore(twoMinutesAgo)) {
-                    // Data is stale
-                    return ResponseEntity.ok(new ApiResponse(true, "Sensor data is stale", null));
+            // Verify pond assignment matches (extra safety check)
+            if (data.getPond() == null || !data.getPond().getId().equals(pondId)) {
+                System.err.println("❌ Data pond mismatch! Requested pond:" + pondId + 
+                    " but data is for pond:" + (data.getPond() != null ? data.getPond().getId() : "null"));
+                return ResponseEntity.ok(new ApiResponse(true, 
+                    "Data integrity error - pond mismatch", null));
+            }
+
+            // Verify at least one water quality parameter exists (no dummy data)
+            if (data.getPhValue() == null && data.getTurbidity() == null && data.getAmmonia() == null) {
+                System.out.println("⚠️ Data exists but no valid water quality parameters for pond: " + pondId);
+                return ResponseEntity.ok(new ApiResponse(true, 
+                    "Sensor connected but not sending valid water quality data", null));
+            }
+
+            // Check if data is recent (within last 5 minutes)
+            if (data.getTimestamp() != null) {
+                LocalDateTime fiveMinutesAgo = LocalDateTime.now().minusMinutes(5);
+                if (data.getTimestamp().isBefore(fiveMinutesAgo)) {
+                    System.out.println("⚠️ Sensor data is stale for pond " + pondId + 
+                        " (Last update: " + data.getTimestamp() + ")");
+                    // Still return data but with stale message
+                    return ResponseEntity.ok(new ApiResponse(true, 
+                        "Sensor data is stale (last update: " + data.getTimestamp() + 
+                        "). ESP32 may be offline.", data));
                 }
             }
 
+            System.out.println("✅ Returning fresh water quality data for pond " + pondId + 
+                " from device " + data.getDevice().getDeviceId() +
+                " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " NH3:" + data.getAmmonia());
             return ResponseEntity.ok(new ApiResponse(true, "Latest sensor data retrieved successfully", data));
         } catch (Exception e) {
+            System.err.println("❌ Error retrieving latest sensor data: " + e.getMessage());
+            e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse(false, "Error retrieving latest sensor data: " + e.getMessage(), null));
         }

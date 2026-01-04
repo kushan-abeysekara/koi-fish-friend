@@ -24,7 +24,7 @@ export default function DeviceManagement() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 2000); // Refresh every 2 seconds for real-time status
+    const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds for real-time status
     return () => clearInterval(interval);
   }, []);
 
@@ -54,8 +54,13 @@ export default function DeviceManagement() {
       devices: {}
     });
 
+    // Filter to only show powered/online devices
+    const poweredDevices = devices.filter(device => 
+      device.status?.toLowerCase() === 'online'
+    );
+
     // Group devices by pond and device type
-    devices.forEach(device => {
+    poweredDevices.forEach(device => {
       const pondId = device.pond?.id || null;
       if (!grouped.has(pondId) && pondId !== null) {
         // Pond might have been deleted
@@ -104,17 +109,45 @@ export default function DeviceManagement() {
     try {
       if (pondId === null) {
         await sensorDeviceApi.unassignFromPond(deviceId);
-        setSuccessMessage('Device unassigned successfully');
+        setSuccessMessage('Device unassignment in progress...');
       } else {
         await sensorDeviceApi.assignToPond(deviceId, pondId);
-        setSuccessMessage('Device assigned successfully');
+        setSuccessMessage('Device assignment in progress...');
       }
       
-      // Wait a moment for MQTT command to reach device
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // Wait longer for MQTT command to reach device and for device to respond
+      // MQTT round-trip: Backend -> MQTT Broker -> Device -> MQTT Broker -> Backend
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
       // Refresh data to show updated assignment
       await fetchData();
+      
+      // Poll for confirmation (check 3 times with 1 second intervals)
+      let confirmed = false;
+      for (let i = 0; i < 3; i++) {
+        const devicesRes = await sensorDeviceApi.getAll();
+        if (devicesRes.success && devicesRes.data) {
+          const device = devicesRes.data.find(d => d.deviceId === deviceId);
+          if (device) {
+            const currentPondId = device.pond?.id || null;
+            if (currentPondId === pondId) {
+              confirmed = true;
+              break;
+            }
+          }
+        }
+        if (i < 2) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      if (confirmed) {
+        setSuccessMessage(pondId === null ? 'Device unassigned successfully' : 'Device assigned successfully');
+      } else {
+        setSuccessMessage('Assignment command sent, but confirmation is pending. Please wait...');
+        // Do a final refresh after 3 more seconds
+        setTimeout(fetchData, 3000);
+      }
     } catch (err) {
       console.error('Error assigning device:', err);
       setError((err as { response?: { data?: { message?: string } } }).response?.data?.message || 'Failed to assign device');
@@ -241,12 +274,14 @@ export default function DeviceManagement() {
 
             {/* Actions */}
             <div className="flex space-x-2">
-              {pondId === null && (
+              {pondId === null ? (
                 <select
                   value={device.pond?.id || ''}
                   onChange={(e) => {
                     const newPondId = e.target.value ? parseInt(e.target.value) : null;
-                    handleAssignDevice(device.deviceId, newPondId);
+                    if (newPondId && confirm(`Assign ${device.deviceId} to ${ponds.find(p => p.id === newPondId)?.name}?`)) {
+                      handleAssignDevice(device.deviceId, newPondId);
+                    }
                   }}
                   disabled={loading}
                   className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -258,6 +293,19 @@ export default function DeviceManagement() {
                     </option>
                   ))}
                 </select>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (confirm(`Unassign ${device.deviceId} from this pond?`)) {
+                      handleAssignDevice(device.deviceId, null);
+                    }
+                  }}
+                  disabled={loading}
+                  className="flex-1 px-2 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-xs font-medium disabled:bg-gray-300"
+                  title="Unassign from Pond"
+                >
+                  Unassign
+                </button>
               )}
               <button
                 onClick={() => handleResetEnergy(device.deviceId)}
@@ -282,7 +330,7 @@ export default function DeviceManagement() {
     <div className="p-6">
       <h1 className="text-3xl font-bold mb-6">Device Management System</h1>
       <p className="text-gray-600 mb-6">
-        Each pond requires 4 ESP32 modules: Water Quality Monitor, Current/Voltage Monitor, Feeding Controller, and Fish Anomaly Detector
+        Showing only powered/online devices. Each pond requires 4 ESP32 modules: Water Quality Monitor, Current/Voltage Monitor, Feeding Controller, and Fish Anomaly Detector
       </p>
 
       {/* Alerts */}
@@ -334,17 +382,36 @@ export default function DeviceManagement() {
               <div className="mt-4 flex justify-end">
                 <button
                   onClick={async () => {
-                    if (confirm(`Unassign all devices from ${group.pondName}?`)) {
+                    const deviceCount = Object.keys(group.devices).length;
+                    if (confirm(`Unassign all ${deviceCount} device(s) from ${group.pondName}? This will take about ${deviceCount * 2} seconds.`)) {
                       setLoading(true);
+                      setSuccessMessage(`Unassigning ${deviceCount} device(s) from ${group.pondName}...`);
+                      setError(null);
+                      
                       try {
-                        // Unassign devices one by one with a small delay to ensure MQTT commands are processed
+                        let successCount = 0;
+                        // Unassign devices one by one with proper delay for MQTT processing
                         for (const device of Object.values(group.devices)) {
                           if (device) {
-                            await handleAssignDevice(device.deviceId, null);
-                            // Small delay to ensure MQTT command is sent and processed
-                            await new Promise(resolve => setTimeout(resolve, 500));
+                            try {
+                              await sensorDeviceApi.unassignFromPond(device.deviceId);
+                              successCount++;
+                              setSuccessMessage(`Unassigned ${successCount}/${deviceCount} device(s)...`);
+                              // Wait for MQTT command to reach device and be processed
+                              await new Promise(resolve => setTimeout(resolve, 1500));
+                            } catch (err) {
+                              console.error(`Failed to unassign ${device.deviceId}:`, err);
+                              setError(`Warning: Failed to unassign some devices. ${successCount}/${deviceCount} successful.`);
+                            }
                           }
                         }
+                        
+                        // Final refresh after all unassignments
+                        await fetchData();
+                        setSuccessMessage(`Successfully unassigned ${successCount}/${deviceCount} device(s) from ${group.pondName}`);
+                      } catch (err) {
+                        console.error('Error during bulk unassignment:', err);
+                        setError('Error during bulk unassignment. Please try again.');
                       } finally {
                         setLoading(false);
                       }
@@ -362,20 +429,20 @@ export default function DeviceManagement() {
 
         {groupedDevices.length === 0 && (
           <div className="text-center py-12 text-gray-500 bg-white rounded-lg shadow">
-            No devices or ponds available. Create ponds and connect ESP32 devices to get started.
+            No powered devices detected. Power on your ESP32 devices to see them here.
           </div>
         )}
       </div>
 
       {/* Summary Stats */}
       <div className="mt-8 bg-white rounded-lg shadow-lg p-6">
-        <h2 className="text-xl font-bold mb-4">System Summary</h2>
+        <h2 className="text-xl font-bold mb-4">Powered Devices Summary</h2>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="text-center">
             <div className="text-3xl font-bold text-blue-600">
               {devices.filter(d => d.status === 'online').length}
             </div>
-            <div className="text-sm text-gray-600">Online Devices</div>
+            <div className="text-sm text-gray-600">Total Powered</div>
           </div>
           <div className="text-center">
             <div className="text-3xl font-bold text-green-600">

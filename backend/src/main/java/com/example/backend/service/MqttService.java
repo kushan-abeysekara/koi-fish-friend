@@ -56,8 +56,8 @@ public class MqttService {
                 return;
             }
 
-            System.out.println("Received MQTT message on topic: " + topic);
-            System.out.println("Payload: " + payload);
+            System.out.println("📨 [" + LocalDateTime.now() + "] Received MQTT message on topic: " + topic);
+            System.out.println("📦 Payload: " + payload);
 
             JsonNode jsonNode = objectMapper.readTree(payload);
             String deviceId = jsonNode.get("deviceId").asText();
@@ -65,10 +65,11 @@ public class MqttService {
             if (topic.contains("/status")) {
                 handleStatusUpdate(deviceId, jsonNode);
             } else if (topic.contains("/data")) {
+                System.out.println("🔄 Processing sensor data from device: " + deviceId);
                 handleSensorData(deviceId, jsonNode);
             }
         } catch (Exception e) {
-            System.err.println("Error processing MQTT message: " + e.getMessage());
+            System.err.println("❌ Error processing MQTT message: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -125,18 +126,19 @@ public class MqttService {
         data.setDevice(device);
         data.setPond(device.getPond());
         data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
+        data.setTimestamp(LocalDateTime.now()); // Explicitly set timestamp for real-time data
 
         // Check device type and store appropriate data
         if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY) {
             // Store water quality data
             if (json.has("phValue")) data.setPhValue(json.get("phValue").asDouble());
             if (json.has("turbidity")) data.setTurbidity(json.get("turbidity").asDouble());
-            if (json.has("airQuality")) data.setAirQuality(json.get("airQuality").asDouble());
+            if (json.has("ammonia")) data.setAmmonia(json.get("ammonia").asDouble());
             if (json.has("waterQualityStatus")) data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
             
-            System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
+            System.out.println("💧 [" + LocalDateTime.now() + "] Water quality data saved: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
-                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " Air:" + data.getAirQuality());
+                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " NH3:" + data.getAmmonia());
         } else if (json.has("voltage") && json.has("current") && json.has("power")) {
             // Store voltage/current data for budget management devices
             data.setVoltage(json.get("voltage").asDouble());
@@ -144,7 +146,7 @@ public class MqttService {
             data.setPower(json.get("power").asDouble());
             data.setEnergyWh(json.get("energyWh").asDouble());
             
-            System.out.println("Energy data saved: " + deviceId + " - Pond: " +
+            System.out.println("⚡ [" + LocalDateTime.now() + "] Energy data saved: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
                     " - V:" + data.getVoltage() + " I:" + data.getCurrent() + " P:" + data.getPower());
         } else {
@@ -157,6 +159,8 @@ public class MqttService {
         dataRepository.save(data);
         device.setLastSeen(LocalDateTime.now());
         deviceRepository.save(device);
+        
+        System.out.println("✅ Data saved to database with timestamp: " + data.getTimestamp());
     }
 
     public void sendCommand(String deviceId, String command, Object data) {

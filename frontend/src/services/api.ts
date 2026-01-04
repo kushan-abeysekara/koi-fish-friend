@@ -8,6 +8,9 @@ const api: AxiosInstance = axios.create({
   baseURL: `${API_URL}/api`,
   headers: {
     'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
   },
 });
 
@@ -621,7 +624,7 @@ export interface SensorData {
   // Water quality parameters
   phValue?: number;
   turbidity?: number;
-  airQuality?: number;
+  ammonia?: number;  // NH3 in PPM
   waterQualityStatus?: string;
   status: string;
   timestamp: string;
@@ -629,18 +632,22 @@ export interface SensorData {
 
 export const sensorDataApi = {
   getByPond: async (pondId: number): Promise<ApiResponse<SensorData[]>> => {
-    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}`);
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}`, {
+      params: { _t: Date.now() } // Cache buster for real-time data
+    });
     return response.data;
   },
 
   getLatestByPond: async (pondId: number): Promise<ApiResponse<SensorData>> => {
-    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest`);
+    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest`, {
+      params: { _t: Date.now() } // Cache buster for real-time data
+    });
     return response.data;
   },
 
   getHistoricalData: async (pondId: number, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
     const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history`, {
-      params: { hours }
+      params: { hours, _t: Date.now() } // Cache buster for real-time data
     });
     return response.data;
   },
