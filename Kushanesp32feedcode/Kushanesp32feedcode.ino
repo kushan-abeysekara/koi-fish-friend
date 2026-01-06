@@ -114,8 +114,8 @@ const int escPin = 25;   // ESC signal
 // ESC parameters
 const int pwmFreq = 50;       // 50Hz (servo/ESC)
 const int pwmResolution = 16; // 16-bit
-const int minUs = 800;       // Min throttle
-const int maxUs = 1200;       // Max throttle
+const int minUs = 1000;       // Min throttle
+const int maxUs = 1750;       // Max throttle
 
 // Variable Resistor for ESC Speed Control
 const int variableResistorPin = 36;  // GPIO 36 (ADC1_0)
