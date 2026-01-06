@@ -38,6 +38,7 @@ public class MqttService {
     private MessageChannel mqttOutboundChannel;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private boolean connected = true; // Assume connected (Spring Integration handles connection)
 
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
@@ -324,5 +325,33 @@ public class MqttService {
                 }
             }
         }
+    }
+
+    /**
+     * Publish a message to a specific MQTT topic
+     */
+    public void publishMessage(String topic, String payload) {
+        try {
+            System.out.println("Publishing to MQTT:");
+            System.out.println("  Topic: " + topic);
+            System.out.println("  Payload: " + payload);
+
+            mqttOutboundChannel.send(
+                    MessageBuilder.withPayload(payload)
+                            .setHeader(MqttHeaders.TOPIC, topic)
+                            .build());
+
+            System.out.println("Message published successfully");
+        } catch (Exception e) {
+            System.err.println("Error publishing message: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Check if MQTT is connected
+     */
+    public boolean isConnected() {
+        return connected;
     }
 }
