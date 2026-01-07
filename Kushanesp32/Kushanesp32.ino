@@ -17,6 +17,8 @@
 #include <MPU6050.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
 
 // ==================== PIN DEFINITIONS ====================
 
@@ -30,14 +32,24 @@
 // SDA -> GPIO 21
 // SCL -> GPIO 22
 
-// L298N Motor Driver
-#define MOTOR_LEFT_IN1 26
-#define MOTOR_LEFT_IN2 14
-#define MOTOR_LEFT_EN 27
+// L298N Motor Driver - New Pin Configuration
+// Motor A (Left)
+#define MOTOR_LEFT_IN1 26   // IN1
+#define MOTOR_LEFT_IN2 4    // IN2
+#define MOTOR_LEFT_EN 27    // ENA
 
-#define MOTOR_RIGHT_IN1 32
-#define MOTOR_RIGHT_IN2 33
-#define MOTOR_RIGHT_EN 33
+// Motor B (Right)
+#define MOTOR_RIGHT_IN1 2   // IN3
+#define MOTOR_RIGHT_IN2 32  // IN4
+#define MOTOR_RIGHT_EN 33   // ENB
+
+// Motor Direction Inversion (set to true if motor is mounted backwards)
+#define INVERT_LEFT_MOTOR false   // Set to true if left motor rotates wrong direction
+#define INVERT_RIGHT_MOTOR true   // Set to true if right motor rotates wrong direction
+
+// LEDC PWM Configuration (ESP32 3.x API)
+#define PWM_FREQ 5000
+#define PWM_RESOLUTION 8
 
 // HC-SR04 Ultrasonic Sensors (4 units)
 // Left sensor relocated to GPIO 25, 39 (previous pins 2, 36 had hardware issues)
@@ -57,7 +69,7 @@
 #define OLED_CLK 16     // D0 pin (SCK)
 #define OLED_DC 5       // DC pin
 #define OLED_CS 23      // CS pin
-#define OLED_RESET 4    // RES pin - using GPIO 4 temporarily
+#define OLED_RESET -1   // RES pin connected to GND
 
 // ==================== CONSTANTS ====================
 
@@ -66,11 +78,26 @@
 #define OBSTACLE_DISTANCE_CM 30     // Obstacle detection distance
 #define BALANCE_ANGLE_THRESHOLD 15  // Angle threshold for balance control
 
+// WiFi Credentials
+const char* ssid = "Dulshan Dialog 4G 643";
+const char* password = "Chuki000";
+
+// MQTT Configuration
+const char* mqtt_server = "broker.hivemq.com";
+const int mqtt_port = 1883;
+const char* mqtt_topic_command = "koifish/boat/command";
+const char* mqtt_topic_status = "koifish/boat/status";
+const char* mqtt_topic_sensor = "koifish/boat/sensor";
+String deviceId = "BOAT_ESP32_001";
+
 // ==================== GLOBAL OBJECTS ====================
 
 MPU6050 mpu;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_MOSI, OLED_CLK, 
                          OLED_DC, OLED_RESET, OLED_CS);
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 // ==================== GLOBAL VARIABLES ====================
 
@@ -92,6 +119,11 @@ float distanceRight = 0.0;
 int motorLeftSpeed = 0;
 int motorRightSpeed = 0;
 
+// Control mode
+bool autoMode = false;  // false = manual MQTT control, true = auto obstacle avoidance
+int remoteSpeed = 150;  // Speed from remote control (0-255) - default 150 for good motor response
+String currentCommand = "STOP";
+
 // Timing
 unsigned long lastSensorRead = 0;
 unsigned long lastDisplayUpdate = 0;
@@ -105,6 +137,10 @@ void setup() {
   Serial.println("Koi Fish Friend - ESP32 Boat Control System");
   Serial.println("Initializing...");
   
+  // Configure GPIO 2 safely (set LOW at boot)
+  pinMode(MOTOR_RIGHT_IN1, OUTPUT);
+  digitalWrite(MOTOR_RIGHT_IN1, LOW);
+  
   // Initialize I2C
   Wire.begin(21, 22);
   
@@ -117,10 +153,20 @@ void setup() {
   // Motor pins
   pinMode(MOTOR_LEFT_IN1, OUTPUT);
   pinMode(MOTOR_LEFT_IN2, OUTPUT);
-  pinMode(MOTOR_LEFT_EN, OUTPUT);
   pinMode(MOTOR_RIGHT_IN1, OUTPUT);
   pinMode(MOTOR_RIGHT_IN2, OUTPUT);
-  pinMode(MOTOR_RIGHT_EN, OUTPUT);
+  
+  // Initialize all motor pins to LOW
+  digitalWrite(MOTOR_LEFT_IN1, LOW);
+  digitalWrite(MOTOR_LEFT_IN2, LOW);
+  digitalWrite(MOTOR_RIGHT_IN1, LOW);
+  digitalWrite(MOTOR_RIGHT_IN2, LOW);
+  
+  // Setup LEDC PWM for motor speed control (ESP32 3.x API)
+  ledcAttach(MOTOR_LEFT_EN, PWM_FREQ, PWM_RESOLUTION);
+  ledcAttach(MOTOR_RIGHT_EN, PWM_FREQ, PWM_RESOLUTION);
+  
+  Serial.println("Motor PWM initialized (LEDC)");
   
   // Ultrasonic pins (4 sensors)
   pinMode(ULTRASONIC_FRONT_TRIG, OUTPUT);
@@ -196,6 +242,13 @@ void setup() {
   // Stop motors initially
   stopMotors();
   
+  // Connect to WiFi
+  connectWiFi();
+  
+  // Setup MQTT
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
+  
   Serial.println("Initialization complete!");
   Serial.println("========================================");
 }
@@ -203,6 +256,17 @@ void setup() {
 // ==================== MAIN LOOP ====================
 
 void loop() {
+  // Maintain WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+  
+  // Maintain MQTT connection
+  if (!mqttClient.connected()) {
+    reconnectMQTT();
+  }
+  mqttClient.loop();
+  
   unsigned long currentMillis = millis();
   
   // Read sensors at regular intervals
@@ -220,16 +284,18 @@ void loop() {
     lastDisplayUpdate = currentMillis;
     printSensorData();
     updateDisplay();
+    publishSensorData();
   }
   
   // Control relay based on voltage
   controlRelay();
   
-  // Balance control based on MPU-6050
-  balanceControl();
-  
-  // Obstacle avoidance
-  obstacleAvoidance();
+  // Auto mode: balance and obstacle avoidance
+  if (autoMode) {
+    balanceControl();
+    obstacleAvoidance();
+  }
+  // Manual mode is handled via MQTT commands
 }
 
 // ==================== SENSOR READING FUNCTIONS ====================
@@ -354,51 +420,111 @@ void obstacleAvoidance() {
 
 // ==================== MOTOR CONTROL FUNCTIONS ====================
 
-void setMotorSpeed(int in1, int in2, int en, int speed) {
+void setMotorSpeed(int in1, int in2, int enPin, int speed) {
+  Serial.print("setMotorSpeed - IN1:");
+  Serial.print(in1);
+  Serial.print(" IN2:");
+  Serial.print(in2);
+  Serial.print(" EN:");
+  Serial.print(enPin);
+  Serial.print(" Speed:");
+  Serial.println(speed);
+  
   if (speed > 0) {
     // Forward
     digitalWrite(in1, HIGH);
     digitalWrite(in2, LOW);
-    analogWrite(en, abs(speed));
+    ledcWrite(enPin, abs(speed));
+    Serial.println("  -> Direction: FORWARD");
   } else if (speed < 0) {
     // Backward
     digitalWrite(in1, LOW);
     digitalWrite(in2, HIGH);
-    analogWrite(en, abs(speed));
+    ledcWrite(enPin, abs(speed));
+    Serial.println("  -> Direction: BACKWARD");
   } else {
     // Stop
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
-    analogWrite(en, 0);
+    ledcWrite(enPin, 0);
+    Serial.println("  -> Direction: STOP");
   }
 }
 
 void moveForward(int speed) {
   motorLeftSpeed = speed;
   motorRightSpeed = speed;
-  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, speed);
-  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, speed);
+  // Apply motor inversion if needed
+  int leftSpeed = INVERT_LEFT_MOTOR ? -speed : speed;
+  int rightSpeed = INVERT_RIGHT_MOTOR ? -speed : speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, leftSpeed);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, rightSpeed);
+  currentCommand = "FORWARD";
+  Serial.print("Moving FORWARD at speed: ");
+  Serial.println(speed);
 }
 
 void moveBackward(int speed) {
   motorLeftSpeed = -speed;
   motorRightSpeed = -speed;
-  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, -speed);
-  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, -speed);
+  // Apply motor inversion if needed
+  int leftSpeed = INVERT_LEFT_MOTOR ? speed : -speed;
+  int rightSpeed = INVERT_RIGHT_MOTOR ? speed : -speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, leftSpeed);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, rightSpeed);
+  currentCommand = "BACKWARD";
+  Serial.print("Moving BACKWARD at speed: ");
+  Serial.println(speed);
 }
 
 void turnLeft() {
-  motorLeftSpeed = -100;
-  motorRightSpeed = 100;
-  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, -100);
-  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, 100);
+  int speed = remoteSpeed;  // Use full speed for turning
+  motorLeftSpeed = -speed;
+  motorRightSpeed = speed;
+  // Apply motor inversion if needed
+  int leftSpeed = INVERT_LEFT_MOTOR ? speed : -speed;
+  int rightSpeed = INVERT_RIGHT_MOTOR ? -speed : speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, leftSpeed);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, rightSpeed);
+  currentCommand = "LEFT";
 }
 
 void turnRight() {
-  motorLeftSpeed = 100;
-  motorRightSpeed = -100;
-  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, 100);
-  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, -100);
+  int speed = remoteSpeed;  // Use full speed for turning
+  motorLeftSpeed = speed;
+  motorRightSpeed = -speed;
+  // Apply motor inversion if needed
+  int leftSpeed = INVERT_LEFT_MOTOR ? -speed : speed;
+  int rightSpeed = INVERT_RIGHT_MOTOR ? speed : -speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, leftSpeed);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, rightSpeed);
+  currentCommand = "RIGHT";
+}
+
+void moveLeftOnly() {
+  int speed = remoteSpeed;
+  motorLeftSpeed = speed;
+  motorRightSpeed = 0;
+  // Apply motor inversion if needed
+  int leftSpeed = INVERT_LEFT_MOTOR ? -speed : speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, leftSpeed);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, 0);
+  currentCommand = "LEFT_ONLY";
+  Serial.print("Moving LEFT MOTOR ONLY at speed: ");
+  Serial.println(speed);
+}
+
+void moveRightOnly() {
+  int speed = remoteSpeed;
+  motorLeftSpeed = 0;
+  motorRightSpeed = speed;
+  // Apply motor inversion if needed
+  int rightSpeed = INVERT_RIGHT_MOTOR ? -speed : speed;
+  setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, 0);
+  setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, rightSpeed);
+  currentCommand = "RIGHT_ONLY";
+  Serial.print("Moving RIGHT MOTOR ONLY at speed: ");
+  Serial.println(speed);
 }
 
 void stopMotors() {
@@ -406,6 +532,7 @@ void stopMotors() {
   motorRightSpeed = 0;
   setMotorSpeed(MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_LEFT_EN, 0);
   setMotorSpeed(MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2, MOTOR_RIGHT_EN, 0);
+  currentCommand = "STOP";
 }
 
 // ==================== DISPLAY FUNCTIONS ====================
@@ -528,4 +655,143 @@ void printSensorData() {
   Serial.println(motorRightSpeed);
   
   Serial.println("=====================================");
+}
+
+// ==================== WIFI FUNCTIONS ====================
+
+void connectWiFi() {
+  Serial.println("\nConnecting to WiFi...");
+  WiFi.begin(ssid, password);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✓ WiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n✗ WiFi Connection Failed");
+  }
+}
+
+// ==================== MQTT FUNCTIONS ====================
+
+void reconnectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  int attempts = 0;
+  while (!mqttClient.connected() && attempts < 3) {
+    Serial.print("Connecting to MQTT...");
+    
+    String clientId = "ESP32Boat_" + String(random(0xffff), HEX);
+    
+    if (mqttClient.connect(clientId.c_str())) {
+      Serial.println(" Connected!");
+      mqttClient.subscribe(mqtt_topic_command, 0); // QoS 0 for fastest delivery
+      Serial.print("Subscribed to: ");
+      Serial.println(mqtt_topic_command);
+      
+      // Publish online status
+      String statusMsg = "{\"deviceId\":\"" + deviceId + "\",\"status\":\"online\",\"mode\":\"" + (autoMode ? "auto" : "manual") + "\"}";
+      mqttClient.publish(mqtt_topic_status, statusMsg.c_str());
+    } else {
+      Serial.print(" Failed, rc=");
+      Serial.println(mqttClient.state());
+      delay(2000);
+    }
+    attempts++;
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  Serial.print("MQTT Message: ");
+  Serial.println(message);
+  
+  // Parse JSON command: {"command":"FORWARD","speed":128}
+  if (message.indexOf("FORWARD") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    moveForward(remoteSpeed);
+  } else if (message.indexOf("BACKWARD") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    moveBackward(remoteSpeed);
+  } else if (message.indexOf("LEFT_ONLY") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    moveLeftOnly();
+  } else if (message.indexOf("RIGHT_ONLY") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    moveRightOnly();
+  } else if (message.indexOf("LEFT") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    turnLeft();
+  } else if (message.indexOf("RIGHT") > -1) {
+    autoMode = false;
+    extractSpeed(message);
+    turnRight();
+  } else if (message.indexOf("STOP") > -1) {
+    autoMode = false;
+    stopMotors();
+  } else if (message.indexOf("AUTO") > -1) {
+    autoMode = true;
+    Serial.println("Auto mode enabled");
+  } else if (message.indexOf("MANUAL") > -1) {
+    autoMode = false;
+    stopMotors();
+    Serial.println("Manual mode enabled");
+  }
+}
+
+void extractSpeed(String message) {
+  int speedIndex = message.indexOf("\"speed\":");
+  if (speedIndex > -1) {
+    int startIndex = speedIndex + 8;
+    int endIndex = message.indexOf(",", startIndex);
+    if (endIndex == -1) endIndex = message.indexOf("}", startIndex);
+    
+    String speedStr = message.substring(startIndex, endIndex);
+    int speed = speedStr.toInt();
+    if (speed >= 0 && speed <= 255) {
+      // Enforce minimum speed of 100 to ensure motors rotate
+      remoteSpeed = (speed > 0 && speed < 100) ? 100 : speed;
+      Serial.print("Speed set to: ");
+      Serial.println(remoteSpeed);
+    }
+  }
+}
+
+void publishSensorData() {
+  if (!mqttClient.connected()) return;
+  
+  // Create JSON sensor data
+  String sensorData = "{";
+  sensorData += "\"deviceId\":\"" + deviceId + "\",";
+  sensorData += "\"voltage\":" + String(voltage, 2) + ",";
+  sensorData += "\"distanceFront\":" + String(distanceFront, 1) + ",";
+  sensorData += "\"distanceBack\":" + String(distanceBack, 1) + ",";
+  sensorData += "\"distanceLeft\":" + String(distanceLeft, 1) + ",";
+  sensorData += "\"distanceRight\":" + String(distanceRight, 1) + ",";
+  sensorData += "\"angleX\":" + String(angleX, 2) + ",";
+  sensorData += "\"angleY\":" + String(angleY, 2) + ",";
+  sensorData += "\"temperature\":" + String(temperature, 2) + ",";
+  sensorData += "\"motorLeft\":" + String(motorLeftSpeed) + ",";
+  sensorData += "\"motorRight\":" + String(motorRightSpeed) + ",";
+  sensorData += "\"command\":\"" + currentCommand + "\",";
+  sensorData += "\"mode\":\"" + String(autoMode ? "auto" : "manual") + "\"";
+  sensorData += "}";
+  
+  mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
 }

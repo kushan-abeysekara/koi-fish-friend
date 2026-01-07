@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 
 interface FeederStatus {
@@ -11,30 +11,107 @@ interface FeederStatus {
   lastActualAmount: number;
 }
 
+interface DeviceStatus {
+  hopperLevel?: number;
+  hopperCapacity?: number;
+  hopperPercentage?: number;
+  feedingActive?: boolean;
+  motorStatus?: string;
+}
+
 const FeedingDashboard: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [deviceId] = useState('feed_device_001');
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
 
-  // Mock data for feeder status
+  // Fetch device status every 5 seconds
+  useEffect(() => {
+    const fetchDeviceStatus = async () => {
+      try {
+        const response = await api.get(`/sensors/device/${deviceId}`);
+        if (response.data.success && response.data.data) {
+          const device = response.data.data;
+          const isOnline = device.status === 'online';
+          
+          setDeviceStatus({
+            hopperLevel: device.hopperLevel || 0,
+            hopperCapacity: device.hopperCapacity || 20000,
+            hopperPercentage: device.hopperPercentage || 0,
+            feedingActive: device.feedingActive || false,
+            motorStatus: device.motorStatus || 'STOPPED'
+          });
+          
+          // Update feeder data with real hopper level and status
+          setFeederData(prev => ({
+            ...prev,
+            [selectedPond]: {
+              ...prev[selectedPond],
+              hopperFeedLevel: isOnline ? ((device.hopperLevel || 0) / 1000) : 0,
+              status: isOnline ? (device.feedingActive ? 'Feeding' : 'Ready') : 'Blocked',
+              batteryLevel: 87,
+              lastFeedingTime: '2025-12-25 08:30 AM',
+              lastTargetAmount: 5.0,
+              lastActualAmount: 4.8,
+            }
+          }));
+        } else {
+          // Device offline
+          setFeederData(prev => ({
+            ...prev,
+            [selectedPond]: {
+              ...prev[selectedPond],
+              hopperFeedLevel: 0,
+              status: 'Blocked',
+              batteryLevel: 87,
+              lastFeedingTime: 'N/A',
+              lastTargetAmount: 0,
+              lastActualAmount: 0,
+            }
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch device status:', error);
+        // On error, show device as offline
+        setFeederData(prev => ({
+          ...prev,
+          [selectedPond]: {
+            ...prev[selectedPond],
+            hopperFeedLevel: 0,
+            status: 'Blocked',
+            batteryLevel: 0,
+            lastFeedingTime: 'Offline',
+            lastTargetAmount: 0,
+            lastActualAmount: 0,
+          }
+        }));
+      }
+    };
+
+    fetchDeviceStatus();
+    const interval = setInterval(fetchDeviceStatus, 5000);
+    return () => clearInterval(interval);
+  }, [deviceId, selectedPond]);
+
+  // Initialize feeder data with default values
   const [feederData, setFeederData] = useState<Record<string, FeederStatus>>({
     'Pond A': {
       pond: 'Pond A',
       status: 'Ready',
       batteryLevel: 87,
-      hopperFeedLevel: 45.5,
-      lastFeedingTime: '2025-12-25 08:30 AM',
-      lastTargetAmount: 5.0,
-      lastActualAmount: 4.8,
+      hopperFeedLevel: 0,
+      lastFeedingTime: 'Fetching...',
+      lastTargetAmount: 0,
+      lastActualAmount: 0,
     },
     'Pond B': {
       pond: 'Pond B',
       status: 'Ready',
       batteryLevel: 92,
-      hopperFeedLevel: 38.2,
-      lastFeedingTime: '2025-12-25 08:35 AM',
-      lastTargetAmount: 4.5,
-      lastActualAmount: 4.5,
+      hopperFeedLevel: 0,
+      lastFeedingTime: 'Fetching...',
+      lastTargetAmount: 0,
+      lastActualAmount: 0,
     },
   });
 

@@ -53,13 +53,56 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define I2C_SCL 22
 
 // HX711 Load Cell Pins
-#define HX711_DT 39   // Data pin (input-only GPIO)
+#define HX711_DT 39   // Data pin (input-only GPIO) - Feed Output (1kg)
 #define HX711_SCK 16  // Clock pin (safe GPIO)
 
-// HX711 Object and Calibration
-HX711 scale;
-float calibrationFactor = -7050.0;
-float currentWeight = 0.0;
+#define HX711_TANK_A_DT 34   // Tank Sensor A - FOUR 5kg load cells (20kg total)
+#define HX711_TANK_A_SCK 17
+
+/*
+ * IMPORTANT WIRING FOR FOUR LOAD CELLS ON ONE HX711:
+ * ==================================================
+ * Each load cell has 4 wires (typical colors):
+ *   E+ (Excitation+) = RED
+ *   E- (Excitation-) = BLACK
+ *   S+ (Signal+)     = WHITE
+ *   S- (Signal-)     = GREEN
+ * 
+ * CORRECT PARALLEL WIRING TO HX711:
+ * ---------------------------------
+ * ALL Cell 1-4 RED wires    → HX711 E+
+ * ALL Cell 1-4 BLACK wires  → HX711 E-
+ * ALL Cell 1-4 WHITE wires  → HX711 A+ (or S+)
+ * ALL Cell 1-4 GREEN wires  → HX711 A- (or S-)
+ * 
+ * ALL 4 WIRES OF SAME COLOR FROM ALL 4 CELLS MUST BE CONNECTED TOGETHER!
+ * This creates a parallel connection where the HX711 reads the combined weight.
+ * 
+ * WRONG WIRING:
+ * ------------
+ * ❌ Connecting only some cells' signal wires
+ * ❌ Mixing up signal wires between cells
+ * ❌ Not connecting all E+ together and all E- together
+ * 
+ * TROUBLESHOOTING:
+ * ---------------
+ * 1. Test each cell individually first
+ * 2. Connect all 4 cells in parallel using above wiring
+ * 3. Check Serial Monitor for raw values (should be large numbers)
+ * 4. All cells should contribute to total weight
+ */
+
+// HX711 Objects and Calibration
+HX711 scale;           // Feed output scale (1kg)
+HX711 scaleTankA;      // Tank sensor A - FOUR 5kg load cells (20kg total)
+
+float calibrationFactor = -2520.0;        // Feed output calibration
+float calibrationFactorTankA = -115.0;  // Tank A calibration (FOUR 5kg cells = 20kg)
+
+float currentWeight = 0.0;        // Feed output weight
+float tankWeightA = 0.0;          // Tank A weight (FOUR 5kg cells = 20kg total)
+float totalTankWeight = 0.0;      // Total tank weight (same as tankWeightA)
+const float maxTankCapacity = 20000.0;  // 20kg = 4x5kg load cells on one HX711
 float targetWeight = 0.0;           // Target weight in grams
 bool weightBasedFeeding = false;    // Enable weight-based feeding mode
 unsigned long lastWeightCheck = 0;
@@ -72,7 +115,7 @@ const int escPin = 25;   // ESC signal
 const int pwmFreq = 50;       // 50Hz (servo/ESC)
 const int pwmResolution = 16; // 16-bit
 const int minUs = 1000;       // Min throttle
-const int maxUs = 2000;       // Max throttle
+const int maxUs = 1750;       // Max throttle
 
 // Variable Resistor for ESC Speed Control
 const int variableResistorPin = 36;  // GPIO 36 (ADC1_0)
@@ -91,7 +134,7 @@ bool feedingActive = false;
 bool stepperActive = false;
 int stepperSpeed = 500; // Delay in microseconds
 int currentESCPercent = 0;
-int targetESCPercent = 35;
+int targetESCPercent = 25;
 unsigned long escRampStartTime = 0;
 unsigned long escRampDuration = 8000; // 8 seconds
 
@@ -264,7 +307,8 @@ void updateDisplay() {
     display.print(totalGramsFed, 0);
     display.println("g");
   }
-  
+  display.print("TNK:");
+  display.print(totalTankWeight/1000);
   display.display();
 }
 
@@ -457,8 +501,13 @@ void publishStatus(String status) {
   doc["timeInitialized"] = timeInitialized;
   doc["currentTime"] = getCurrentTime();
   doc["scheduleCount"] = scheduleCount;
+  doc["hopperLevel"] = totalTankWeight;
+  doc["hopperCapacity"] = maxTankCapacity;
+  doc["hopperPercentage"] = (totalTankWeight / maxTankCapacity) * 100.0;
+  doc["plateSpeed"] = calculateStepperRPM(stepperSpeed);
+  doc["motorStatus"] = stepperActive ? "RUNNING" : "STOPPED";
   
-  char buffer[256];
+  char buffer[512];
   serializeJson(doc, buffer);
   mqttClient.publish(statusTopic.c_str(), buffer);
   Serial.print("Published status: ");
@@ -519,15 +568,30 @@ void setup() {
 
   // ===== HX711 Load Cell Setup =====
   Serial.println("\n[Load Cell Setup]");
-  scale.begin(HX711_DT, HX711_SCK);
   
+  // Feed Output Scale (1kg)
+  scale.begin(HX711_DT, HX711_SCK);
   if (scale.is_ready()) {
-    Serial.println("HX711 Connected ✓");
+    Serial.println("HX711 #1 (Feed Output) Connected ✓");
     scale.set_scale(calibrationFactor);
-    scale.tare(10);
-    Serial.println("HX711 Ready ✓");
+    // DO NOT auto-tare on startup - display actual weight
+    // Use MQTT command 'tare' to manually zero when needed
+    Serial.println("HX711 #1 Ready ✓ (No auto-tare)");
   } else {
-    Serial.println("⚠ HX711 NOT RESPONDING!");
+    Serial.println("⚠ HX711 #1 NOT RESPONDING!");
+  }
+  
+  // Tank Sensor A (FOUR 5kg load cells - ALL connected to one HX711)
+  scaleTankA.begin(HX711_TANK_A_DT, HX711_TANK_A_SCK);
+  if (scaleTankA.is_ready()) {
+    Serial.println("HX711 #2 (Tank A - FOUR 5kg cells) Connected ✓");
+    Serial.println("  → All 4 load cells wired in parallel");
+    scaleTankA.set_scale(calibrationFactorTankA);
+    // DO NOT auto-tare on startup - display actual weight
+    // Use MQTT command 'tare' to manually zero when needed
+    Serial.println("HX711 #2 Ready ✓ (No auto-tare)");
+  } else {
+    Serial.println("⚠ HX711 #2 NOT RESPONDING!");
   }
 
   // ===== ESC Setup =====
@@ -586,15 +650,58 @@ void loop() {
   // ===== Load Cell Weight Reading =====
   static unsigned long lastWeightRead = 0;
   if (millis() - lastWeightRead > 1000) {
+    Serial.println("========== HX711 READINGS ==========");
+    
+    // Read HX711 #1 - Feed output weight
     if (scale.is_ready()) {
+      long rawValue1 = scale.read();
       currentWeight = scale.get_units(3);
       if (currentWeight < 0) currentWeight = 0;
-      
-      // Real-time Serial print of load cell value
-      Serial.print("[Load Cell] ");
+      Serial.print("HX711 #1 [Feed Output 1kg]: ");
       Serial.print(currentWeight, 2);
-      Serial.println(" grams");
+      Serial.print(" g (Raw: ");
+      Serial.print(rawValue1);
+      Serial.println(")");
+    } else {
+      Serial.println("HX711 #1 [Feed Output]: NOT READY");
     }
+    
+    // Read HX711 #2 - Tank sensor A (FOUR 5kg cells)
+    if (scaleTankA.is_ready()) {
+      long rawValue2 = scaleTankA.read();
+      tankWeightA = scaleTankA.get_units(3);
+      if (tankWeightA < 0) tankWeightA = 0;
+      Serial.print("HX711 #2 [Tank A - FOUR 5kg cells]: ");
+      Serial.print(tankWeightA, 2);
+      Serial.print(" g (Raw: ");
+      Serial.print(rawValue2);
+      Serial.println(")");
+      
+      // DIAGNOSTIC: Warn if reading is suspiciously low
+      if (rawValue2 > -100000 && rawValue2 < 100000) {
+        Serial.println("  ⚠ WARNING: Raw value too low! Check wiring:");
+        Serial.println("  - Are ALL FOUR load cells connected?");
+        Serial.println("  - Are ALL RED wires (4 cells) connected to E+?");
+        Serial.println("  - Are ALL BLACK wires (4 cells) connected to E-?");
+        Serial.println("  - Are ALL WHITE wires (4 cells) connected to A+?");
+        Serial.println("  - Are ALL GREEN wires (4 cells) connected to A-?");
+      }
+    } else {
+      Serial.println("HX711 #2 [Tank A]: NOT READY");
+    }
+    
+    // Calculate total tank weight (all 4 cells on one HX711)
+    totalTankWeight = tankWeightA;
+    Serial.println("------------------------------------");
+    Serial.print("TOTAL TANK WEIGHT: ");
+    Serial.print(totalTankWeight, 2);
+    Serial.print(" g / ");
+    Serial.print(maxTankCapacity, 0);
+    Serial.print(" g (");
+    Serial.print((totalTankWeight / maxTankCapacity) * 100.0, 1);
+    Serial.println("%)");
+    Serial.println("====================================\n");
+    
     lastWeightRead = millis();
   }
   

@@ -55,6 +55,7 @@ public class MqttConfig {
         adapter.setConverter(new DefaultPahoMessageConverter());
         adapter.setQos(1);
         adapter.setOutputChannel(mqttInputChannel());
+        adapter.setAutoStartup(true);
         return adapter;
     }
 

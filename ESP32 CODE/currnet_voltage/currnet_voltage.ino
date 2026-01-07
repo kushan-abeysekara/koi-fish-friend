@@ -36,12 +36,12 @@ void publishStatus();
 // ===================== PIN MAPPING =====================
 #define ZMPT_PIN 34
 #define ACS_PIN 35
-#define RELAY_PIN 25
+#define RELAY_PIN 17
 
 // ===================== CALIBRATION =====================
 const float ADC_MAX = 4095.0;
 const float V_REF = 3.3;
-float V_calibration = 230.0 / 2048.0;
+float V_calibration = 0.374;  // Calibrated for 220V AC (adjusted from 230.0/2048.0)
 float voltageOffset = 0.0;
 float I_calibration = 30.0 / 2048.0;
 float currentOffset = 2048.0;
