@@ -298,7 +298,7 @@ export default function EnergyMonitor() {
                     <span className="text-4xl">⚡</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">VOLTAGE</span>
                   </div>
-                  <div className="text-5xl font-bold mb-2">{latestData.voltage.toFixed(1)}</div>
+                  <div className="text-5xl font-bold mb-2">{latestData.voltage?.toFixed(1) || '0.0'}</div>
                   <div className="text-blue-100 text-lg">Volts</div>
                 </div>
 
@@ -308,7 +308,7 @@ export default function EnergyMonitor() {
                     <span className="text-4xl">🔌</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">CURRENT</span>
                   </div>
-                  <div className="text-5xl font-bold mb-2">{latestData.current.toFixed(2)}</div>
+                  <div className="text-5xl font-bold mb-2">{latestData.current?.toFixed(2) || '0.00'}</div>
                   <div className="text-green-100 text-lg">Amperes</div>
                 </div>
 
@@ -318,7 +318,7 @@ export default function EnergyMonitor() {
                     <span className="text-4xl">⚙️</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">POWER</span>
                   </div>
-                  <div className="text-5xl font-bold mb-2">{latestData.power.toFixed(1)}</div>
+                  <div className="text-5xl font-bold mb-2">{latestData.power?.toFixed(1) || '0.0'}</div>
                   <div className="text-purple-100 text-lg">Watts</div>
                 </div>
 
@@ -328,7 +328,7 @@ export default function EnergyMonitor() {
                     <span className="text-4xl">💡</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">ENERGY</span>
                   </div>
-                  <div className="text-5xl font-bold mb-2">{(latestData.energyWh / 1000).toFixed(3)}</div>
+                  <div className="text-5xl font-bold mb-2">{((latestData.energyWh || 0) / 1000).toFixed(3)}</div>
                   <div className="text-orange-100 text-lg">kWh</div>
                 </div>
               </div>
@@ -400,7 +400,7 @@ export default function EnergyMonitor() {
                 <div className="bg-white rounded-2xl shadow-xl p-6 border-l-4 border-blue-500">
                   <div className="text-sm font-semibold text-gray-600 mb-2">💡 Total Energy</div>
                   <div className="text-4xl font-bold text-blue-600 mb-1">
-                    {(latestData.energyWh / 1000).toFixed(3)}
+                    {((latestData?.energyWh || 0) / 1000).toFixed(3)}
                   </div>
                   <div className="text-gray-500">kWh (Cumulative)</div>
                 </div>
@@ -409,7 +409,7 @@ export default function EnergyMonitor() {
                 <div className="bg-white rounded-2xl shadow-xl p-6 border-l-4 border-green-500">
                   <div className="text-sm font-semibold text-gray-600 mb-2">⚡ Current Power</div>
                   <div className="text-4xl font-bold text-green-600 mb-1">
-                    {latestData.power.toFixed(1)}
+                    {latestData?.power?.toFixed(1) || '0.0'}
                   </div>
                   <div className="text-gray-500">Watts (Now)</div>
                 </div>
