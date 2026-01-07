@@ -22,7 +22,7 @@ public class SimpleMqttService implements MqttCallback {
     private MqttClient mqttClient;
     
     private static final String BROKER_URL = "tcp://broker.hivemq.com:1883";
-    private static final String CLIENT_ID = "spring-backend-" + System.currentTimeMillis();
+    private static final String CLIENT_ID = "spring-backend-simple-mqtt";
     private static final String[] TOPICS = {
         "koi/sensors/+/data",
         "koi/sensors/+/status",
