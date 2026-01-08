@@ -10,7 +10,7 @@ import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
 import ProfitLoss from '../components/ProfitLoss';
 import PondCamera from '../components/PondCamera';
-import BoatNavigation from '../components/BoatNavigation';
+import BoatNavigation from './BoatNavigation';
 import WaterQualityDashboard from '../components/WaterQualityDashboard';
 import WaterQualityTrends from '../components/WaterQualityTrends';
 import SensorCareCalibration from '../components/SensorCareCalibration';
@@ -24,6 +24,7 @@ import ManualFeeding from '../components/ManualFeeding';
 import FeedUsageLogs from '../components/FeedUsageLogs';
 import FeederHealthSafety from '../components/FeederHealthSafety';
 import BudgetForecasting from '../components/BudgetForecasting';
+import PowerManagement from '../components/PowerManagement';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -110,6 +111,8 @@ const Dashboard: React.FC = () => {
             <Route path="/budget-forecasting" element={<BudgetForecasting />} />
             <Route path="/device-management" element={<DeviceManagement />} />
             <Route path="/energy-monitor" element={<EnergyMonitor />} />
+            <Route path="/power-control" element={<PowerManagement />} />
+            <Route path="/power-schedules" element={<PowerManagement />} />
             <Route path="/realtime-current" element={<EnergyMonitor />} />
             <Route path="/calculate-kwh" element={<EnergyMonitor />} />
             <Route

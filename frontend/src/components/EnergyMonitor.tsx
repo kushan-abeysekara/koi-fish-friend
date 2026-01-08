@@ -13,8 +13,6 @@ export default function EnergyMonitor() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'realtime' | 'analysis'>('realtime');
-
-  // Fetch ponds on mount
   useEffect(() => {
     const fetchPonds = async () => {
       try {
@@ -56,20 +54,24 @@ export default function EnergyMonitor() {
         }
 
         const [latestRes, historicalRes] = await Promise.all([
-          sensorDataApi.getLatestByPond(selectedPondId),
-          sensorDataApi.getHistoricalData(selectedPondId, selectedHours)
+          sensorDataApi.getLatestEnergyByPond(selectedPondId),
+          sensorDataApi.getHistoricalEnergyData(selectedPondId, selectedHours)
         ]);
 
         if (latestRes.success && latestRes.data) {
           setLatestData(latestRes.data);
+          console.log('✅ Energy data loaded:', latestRes.data);
         } else {
           setLatestData(null);
+          console.warn('⚠️ No energy data available:', latestRes.message);
         }
 
         if (historicalRes.success && historicalRes.data) {
           setHistoricalData(historicalRes.data);
+          console.log('✅ Historical energy data loaded:', historicalRes.data.length, 'records');
         } else {
           setHistoricalData([]);
+          console.warn('⚠️ No historical energy data available');
         }
       } catch (err) {
         console.error('Error fetching data:', err);
@@ -80,7 +82,7 @@ export default function EnergyMonitor() {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Update every 5 seconds
+    const interval = setInterval(fetchData, 10000); // Update every 10 seconds to match ESP32 data
     return () => clearInterval(interval);
   }, [selectedPondId, selectedHours]);
 
@@ -285,6 +287,23 @@ export default function EnergyMonitor() {
                 🔄 Reset Energy
               </button>
             </div>
+          </div>
+
+          {/* Power Control Info Notice */}
+          <div className="bg-blue-50 border-l-4 border-blue-500 px-6 py-4 rounded-xl mb-6 flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <span className="text-3xl">🔌</span>
+              <div>
+                <p className="font-semibold text-blue-900">Looking for Power Control?</p>
+                <p className="text-sm text-blue-700">Manual power ON/OFF controls are now in a dedicated tab</p>
+              </div>
+            </div>
+            <a
+              href="/dashboard/power-control"
+              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-xl font-semibold transition-all shadow-lg hover:shadow-xl"
+            >
+              Go to Power Control →
+            </a>
           </div>
 
           {/* Real-Time Tab */}

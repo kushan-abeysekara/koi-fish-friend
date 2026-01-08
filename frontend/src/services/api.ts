@@ -607,6 +607,26 @@ export const sensorDeviceApi = {
     const response = await api.post<ApiResponse>(`/sensors/${deviceId}/reset-energy`, {});
     return response.data;
   },
+
+  powerOn: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/sensors/${deviceId}/power-on`, {});
+    return response.data;
+  },
+
+  powerOff: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/sensors/${deviceId}/power-off`, {});
+    return response.data;
+  },
+
+  setAutoMode: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/sensors/${deviceId}/auto-mode`, {});
+    return response.data;
+  },
+
+  setScheduleMode: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/sensors/${deviceId}/schedule-mode`, {});
+    return response.data;
+  },
 };
 
 // ==================== Sensor Data ====================
@@ -640,6 +660,18 @@ export const sensorDataApi = {
 
   getHistoricalData: async (pondId: number, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
     const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history`, {
+      params: { hours }
+    });
+    return response.data;
+  },
+
+  getLatestEnergyByPond: async (pondId: number): Promise<ApiResponse<SensorData>> => {
+    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest/energy`);
+    return response.data;
+  },
+
+  getHistoricalEnergyData: async (pondId: number, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history/energy`, {
       params: { hours }
     });
     return response.data;
@@ -913,6 +945,106 @@ export const taskApi = {
   // Delete task
   delete: async (id: string): Promise<ApiResponse> => {
     const response = await api.delete<ApiResponse>(`/tasks/${id}`);
+    return response.data;
+  },
+};
+
+// ==================== Power Schedule Management ====================
+export interface PowerSchedule {
+  id?: number;
+  deviceId: string;
+  name: string;
+  startTime: string; // HH:mm format
+  endTime: string;   // HH:mm format
+  daysOfWeek: boolean[]; // [Sun, Mon, Tue, Wed, Thu, Fri, Sat]
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Helper functions for days_of_week conversion
+const daysToString = (days: boolean[]): string => {
+  return days.map(d => d ? '1' : '0').join('');
+};
+
+const stringToDays = (str: string): boolean[] => {
+  return str.split('').map(c => c === '1');
+};
+
+export const powerScheduleApi = {
+  // Get all schedules for a device
+  getByDevice: async (deviceId: string): Promise<ApiResponse<PowerSchedule[]>> => {
+    const response = await api.get<ApiResponse<PowerSchedule[]>>(`/power-schedules/device/${deviceId}`);
+    // Convert daysOfWeek from string to boolean array
+    if (response.data.data && Array.isArray(response.data.data)) {
+      response.data.data = response.data.data.map((schedule: any) => ({
+        ...schedule,
+        daysOfWeek: typeof schedule.daysOfWeek === 'string' 
+          ? stringToDays(schedule.daysOfWeek) 
+          : schedule.daysOfWeek
+      }));
+    }
+    return response.data;
+  },
+
+  // Get schedule by ID
+  getById: async (id: number): Promise<ApiResponse<PowerSchedule>> => {
+    const response = await api.get<ApiResponse<PowerSchedule>>(`/power-schedules/${id}`);
+    // Convert daysOfWeek from string to boolean array
+    if (response.data.data && typeof (response.data.data as any).daysOfWeek === 'string') {
+      (response.data.data as any).daysOfWeek = stringToDays((response.data.data as any).daysOfWeek);
+    }
+    return response.data;
+  },
+
+  // Create new schedule
+  create: async (schedule: Omit<PowerSchedule, 'id' | 'createdAt' | 'updatedAt'>): Promise<ApiResponse<PowerSchedule>> => {
+    // Convert daysOfWeek from boolean array to string
+    const payload = {
+      ...schedule,
+      daysOfWeek: daysToString(schedule.daysOfWeek)
+    };
+    const response = await api.post<ApiResponse<PowerSchedule>>('/power-schedules', payload);
+    // Convert response back to boolean array
+    if (response.data.data && typeof (response.data.data as any).daysOfWeek === 'string') {
+      (response.data.data as any).daysOfWeek = stringToDays((response.data.data as any).daysOfWeek);
+    }
+    return response.data;
+  },
+
+  // Update schedule
+  update: async (id: number, schedule: Partial<PowerSchedule>): Promise<ApiResponse<PowerSchedule>> => {
+    // Convert daysOfWeek from boolean array to string if present
+    const payload = schedule.daysOfWeek 
+      ? { ...schedule, daysOfWeek: daysToString(schedule.daysOfWeek) }
+      : schedule;
+    const response = await api.put<ApiResponse<PowerSchedule>>(`/power-schedules/${id}`, payload);
+    // Convert response back to boolean array
+    if (response.data.data && typeof (response.data.data as any).daysOfWeek === 'string') {
+      (response.data.data as any).daysOfWeek = stringToDays((response.data.data as any).daysOfWeek);
+    }
+    return response.data;
+  },
+
+  // Toggle schedule enabled/disabled
+  toggle: async (id: number): Promise<ApiResponse<PowerSchedule>> => {
+    const response = await api.put<ApiResponse<PowerSchedule>>(`/power-schedules/${id}/toggle`);
+    // Convert response back to boolean array
+    if (response.data.data && typeof (response.data.data as any).daysOfWeek === 'string') {
+      (response.data.data as any).daysOfWeek = stringToDays((response.data.data as any).daysOfWeek);
+    }
+    return response.data;
+  },
+
+  // Delete schedule
+  delete: async (id: number): Promise<ApiResponse> => {
+    const response = await api.delete<ApiResponse>(`/power-schedules/${id}`);
+    return response.data;
+  },
+
+  // Sync schedules to ESP32 device
+  syncToDevice: async (deviceId: string): Promise<ApiResponse> => {
+    const response = await api.post<ApiResponse>(`/power-schedules/device/${deviceId}/sync`);
     return response.data;
   },
 };

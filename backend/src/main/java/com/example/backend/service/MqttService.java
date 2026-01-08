@@ -79,9 +79,11 @@ public class MqttService {
                 .orElseGet(() -> {
                     SensorDevice newDevice = new SensorDevice();
                     newDevice.setDeviceId(deviceId);
-                    // Set feeding device type by default for feed_device_001
+                    // Set device type by default based on device ID prefix
                     if (deviceId.contains("feed_device")) {
                         newDevice.setDeviceType(SensorDevice.DeviceType.FEEDING_MANAGEMENT);
+                    } else if (deviceId.startsWith("BM_")) {
+                        newDevice.setDeviceType(SensorDevice.DeviceType.BUDGET_MANAGEMENT);
                     }
                     return newDevice;
                 });
@@ -92,7 +94,7 @@ public class MqttService {
         device.setRssi(json.has("rssi") ? json.get("rssi").asInt() : null);
         device.setEnergyWh(json.has("energyWh") ? json.get("energyWh").asDouble() : 0.0);
         device.setLastSeen(LocalDateTime.now());
-        
+
         // Handle feeding device specific fields from status messages
         if (json.has("hopperLevel")) {
             device.setHopperLevel(json.get("hopperLevel").asDouble());
@@ -112,7 +114,7 @@ public class MqttService {
         if (json.has("feedingActive")) {
             device.setFeedingActive(json.get("feedingActive").asBoolean());
         }
-        
+
         // Handle device type (check both "type" and "deviceType" for compatibility)
         if (json.has("deviceType")) {
             String typeStr = json.get("deviceType").asText();
@@ -131,20 +133,22 @@ public class MqttService {
         }
 
         // DO NOT automatically assign/unassign based on pondId in status messages
-        // The pondId in status is informational only (shows what the ESP32 thinks it's assigned to)
+        // The pondId in status is informational only (shows what the ESP32 thinks it's
+        // assigned to)
         // Actual assignment is controlled only by explicit assign/unassign API calls
-        // This prevents devices from auto-reassigning themselves after manual unassignment
+        // This prevents devices from auto-reassigning themselves after manual
+        // unassignment
 
         deviceRepository.save(device);
-        
+
         if (deviceId.contains("feed_device")) {
-            System.out.println("Feeding device status updated: " + deviceId + 
+            System.out.println("Feeding device status updated: " + deviceId +
                     " - Status: online" +
                     " - Hopper: " + device.getHopperLevel() + "g (" + device.getHopperPercentage() + "%)" +
-                    " - Motor: " + device.getMotorStatus() + 
+                    " - Motor: " + device.getMotorStatus() +
                     " - Plate: " + device.getPlateSpeed() + " RPM");
         } else {
-            System.out.println("Device status updated: " + deviceId + " (Pond: " + 
+            System.out.println("Device status updated: " + deviceId + " (Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "None") + ")");
         }
     }
@@ -164,10 +168,13 @@ public class MqttService {
         // Check device type and store appropriate data
         if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY) {
             // Store water quality data
-            if (json.has("phValue")) data.setPhValue(json.get("phValue").asDouble());
-            if (json.has("turbidity")) data.setTurbidity(json.get("turbidity").asDouble());
-            if (json.has("waterQualityStatus")) data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
-            
+            if (json.has("phValue"))
+                data.setPhValue(json.get("phValue").asDouble());
+            if (json.has("turbidity"))
+                data.setTurbidity(json.get("turbidity").asDouble());
+            if (json.has("waterQualityStatus"))
+                data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
+
             System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
                     " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity());
@@ -192,23 +199,25 @@ public class MqttService {
             if (json.has("feedingActive")) {
                 device.setFeedingActive(json.get("feedingActive").asBoolean());
             }
-            
-            System.out.println("Feeding device data updated: " + deviceId + 
+
+            System.out.println("Feeding device data updated: " + deviceId +
                     " - Status: online" +
                     " - Hopper: " + device.getHopperLevel() + "g (" + device.getHopperPercentage() + "%)" +
-                    " - Motor: " + device.getMotorStatus() + 
+                    " - Motor: " + device.getMotorStatus() +
                     " - Plate: " + device.getPlateSpeed() + " RPM");
-                    
+
         } else if (json.has("voltage") && json.has("current") && json.has("power")) {
             // Store voltage/current data for budget management devices
             data.setVoltage(json.get("voltage").asDouble());
             data.setCurrent(json.get("current").asDouble());
             data.setPower(json.get("power").asDouble());
             data.setEnergyWh(json.get("energyWh").asDouble());
-            
-            System.out.println("Energy data saved: " + deviceId + " - Pond: " +
+            data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
+
+            System.out.println("⚡ Energy data received: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
-                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() + " P:" + data.getPower());
+                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() +
+                    " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");
         } else {
             // No relevant data to store
             device.setLastSeen(LocalDateTime.now());
@@ -217,11 +226,14 @@ public class MqttService {
         }
 
         // Save sensor data if applicable
-        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY || 
-            json.has("voltage")) {
+        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY ||
+                (json.has("voltage") && device.getPond() != null)) {
             dataRepository.save(data);
+            System.out.println("✅ Sensor data saved to database for device: " + deviceId);
+        } else if (json.has("voltage") && device.getPond() == null) {
+            System.out.println("⚠️ Energy device " + deviceId + " not assigned to pond - data not saved");
         }
-        
+
         device.setLastSeen(LocalDateTime.now());
         deviceRepository.save(device);
     }

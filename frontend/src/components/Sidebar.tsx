@@ -334,6 +334,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
               location.pathname.includes('/inventory') ||
               location.pathname.includes('/profit-loss') ||
               location.pathname.includes('/energy-monitor') ||
+              location.pathname.includes('/power-control') ||
+              location.pathname.includes('/power-schedules') ||
               location.pathname.includes('/budget-forecasting')
                 ? 'bg-slate-700 text-white'
                 : 'text-gray-300 hover:bg-slate-700 hover:text-white'
@@ -375,6 +377,20 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
                 active={location.pathname === '/dashboard/energy-monitor' || 
                        location.pathname === '/dashboard/realtime-current' || 
                        location.pathname === '/dashboard/calculate-kwh'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-power-off"></i>}
+                label="Power Control"
+                path="/dashboard/power-control"
+                active={location.pathname === '/dashboard/power-control'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-clock"></i>}
+                label="Power Schedules"
+                path="/dashboard/power-schedules"
+                active={location.pathname === '/dashboard/power-schedules'}
                 onNavigate={onClose}
               />
               <SubNavItem

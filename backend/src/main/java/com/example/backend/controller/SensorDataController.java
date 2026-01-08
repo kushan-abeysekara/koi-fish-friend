@@ -41,47 +41,49 @@ public class SensorDataController {
     public ResponseEntity<ApiResponse> getLatestDataByPond(@PathVariable Long pondId) {
         try {
             System.out.println("📊 Fetching latest water quality data for pond: " + pondId);
-            
+
             // Get latest water quality data only for this specific pond
-            SensorData data = dataRepository.findLatestByPondAndDeviceType(pondId, SensorDevice.DeviceType.WATER_QUALITY);
-            
+            SensorData data = dataRepository.findLatestByPondAndDeviceType(pondId,
+                    SensorDevice.DeviceType.WATER_QUALITY);
+
             if (data == null) {
                 System.out.println("⚠️ No water quality data found for pond: " + pondId);
-                return ResponseEntity.ok(new ApiResponse(true, 
-                    "No water quality sensor assigned to this pond or no data received yet", null));
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "No water quality sensor assigned to this pond or no data received yet", null));
             }
 
             // Verify pond assignment matches (extra safety check)
             if (data.getPond() == null || !data.getPond().getId().equals(pondId)) {
-                System.err.println("❌ Data pond mismatch! Requested pond:" + pondId + 
-                    " but data is for pond:" + (data.getPond() != null ? data.getPond().getId() : "null"));
-                return ResponseEntity.ok(new ApiResponse(true, 
-                    "Data integrity error - pond mismatch", null));
+                System.err.println("❌ Data pond mismatch! Requested pond:" + pondId +
+                        " but data is for pond:" + (data.getPond() != null ? data.getPond().getId() : "null"));
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "Data integrity error - pond mismatch", null));
             }
 
             // Verify at least one water quality parameter exists (no dummy data)
             if (data.getPhValue() == null && data.getTurbidity() == null && data.getAmmonia() == null) {
                 System.out.println("⚠️ Data exists but no valid water quality parameters for pond: " + pondId);
-                return ResponseEntity.ok(new ApiResponse(true, 
-                    "Sensor connected but not sending valid water quality data", null));
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "Sensor connected but not sending valid water quality data", null));
             }
 
             // Check if data is recent (within last 5 minutes)
             if (data.getTimestamp() != null) {
                 LocalDateTime fiveMinutesAgo = LocalDateTime.now().minusMinutes(5);
                 if (data.getTimestamp().isBefore(fiveMinutesAgo)) {
-                    System.out.println("⚠️ Sensor data is stale for pond " + pondId + 
-                        " (Last update: " + data.getTimestamp() + ")");
+                    System.out.println("⚠️ Sensor data is stale for pond " + pondId +
+                            " (Last update: " + data.getTimestamp() + ")");
                     // Still return data but with stale message
-                    return ResponseEntity.ok(new ApiResponse(true, 
-                        "Sensor data is stale (last update: " + data.getTimestamp() + 
-                        "). ESP32 may be offline.", data));
+                    return ResponseEntity.ok(new ApiResponse(true,
+                            "Sensor data is stale (last update: " + data.getTimestamp() +
+                                    "). ESP32 may be offline.",
+                            data));
                 }
             }
 
-            System.out.println("✅ Returning fresh water quality data for pond " + pondId + 
-                " from device " + data.getDevice().getDeviceId() +
-                " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " NH3:" + data.getAmmonia());
+            System.out.println("✅ Returning fresh water quality data for pond " + pondId +
+                    " from device " + data.getDevice().getDeviceId() +
+                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " NH3:" + data.getAmmonia());
             return ResponseEntity.ok(new ApiResponse(true, "Latest sensor data retrieved successfully", data));
         } catch (Exception e) {
             System.err.println("❌ Error retrieving latest sensor data: " + e.getMessage());
@@ -104,6 +106,80 @@ public class SensorDataController {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse(false, "Error retrieving historical sensor data: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/pond/{pondId}/latest/energy")
+    public ResponseEntity<ApiResponse> getLatestEnergyDataByPond(@PathVariable Long pondId) {
+        try {
+            System.out.println("⚡ Fetching latest energy data for pond: " + pondId);
+
+            // Get latest energy data for BUDGET_MANAGEMENT devices
+            SensorData data = dataRepository.findLatestByPondAndDeviceType(pondId,
+                    SensorDevice.DeviceType.BUDGET_MANAGEMENT);
+
+            if (data == null) {
+                System.out.println("⚠️ No energy monitoring device found for pond: " + pondId);
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "No energy monitoring device assigned to this pond or no data received yet", null));
+            }
+
+            // Verify pond assignment matches
+            if (data.getPond() == null || !data.getPond().getId().equals(pondId)) {
+                System.err.println("❌ Data pond mismatch! Requested pond:" + pondId +
+                        " but data is for pond:" + (data.getPond() != null ? data.getPond().getId() : "null"));
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "Data integrity error - pond mismatch", null));
+            }
+
+            // Check if data is recent (within last 30 seconds)
+            if (data.getTimestamp() != null) {
+                LocalDateTime thirtySecondsAgo = LocalDateTime.now().minusSeconds(30);
+                if (data.getTimestamp().isBefore(thirtySecondsAgo)) {
+                    System.out.println("⚠️ Energy data is stale for pond " + pondId +
+                            " (Last update: " + data.getTimestamp() + ")");
+                }
+            }
+
+            System.out.println("✅ Returning energy data for pond " + pondId +
+                    " from device " + data.getDevice().getDeviceId() +
+                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() +
+                    " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");
+            return ResponseEntity.ok(new ApiResponse(true, "Latest energy data retrieved successfully", data));
+        } catch (Exception e) {
+            System.err.println("❌ Error retrieving latest energy data: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving latest energy data: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/pond/{pondId}/history/energy")
+    public ResponseEntity<ApiResponse> getHistoricalEnergyData(
+            @PathVariable Long pondId,
+            @RequestParam(defaultValue = "24") int hours) {
+
+        try {
+            System.out.println("⚡ Fetching energy history for pond " + pondId + " (last " + hours + " hours)");
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+
+            // Get all energy data for this pond in the specified time range
+            List<SensorData> allData = dataRepository.findByPondIdAndTimestampAfter(pondId, since);
+
+            // Filter for BUDGET_MANAGEMENT devices only
+            List<SensorData> energyData = allData.stream()
+                    .filter(d -> d.getDevice() != null &&
+                            d.getDevice().getDeviceType() == SensorDevice.DeviceType.BUDGET_MANAGEMENT)
+                    .toList();
+
+            System.out.println("✅ Found " + energyData.size() + " energy data points for pond " + pondId);
+            return ResponseEntity
+                    .ok(new ApiResponse(true, "Historical energy data retrieved successfully", energyData));
+        } catch (Exception e) {
+            System.err.println("❌ Error retrieving historical energy data: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving historical energy data: " + e.getMessage(), null));
         }
     }
 }

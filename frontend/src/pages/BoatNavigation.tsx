@@ -21,7 +21,7 @@ const BoatNavigation: React.FC = () => {
 
   useEffect(() => {
     // Connect to MQTT broker with optimized settings
-    const client = mqtt.connect('ws://broker.hivemq.com:8000/mqtt', {
+    const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
       clientId: 'BoatControl_' + Math.random().toString(16).substr(2, 8),
       clean: true,
       keepalive: 30,
