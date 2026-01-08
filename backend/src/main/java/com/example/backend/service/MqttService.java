@@ -115,6 +115,17 @@ public class MqttService {
             device.setFeedingActive(json.get("feedingActive").asBoolean());
         }
 
+        // Handle power management fields (for BUDGET_MANAGEMENT devices)
+        if (json.has("relayState")) {
+            device.setRelayState(json.get("relayState").asText());
+        }
+        if (json.has("controlMode")) {
+            device.setControlMode(json.get("controlMode").asText());
+        }
+        if (json.has("scheduleCount")) {
+            device.setScheduleCount(json.get("scheduleCount").asInt());
+        }
+
         // Handle device type (check both "type" and "deviceType" for compatibility)
         if (json.has("deviceType")) {
             String typeStr = json.get("deviceType").asText();
@@ -214,24 +225,28 @@ public class MqttService {
             data.setEnergyWh(json.get("energyWh").asDouble());
             data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
 
-            System.out.println("⚡ Energy data received: " + deviceId + " - Pond: " +
-                    (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
+            // Always save energy data for BUDGET_MANAGEMENT devices
+            dataRepository.save(data);
+
+            System.out.println("⚡ Energy data saved: " + deviceId + " - Pond: " +
+                    (device.getPond() != null ? device.getPond().getId() : "Unassigned") +
                     " - V:" + data.getVoltage() + " I:" + data.getCurrent() +
                     " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");
+
+            // Update device energy counter
+            device.setEnergyWh(data.getEnergyWh());
         } else {
             // No relevant data to store
             device.setLastSeen(LocalDateTime.now());
             deviceRepository.save(device);
+            System.out.println("⚠️ No sensor data to save for device: " + deviceId);
             return;
         }
 
         // Save sensor data if applicable
-        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY ||
-                (json.has("voltage") && device.getPond() != null)) {
+        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY) {
             dataRepository.save(data);
-            System.out.println("✅ Sensor data saved to database for device: " + deviceId);
-        } else if (json.has("voltage") && device.getPond() == null) {
-            System.out.println("⚠️ Energy device " + deviceId + " not assigned to pond - data not saved");
+            System.out.println("✅ Water quality data saved to database for device: " + deviceId);
         }
 
         device.setLastSeen(LocalDateTime.now());

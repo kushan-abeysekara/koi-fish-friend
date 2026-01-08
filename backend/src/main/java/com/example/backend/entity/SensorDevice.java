@@ -6,14 +6,14 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "sensor_devices")
 public class SensorDevice {
-    
+
     public enum DeviceType {
         WATER_QUALITY,
         BUDGET_MANAGEMENT,
         FEEDING_MANAGEMENT,
         FISH_ANOMALY_DETECTION
     }
-    
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -37,22 +37,32 @@ public class SensorDevice {
 
     // Feeding device specific fields
     @Column(name = "hopper_level")
-    private Double hopperLevel;  // Current hopper weight in grams
-    
+    private Double hopperLevel; // Current hopper weight in grams
+
     @Column(name = "hopper_capacity")
-    private Double hopperCapacity;  // Maximum capacity in grams (20000g = 20kg)
-    
+    private Double hopperCapacity; // Maximum capacity in grams (20000g = 20kg)
+
     @Column(name = "hopper_percentage")
-    private Double hopperPercentage;  // Percentage of capacity
-    
+    private Double hopperPercentage; // Percentage of capacity
+
     @Column(name = "plate_speed")
-    private Double plateSpeed;  // NEMA17 stepper motor RPM
-    
+    private Double plateSpeed; // NEMA17 stepper motor RPM
+
     @Column(name = "motor_status")
-    private String motorStatus;  // "RUNNING" or "STOPPED"
-    
+    private String motorStatus; // "RUNNING" or "STOPPED"
+
     @Column(name = "feeding_active")
-    private Boolean feedingActive;  // Whether feeding is in progress
+    private Boolean feedingActive; // Whether feeding is in progress
+
+    // Power management fields (for BUDGET_MANAGEMENT devices)
+    @Column(name = "relay_state")
+    private String relayState; // "ON" or "OFF"
+
+    @Column(name = "control_mode")
+    private String controlMode; // "manual", "auto", or "schedule"
+
+    @Column(name = "schedule_count")
+    private Integer scheduleCount; // Number of synced schedules
 
     @Column(name = "last_seen")
     private LocalDateTime lastSeen;
@@ -197,5 +207,29 @@ public class SensorDevice {
 
     public void setFeedingActive(Boolean feedingActive) {
         this.feedingActive = feedingActive;
+    }
+
+    public String getRelayState() {
+        return relayState;
+    }
+
+    public void setRelayState(String relayState) {
+        this.relayState = relayState;
+    }
+
+    public String getControlMode() {
+        return controlMode;
+    }
+
+    public void setControlMode(String controlMode) {
+        this.controlMode = controlMode;
+    }
+
+    public Integer getScheduleCount() {
+        return scheduleCount;
+    }
+
+    public void setScheduleCount(Integer scheduleCount) {
+        this.scheduleCount = scheduleCount;
     }
 }

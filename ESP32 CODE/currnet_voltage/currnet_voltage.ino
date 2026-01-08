@@ -563,12 +563,12 @@ void publishStatusWithPond()
 // ===============================================================
 void publishSensorData()
 {
-    if (assignedPondId == 0)
-        return;
+    // Always publish sensor data - backend will handle pond assignment
+    // This ensures continuous data logging even if pond assignment isn't synced
 
     StaticJsonDocument<300> doc;
     doc["deviceId"] = deviceId;
-    doc["pondId"] = assignedPondId;
+    doc["pondId"] = assignedPondId; // Will be 0 if not assigned
     doc["voltage"] = voltage;
     doc["current"] = current;
     doc["power"] = power;

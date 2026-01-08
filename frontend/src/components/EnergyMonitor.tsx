@@ -13,6 +13,8 @@ export default function EnergyMonitor() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'realtime' | 'analysis'>('realtime');
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const [secondsSinceUpdate, setSecondsSinceUpdate] = useState(0);
   useEffect(() => {
     const fetchPonds = async () => {
       try {
@@ -60,6 +62,8 @@ export default function EnergyMonitor() {
 
         if (latestRes.success && latestRes.data) {
           setLatestData(latestRes.data);
+          setLastUpdateTime(new Date());
+          setSecondsSinceUpdate(0);
           console.log('✅ Energy data loaded:', latestRes.data);
         } else {
           setLatestData(null);
@@ -82,10 +86,21 @@ export default function EnergyMonitor() {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 10000); // Update every 10 seconds to match ESP32 data
+    const interval = setInterval(fetchData, 20000); // Update every 20 seconds
     return () => clearInterval(interval);
   }, [selectedPondId, selectedHours]);
+  // Update seconds counter every second
+  useEffect(() => {
+    if (!lastUpdateTime) return;
 
+    const timer = setInterval(() => {
+      const now = new Date();
+      const seconds = Math.floor((now.getTime() - lastUpdateTime.getTime()) / 1000);
+      setSecondsSinceUpdate(seconds);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [lastUpdateTime]);
   const handleResetEnergy = async () => {
     if (!device) return;
 
@@ -273,8 +288,17 @@ export default function EnergyMonitor() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-gray-400">Last Update</p>
+                <p className="text-sm text-gray-400">Data Timestamp</p>
                 <p className="font-semibold">{formatTimestamp(latestData.timestamp)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">Live Update</p>
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                  <p className="font-semibold">
+                    {secondsSinceUpdate < 20 ? `${secondsSinceUpdate}s ago` : 'Updating...'}
+                  </p>
+                </div>
               </div>
               <div>
                 <p className="text-sm text-gray-400">Status</p>
@@ -309,46 +333,76 @@ export default function EnergyMonitor() {
           {/* Real-Time Tab */}
           {activeTab === 'realtime' && (
             <>
+              {/* Real-Time Update Info */}
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-4 mb-6 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+                  <div>
+                    <p className="font-bold text-green-900">🔴 LIVE DATA - Updating Every 20 Seconds</p>
+                    <p className="text-sm text-green-700">
+                      Last updated: {lastUpdateTime ? lastUpdateTime.toLocaleTimeString() : 'Loading...'} 
+                      {secondsSinceUpdate > 0 && ` (${secondsSinceUpdate}s ago)`}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-green-800">Next update in</p>
+                  <p className="text-2xl font-bold text-green-600">{Math.max(0, 20 - secondsSinceUpdate)}s</p>
+                </div>
+              </div>
+
               {/* Live Metrics */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 {/* Voltage Card */}
-                <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                <div className={`bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-all ${secondsSinceUpdate < 1 ? 'ring-4 ring-blue-300 scale-105' : ''}`}>
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-4xl">⚡</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">VOLTAGE</span>
                   </div>
                   <div className="text-5xl font-bold mb-2">{latestData.voltage?.toFixed(1) || '0.0'}</div>
                   <div className="text-blue-100 text-lg">Volts</div>
+                  {secondsSinceUpdate < 1 && (
+                    <div className="mt-2 text-xs bg-white/20 px-2 py-1 rounded-full inline-block">🔴 LIVE</div>
+                  )}
                 </div>
 
                 {/* Current Card */}
-                <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                <div className={`bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-all ${secondsSinceUpdate < 1 ? 'ring-4 ring-green-300 scale-105' : ''}`}>
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-4xl">🔌</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">CURRENT</span>
                   </div>
                   <div className="text-5xl font-bold mb-2">{latestData.current?.toFixed(2) || '0.00'}</div>
                   <div className="text-green-100 text-lg">Amperes</div>
+                  {secondsSinceUpdate < 1 && (
+                    <div className="mt-2 text-xs bg-white/20 px-2 py-1 rounded-full inline-block">🔴 LIVE</div>
+                  )}
                 </div>
 
                 {/* Power Card */}
-                <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                <div className={`bg-gradient-to-br from-purple-500 to-purple-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-all ${secondsSinceUpdate < 1 ? 'ring-4 ring-purple-300 scale-105' : ''}`}>
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-4xl">⚙️</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">POWER</span>
                   </div>
                   <div className="text-5xl font-bold mb-2">{latestData.power?.toFixed(1) || '0.0'}</div>
                   <div className="text-purple-100 text-lg">Watts</div>
+                  {secondsSinceUpdate < 1 && (
+                    <div className="mt-2 text-xs bg-white/20 px-2 py-1 rounded-full inline-block">🔴 LIVE</div>
+                  )}
                 </div>
 
                 {/* Energy Card */}
-                <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                <div className={`bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-all ${secondsSinceUpdate < 1 ? 'ring-4 ring-orange-300 scale-105' : ''}`}>
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-4xl">💡</span>
                     <span className="text-sm font-semibold bg-white/20 px-3 py-1 rounded-full">ENERGY</span>
                   </div>
                   <div className="text-5xl font-bold mb-2">{((latestData.energyWh || 0) / 1000).toFixed(3)}</div>
                   <div className="text-orange-100 text-lg">kWh</div>
+                  {secondsSinceUpdate < 1 && (
+                    <div className="mt-2 text-xs bg-white/20 px-2 py-1 rounded-full inline-block">🔴 LIVE</div>
+                  )}
                 </div>
               </div>
 
