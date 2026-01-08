@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Activity } from 'lucide-react';
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle } from 'lucide-react';
 import mqtt from 'mqtt';
 
 const BoatNavigation: React.FC = () => {
@@ -7,6 +7,16 @@ const BoatNavigation: React.FC = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [currentCommand, setCurrentCommand] = useState('STOP');
   const [mqttClient, setMqttClient] = useState<mqtt.MqttClient | null>(null);
+  const [wsClient, setWsClient] = useState<WebSocket | null>(null);
+  const [connectionQuality, setConnectionQuality] = useState(0); // WiFi RSSI
+  const [lastHeartbeat, setLastHeartbeat] = useState(0);
+  const [connectionMode, setConnectionMode] = useState<'mqtt' | 'websocket' | 'hybrid' | 'none'>('none');
+  const [esp32IP, setEsp32IP] = useState<string>(''); // Auto-detected ESP32 IP
+  const [wsConnected, setWsConnected] = useState(false);
+  const [mqttConnected, setMqttConnected] = useState(false);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [activeCommand, setActiveCommand] = useState<string | null>(null);
+  const [commandInterval, setCommandInterval] = useState<NodeJS.Timeout | null>(null);
   const [sensorData, setSensorData] = useState({
     voltage: 0,
     distanceFront: 0,
@@ -20,19 +30,22 @@ const BoatNavigation: React.FC = () => {
   });
 
   useEffect(() => {
-    // Connect to MQTT broker with optimized settings
+    // MQTT: Always connect - runs in background
     const client = mqtt.connect('ws://broker.hivemq.com:8000/mqtt', {
       clientId: 'BoatControl_' + Math.random().toString(16).substr(2, 8),
       clean: true,
-      keepalive: 30,
-      reconnectPeriod: 1000
+      keepalive: 30,  // Increased from 15 for stability
+      reconnectPeriod: 2000,  // Slower reconnect for stability
+      connectTimeout: 8000,  // More time to connect
+      queueQoSZero: false
     });
 
     client.on('connect', () => {
-      console.log('Connected to MQTT broker');
-      setIsConnected(true);
+      console.log('🌐 MQTT Connected (background)');
+      setMqttConnected(true);
+      setReconnectAttempts(0);
       
-      // Subscribe to sensor data with QoS 0 for fastest delivery
+      // Subscribe to topics
       client.subscribe('koifish/boat/sensor', { qos: 0 });
       client.subscribe('koifish/boat/status', { qos: 0 });
     });
@@ -42,63 +55,259 @@ const BoatNavigation: React.FC = () => {
         const data = JSON.parse(message.toString());
         
         if (topic === 'koifish/boat/sensor') {
-          setSensorData({
-            voltage: data.voltage || 0,
-            distanceFront: data.distanceFront || 0,
-            distanceBack: data.distanceBack || 0,
-            distanceLeft: data.distanceLeft || 0,
-            distanceRight: data.distanceRight || 0,
-            angleX: data.angleX || 0,
-            angleY: data.angleY || 0,
-            temperature: data.temperature || 0,
-            mode: data.mode || 'manual'
-          });
+          // Only update if WebSocket is NOT connected (fallback mode)
+          if (!wsConnected) {
+            setSensorData({
+              voltage: data.voltage || 0,
+              distanceFront: data.distanceFront || 0,
+              distanceBack: data.distanceBack || 0,
+              distanceLeft: data.distanceLeft || 0,
+              distanceRight: data.distanceRight || 0,
+              angleX: data.angleX || 0,
+              angleY: data.angleY || 0,
+              temperature: data.temperature || 0,
+              mode: data.mode || 'manual'
+            });
+          }
+          
+          if (data.rssi) {
+            setConnectionQuality(data.rssi);
+          }
+        }
+        
+        if (topic === 'koifish/boat/status') {
+          if (data.type === 'heartbeat' || data.status === 'online') {
+            setLastHeartbeat(Date.now());
+          }
         }
       } catch (error) {
-        console.error('Error parsing MQTT message:', error);
+        console.error('MQTT parse error:', error);
       }
     });
 
     client.on('error', (error) => {
-      console.error('MQTT Error:', error);
-      setIsConnected(false);
+      console.warn('⚠️ MQTT Error (will retry):', error.message);
+      setMqttConnected(false);
+    });
+    
+    client.on('offline', () => {
+      console.log('📡 MQTT offline (reconnecting...)');
+      setMqttConnected(false);
     });
 
     client.on('close', () => {
+      console.warn('⚠️ MQTT connection closed');
       setIsConnected(false);
+    });
+    
+    client.on('offline', () => {
+      console.log('📡 MQTT offline (reconnecting...)');
+      setMqttConnected(false);
+    });
+    
+    client.on('reconnect', () => {
+      const attempts = reconnectAttempts + 1;
+      setReconnectAttempts(attempts);
+      console.log(`🔄 MQTT Reconnect attempt ${attempts}...`);
     });
 
     setMqttClient(client);
+    
+    // MQTT heartbeat: Send every 5 seconds (stable frequency)
+    const heartbeatInterval = setInterval(() => {
+      if (client && client.connected && !wsConnected) {
+        // Only send MQTT heartbeat if WebSocket is NOT active
+        const heartbeat = JSON.stringify({
+          command: 'HEARTBEAT',
+          timestamp: Date.now()
+        });
+        client.publish('koifish/boat/command', heartbeat, { qos: 0, retain: false });
+      }
+    }, 5000);
+    
+    // WebSocket: Try to connect to local ESP32 (Priority connection)
+    const connectWebSocket = () => {
+      const wsUrl = 'ws://192.168.8.100:81';
+      console.log('🔌 Attempting WebSocket:', wsUrl);
+      
+      try {
+        const ws = new WebSocket(wsUrl);
+        let pingInterval: NodeJS.Timeout;
+        
+        ws.onopen = () => {
+          console.log('⚡ WebSocket CONNECTED - Using LOCAL mode');
+          setWsConnected(true);
+          setWsClient(ws);
+          setEsp32IP('192.168.8.100');
+          
+          // WebSocket ping every 2 seconds to keep alive
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ command: 'PING' }));
+            }
+          }, 2000);
+        };
+        
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            // WebSocket has priority - always update sensor data
+            if (data.deviceId) {
+              setSensorData({
+                voltage: data.voltage || 0,
+                distanceFront: data.distanceFront || 0,
+                distanceBack: data.distanceBack || 0,
+                distanceLeft: data.distanceLeft || 0,
+                distanceRight: data.distanceRight || 0,
+                angleX: data.angleX || 0,
+                angleY: data.angleY || 0,
+                temperature: data.temperature || 0,
+                mode: data.mode || 'manual'
+              });
+              
+              if (data.rssi) {
+                setConnectionQuality(data.rssi);
+              }
+              
+              setLastHeartbeat(Date.now());
+            }
+          } catch (error) {
+            console.error('WebSocket parse error:', error);
+          }
+        };
+        
+        ws.onerror = () => {
+          console.log('❌ WebSocket error - will retry');
+          clearInterval(pingInterval);
+        };
+        
+        ws.onclose = () => {
+          console.log('🔌 WebSocket DISCONNECTED - Switching to MQTT');
+          setWsConnected(false);
+          setWsClient(null);
+          clearInterval(pingInterval);
+          
+          // Auto-reconnect after 10 seconds
+          setTimeout(connectWebSocket, 10000);
+        };
+        
+      } catch (error) {
+        console.log('⚠️ WebSocket unavailable, using MQTT');
+        setTimeout(connectWebSocket, 10000);
+      }
+    };
+    
+    // Start WebSocket connection after 1 second delay
+    const wsTimeout = setTimeout(connectWebSocket, 1000);
+    
+    // Update connection status based on what's available
+    const statusInterval = setInterval(() => {
+      if (wsConnected) {
+        setIsConnected(true);
+        setConnectionMode(mqttConnected ? 'hybrid' : 'websocket');
+      } else if (mqttConnected) {
+        setIsConnected(true);
+        setConnectionMode('mqtt');
+      } else {
+        setIsConnected(false);
+        setConnectionMode('none');
+      }
+    }, 1000);
 
     // Cleanup on unmount
     return () => {
+      clearInterval(heartbeatInterval);
+      clearInterval(statusInterval);
+      clearTimeout(wsTimeout);
+      
+      // Stop any active command intervals
+      if (commandInterval) {
+        clearInterval(commandInterval);
+      }
+      
       if (client) {
+        // Send final STOP
+        const stopCmd = JSON.stringify({ command: 'STOP', speed: 0 });
+        client.publish('koifish/boat/command', stopCmd, { qos: 0 });
         client.end();
       }
+      if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+        const stopCmd = JSON.stringify({ command: 'STOP', speed: 0 });
+        wsClient.send(stopCmd);
+        wsClient.close();
+      }
     };
-  }, []);
+  }, []); // Empty dependency - only run once on mount
 
   const sendCommand = (command: string) => {
-    if (!mqttClient || !isConnected) {
-      console.log('MQTT not connected');
-      return;
-    }
-
     const payload = JSON.stringify({
       command: command,
-      speed: speed
+      speed: speed,
+      timestamp: Date.now()
     });
 
-    mqttClient.publish('koifish/boat/command', payload, { qos: 0, retain: false });
-    setCurrentCommand(command);
-    console.log('Sent command:', payload);
+    let sent = false;
+
+    // PRIORITY 1: WebSocket (Local network - fastest ~20ms)
+    if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+      try {
+        wsClient.send(payload);
+        sent = true;
+        setCurrentCommand(command);
+        console.log('⚡ WebSocket:', command, speed);
+      } catch {
+        console.warn('WebSocket failed, trying MQTT');
+      }
+    }
+
+    // PRIORITY 2: MQTT (Always try as backup - ~150ms)
+    // Send MQTT regardless of WebSocket status for redundancy
+    if (!sent && mqttClient && mqttClient.connected) {
+      try {
+        mqttClient.publish('koifish/boat/command', payload, { qos: 0, retain: false });
+        sent = true;
+        setCurrentCommand(command);
+        console.log('🌐 MQTT:', command, speed);
+      } catch {
+        console.error('⚠️ Both connections failed');
+      }
+    }
+
+    if (!sent) {
+      console.warn('⚠️ No connection - command dropped:', command);
+      // NO BLOCKING ALERT - just log and continue
+    }
   };
 
   const handleMouseDown = (command: string) => {
+    // Clear any existing interval
+    if (commandInterval) {
+      clearInterval(commandInterval);
+    }
+    
+    // Send command immediately
+    setActiveCommand(command);
     sendCommand(command);
+    
+    // Keep sending command every 2 seconds to prevent watchdog timeout
+    const interval = setInterval(() => {
+      sendCommand(command);
+      console.log('🔁 Repeating command:', command);
+    }, 2000); // Send every 2 seconds (watchdog timeout is 4s)
+    
+    setCommandInterval(interval);
   };
 
   const handleMouseUp = () => {
+    // Stop repeating commands
+    if (commandInterval) {
+      clearInterval(commandInterval);
+      setCommandInterval(null);
+    }
+    
+    // Send STOP command
+    setActiveCommand(null);
     sendCommand('STOP');
   };
 
@@ -109,6 +318,13 @@ const BoatNavigation: React.FC = () => {
   };
 
   const handleEmergencyStop = () => {
+    // Stop any active command intervals
+    if (commandInterval) {
+      clearInterval(commandInterval);
+      setCommandInterval(null);
+    }
+    
+    setActiveCommand(null);
     sendCommand('STOP');
     setSpeed(0);
   };
@@ -118,6 +334,15 @@ const BoatNavigation: React.FC = () => {
     if (percentage < 33) return 'Slow';
     if (percentage < 67) return 'Medium';
     return 'Fast';
+  };
+  
+  const getConnectionQualityLabel = () => {
+    // RSSI ranges: -30 (excellent) to -90 (poor)
+    if (connectionQuality >= -50) return { label: 'Excellent', color: 'text-green-500' };
+    if (connectionQuality >= -60) return { label: 'Good', color: 'text-blue-500' };
+    if (connectionQuality >= -70) return { label: 'Fair', color: 'text-yellow-500' };
+    if (connectionQuality >= -80) return { label: 'Poor', color: 'text-orange-500' };
+    return { label: 'Very Poor', color: 'text-red-500' };
   };
 
   return (
@@ -142,12 +367,30 @@ const BoatNavigation: React.FC = () => {
             {isConnected ? (
               <>
                 <Wifi className="text-green-500 w-6 h-6" />
-                <span className="text-green-500 font-semibold">Connected</span>
+                <div className="text-right">
+                  <span className="text-green-500 font-semibold block">
+                    Connected
+                    {connectionMode === 'hybrid' && <span className="ml-1 text-xs font-bold">🔄 HYBRID</span>}
+                    {connectionMode === 'websocket' && <span className="ml-1 text-xs font-bold">⚡ LOCAL</span>}
+                    {connectionMode === 'mqtt' && <span className="ml-1 text-xs">🌐 MQTT</span>}
+                  </span>
+                  {connectionQuality !== 0 && (
+                    <span className={`text-xs ${getConnectionQualityLabel().color}`}>
+                      {getConnectionQualityLabel().label} ({connectionQuality} dBm)
+                    </span>
+                  )}
+                  {esp32IP && (
+                    <span className="text-xs text-gray-500 block">{esp32IP}</span>
+                  )}
+                </div>
               </>
             ) : (
               <>
-                <WifiOff className="text-red-500 w-6 h-6" />
-                <span className="text-red-500 font-semibold">Disconnected</span>
+                <WifiOff className="text-orange-500 w-6 h-6" />
+                <div className="text-right">
+                  <span className="text-orange-500 font-semibold block">Connecting...</span>
+                  <span className="text-xs text-orange-400">Auto-stop in 4s</span>
+                </div>
               </>
             )}
           </div>
