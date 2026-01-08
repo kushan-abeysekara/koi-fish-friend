@@ -1,6 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video, VideoOff } from 'lucide-react';
 import mqtt from 'mqtt';
+import io from 'socket.io-client';
+
+interface FishDetection {
+  id: number;
+  health?: {
+    class: string;
+    confidence: number;
+    is_critical: boolean;
+    needs_attention: boolean;
+  };
+}
+
+interface DetectionUpdateData {
+  fps: number;
+  fish_count: number;
+  detections: FishDetection[];
+  frame: string;
+}
 
 const BoatNavigation: React.FC = () => {
   const [speed, setSpeed] = useState(150); // Default 150 for good motor response
@@ -9,14 +27,25 @@ const BoatNavigation: React.FC = () => {
   const [mqttClient, setMqttClient] = useState<mqtt.MqttClient | null>(null);
   const [wsClient, setWsClient] = useState<WebSocket | null>(null);
   const [connectionQuality, setConnectionQuality] = useState(0); // WiFi RSSI
-  const [lastHeartbeat, setLastHeartbeat] = useState(0);
   const [connectionMode, setConnectionMode] = useState<'mqtt' | 'websocket' | 'hybrid' | 'none'>('none');
   const [esp32IP, setEsp32IP] = useState<string>(''); // Auto-detected ESP32 IP
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
-  const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [commandInterval, setCommandInterval] = useState<NodeJS.Timeout | null>(null);
+  
+  // Camera feed states
+  const [cameraConnected, setCameraConnected] = useState(false);
+  const [cameraFPS, setCameraFPS] = useState(0);
+  const [fishCount, setFishCount] = useState(0);
+  const [detections, setDetections] = useState<FishDetection[]>([]);
+  const [cameraFrame, setCameraFrame] = useState<string>('');
+  const cameraSocketRef = useRef<ReturnType<typeof io> | null>(null);
+  const CAMERA_SERVER_URL = 'http://192.168.8.101:5000'; // Raspberry Pi IP
+  
+  // Camera performance mode
+  const [cameraMode, setCameraMode] = useState<'quality' | 'balanced' | 'performance'>('balanced');
+  
   const [sensorData, setSensorData] = useState({
     voltage: 0,
     distanceFront: 0,
@@ -76,9 +105,7 @@ const BoatNavigation: React.FC = () => {
         }
         
         if (topic === 'koifish/boat/status') {
-          if (data.type === 'heartbeat' || data.status === 'online') {
-            setLastHeartbeat(Date.now());
-          }
+          // Heartbeat received
         }
       } catch (error) {
         console.error('MQTT parse error:', error);
@@ -169,8 +196,6 @@ const BoatNavigation: React.FC = () => {
               if (data.rssi) {
                 setConnectionQuality(data.rssi);
               }
-              
-              setLastHeartbeat(Date.now());
             }
           } catch (error) {
             console.error('WebSocket parse error:', error);
@@ -192,7 +217,7 @@ const BoatNavigation: React.FC = () => {
           setTimeout(connectWebSocket, 10000);
         };
         
-      } catch (error) {
+      } catch {
         console.log('⚠️ WebSocket unavailable, using MQTT');
         setTimeout(connectWebSocket, 10000);
       }
@@ -239,6 +264,109 @@ const BoatNavigation: React.FC = () => {
       }
     };
   }, []); // Empty dependency - only run once on mount
+
+  // Camera Feed WebSocket Connection
+  useEffect(() => {
+    console.log('🎥 Connecting to camera server:', CAMERA_SERVER_URL);
+    
+    const socket = io(CAMERA_SERVER_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 2000,
+      reconnectionAttempts: 10
+    });
+
+    socket.on('connect', () => {
+      console.log('✅ Camera server connected');
+      setCameraConnected(true);
+      
+      // Request optimized settings based on mode
+      const config = {
+        quality: { width: 960, height: 540, quality: 90 },
+        balanced: { width: 640, height: 360, quality: 75 },
+        performance: { width: 480, height: 270, quality: 60 }
+      };
+      
+      const settings = config[cameraMode];
+      
+      // Send configuration request
+      fetch(`${CAMERA_SERVER_URL}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      }).catch(err => console.warn('Could not update config:', err));
+      
+      // Start streaming
+      socket.emit('start_stream');
+    });
+
+    socket.on('disconnect', () => {
+      console.log('❌ Camera server disconnected');
+      setCameraConnected(false);
+      setCameraFrame('');
+      setFishCount(0);
+      setDetections([]);
+    });
+
+    socket.on('detection_update', (data: DetectionUpdateData) => {
+      try {
+        // Update FPS and fish count
+        setCameraFPS(data.fps || 0);
+        setFishCount(data.fish_count || 0);
+        setDetections(data.detections || []);
+        
+        // Update frame (base64 JPEG)
+        if (data.frame) {
+          setCameraFrame(`data:image/jpeg;base64,${data.frame}`);
+        }
+        
+        // Check for critical health alerts
+        if (data.detections) {
+          data.detections.forEach((fish) => {
+            if (fish.health && fish.health.is_critical) {
+              console.warn('⚠️ CRITICAL: Dead fish detected!', fish);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error processing camera data:', error);
+      }
+    });
+
+    socket.on('connect_error', (error: Error) => {
+      console.warn('⚠️ Camera connection error:', error.message);
+    });
+
+    cameraSocketRef.current = socket;
+
+    return () => {
+      console.log('🔌 Disconnecting from camera server');
+      socket.emit('stop_stream');
+      socket.disconnect();
+    };
+  }, [cameraMode]);
+
+  const handleCameraModeChange = (mode: 'quality' | 'balanced' | 'performance') => {
+    setCameraMode(mode);
+    // Reconnect with new settings
+    if (cameraSocketRef.current) {
+      cameraSocketRef.current.disconnect();
+      cameraSocketRef.current.connect();
+    }
+  };
+
+  const getHealthEmoji = (healthClass: string) => {
+    switch (healthClass) {
+      case 'healthy': return '🟢';
+      case 'bacterial': return '🟠';
+      case 'fungal': return '🟣';
+      case 'parasitic': return '🔵';
+      case 'white_tail': return '🟡';
+      case 'dead': return '🔴';
+      default: return '⚪';
+    }
+  };
+
 
   const sendCommand = (command: string) => {
     const payload = JSON.stringify({
@@ -287,7 +415,6 @@ const BoatNavigation: React.FC = () => {
     }
     
     // Send command immediately
-    setActiveCommand(command);
     sendCommand(command);
     
     // Keep sending command every 2 seconds to prevent watchdog timeout
@@ -307,7 +434,6 @@ const BoatNavigation: React.FC = () => {
     }
     
     // Send STOP command
-    setActiveCommand(null);
     sendCommand('STOP');
   };
 
@@ -324,7 +450,6 @@ const BoatNavigation: React.FC = () => {
       setCommandInterval(null);
     }
     
-    setActiveCommand(null);
     sendCommand('STOP');
     setSpeed(0);
   };
@@ -406,26 +531,151 @@ const BoatNavigation: React.FC = () => {
               <p className="text-gray-400 text-sm">Boat POV Camera</p>
             </div>
             <div className="relative aspect-video bg-gray-900 flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-24 h-24 mx-auto mb-4 opacity-50">
-                  <svg viewBox="0 0 24 24" fill="none" className="text-gray-600">
-                    <path d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+              {cameraConnected && cameraFrame ? (
+                <>
+                  {/* Live Video Feed with Detections */}
+                  <img 
+                    src={cameraFrame} 
+                    alt="Live Camera Feed" 
+                    className="w-full h-full object-contain"
+                  />
+                  
+                  {/* Detection Overlays */}
+                  <div className="absolute top-4 right-4 space-y-2">
+                    {detections.map((fish, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`px-3 py-1 rounded-lg text-sm font-semibold shadow-lg ${
+                          fish.health?.is_critical 
+                            ? 'bg-red-600 text-white animate-pulse' 
+                            : fish.health?.needs_attention
+                            ? 'bg-orange-500 text-white'
+                            : 'bg-green-500 bg-opacity-80 text-white'
+                        }`}
+                      >
+                        {getHealthEmoji(fish.health?.class || 'unknown')} Fish #{fish.id}: {fish.health?.class || 'detecting'} ({((fish.health?.confidence ?? 0) * 100).toFixed(0)}%)
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Live Indicator */}
+                  <div className="absolute top-4 left-4 space-y-2">
+                    <div className="bg-red-600 text-white px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2 shadow-lg">
+                      <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+                      <span>LIVE</span>
+                    </div>
+                    
+                    {/* Performance Mode Selector */}
+                    <div className="bg-black bg-opacity-70 text-white px-3 py-2 rounded-lg text-xs space-y-1">
+                      <div className="text-gray-300 mb-1">Quality Mode:</div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleCameraModeChange('performance')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'performance' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          ⚡ Fast
+                        </button>
+                        <button
+                          onClick={() => handleCameraModeChange('balanced')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'balanced' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          ⚖️ Balanced
+                        </button>
+                        <button
+                          onClick={() => handleCameraModeChange('quality')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'quality' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          🎯 Quality
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Stats Bar */}
+                  <div className="absolute bottom-4 left-4 right-4 flex gap-2">
+                    <div className={`px-3 py-1 rounded text-sm flex items-center gap-2 ${
+                      cameraFPS < 10 
+                        ? 'bg-red-600 bg-opacity-90 text-white font-bold'
+                        : cameraFPS < 15
+                        ? 'bg-yellow-600 bg-opacity-90 text-white'
+                        : 'bg-black bg-opacity-70 text-white'
+                    }`}>
+                      <Video size={16} />
+                      <span>{cameraFPS.toFixed(1)} FPS</span>
+                      {cameraFPS < 10 && <span>⚠️</span>}
+                    </div>
+                    <div className="bg-black bg-opacity-70 text-white px-3 py-1 rounded text-sm flex items-center gap-2">
+                      <span>🐟 {fishCount} Fish</span>
+                    </div>
+                    {detections.some(d => d.health?.is_critical) && (
+                      <div className="bg-red-600 text-white px-3 py-1 rounded text-sm font-bold animate-pulse">
+                        ⚠️ CRITICAL ALERT
+                      </div>
+                    )}
+                    {cameraFPS < 10 && (
+                      <div className="bg-orange-600 text-white px-3 py-1 rounded text-sm">
+                        💡 Try ⚡ Fast mode
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center p-6">
+                  <div className="w-24 h-24 mx-auto mb-4 opacity-50">
+                    {cameraConnected ? (
+                      <Video className="text-cyan-500 w-full h-full" />
+                    ) : (
+                      <VideoOff className="text-gray-600 w-full h-full" />
+                    )}
+                  </div>
+                  <p className="text-gray-400 text-lg mb-2">
+                    {cameraConnected ? 'Waiting for camera stream...' : 'Camera Server Not Connected'}
+                  </p>
+                  <p className="text-gray-500 text-sm">
+                    {cameraConnected 
+                      ? 'Initializing fish detection models...' 
+                      : `Trying to connect to ${CAMERA_SERVER_URL}`
+                    }
+                  </p>
+                  {!cameraConnected && (
+                    <div className="mt-4">
+                      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+                      <p className="text-sm text-gray-500 mt-2">Reconnecting...</p>
+                    </div>
+                  )}
                 </div>
-                <p className="text-gray-400 text-lg mb-2">Camera Stream Not Available</p>
-                <p className="text-gray-500 text-sm">Camera server is not running on port 5000</p>
-                <button className="mt-4 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-md transition-colors">
-                  Retry Connection
-                </button>
-              </div>
-              
-              <div className="absolute bottom-4 left-4 bg-black bg-opacity-70 text-white px-3 py-1 rounded text-sm flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-gray-400"></div>
-                <span>Quality: HD</span>
-              </div>
+              )}
             </div>
-            <div className="bg-gray-700 px-4 py-2 text-center text-gray-400 text-sm">
-              ⌨️ Keyboard: Arrow Keys or WASD + Space to Stop
+            <div className="bg-gray-700 px-4 py-2 text-center text-sm">
+              <div className="flex items-center justify-center gap-4 text-gray-300">
+                <span className="flex items-center gap-2">
+                  {cameraConnected ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                      <span>Camera: Connected</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                      <span>Camera: Disconnected</span>
+                    </>
+                  )}
+                </span>
+                <span>|</span>
+                <span>⌨️ Arrow Keys or WASD + Space to Stop</span>
+              </div>
             </div>
           </div>
         </div>
