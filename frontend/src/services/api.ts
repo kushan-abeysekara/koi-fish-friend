@@ -1,16 +1,13 @@
 import axios, { type AxiosInstance } from 'axios';
 
 // Use environment variable or fallback to localhost
-const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 // Create a pre-configured Axios instance
 const api: AxiosInstance = axios.create({
   baseURL: `${API_URL}/api`,
   headers: {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache, no-store, must-revalidate',
-    'Pragma': 'no-cache',
-    'Expires': '0'
   },
 });
 
@@ -624,7 +621,7 @@ export interface SensorData {
   // Water quality parameters
   phValue?: number;
   turbidity?: number;
-  ammonia?: number;  // NH3 in PPM
+  airQuality?: number;
   waterQualityStatus?: string;
   status: string;
   timestamp: string;
@@ -632,22 +629,18 @@ export interface SensorData {
 
 export const sensorDataApi = {
   getByPond: async (pondId: number): Promise<ApiResponse<SensorData[]>> => {
-    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}`, {
-      params: { _t: Date.now() } // Cache buster for real-time data
-    });
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}`);
     return response.data;
   },
 
   getLatestByPond: async (pondId: number): Promise<ApiResponse<SensorData>> => {
-    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest`, {
-      params: { _t: Date.now() } // Cache buster for real-time data
-    });
+    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/pond/${pondId}/latest`);
     return response.data;
   },
 
   getHistoricalData: async (pondId: number, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
     const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history`, {
-      params: { hours, _t: Date.now() } // Cache buster for real-time data
+      params: { hours }
     });
     return response.data;
   },

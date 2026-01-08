@@ -166,12 +166,11 @@ public class MqttService {
             // Store water quality data
             if (json.has("phValue")) data.setPhValue(json.get("phValue").asDouble());
             if (json.has("turbidity")) data.setTurbidity(json.get("turbidity").asDouble());
-            if (json.has("airQuality")) data.setAirQuality(json.get("airQuality").asDouble());
             if (json.has("waterQualityStatus")) data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
             
             System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
-                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() + " Air:" + data.getAirQuality());
+                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity());
         } else if (device.getDeviceType() == SensorDevice.DeviceType.FEEDING_MANAGEMENT) {
             // Store feeding device status
             device.setStatus("online");

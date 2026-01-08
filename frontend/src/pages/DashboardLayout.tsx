@@ -10,7 +10,7 @@ import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
 import ProfitLoss from '../components/ProfitLoss';
 import PondCamera from '../components/PondCamera';
-import BoatNavigation from './BoatNavigation';
+import BoatNavigation from '../components/BoatNavigation';
 import WaterQualityDashboard from '../components/WaterQualityDashboard';
 import WaterQualityTrends from '../components/WaterQualityTrends';
 import SensorCareCalibration from '../components/SensorCareCalibration';
