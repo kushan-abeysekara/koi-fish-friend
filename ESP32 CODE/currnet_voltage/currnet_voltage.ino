@@ -493,7 +493,8 @@ void reconnectMQTT()
 
         String willTopic = statusTopic;
         String willMsg = "{\"deviceId\":\"" + deviceId +
-                         "\",\"status\":\"offline\"}";
+                         "\",\"deviceType\":\"BUDGET_MANAGEMENT\"" +
+                         ",\"status\":\"offline\"}";
 
         if (client.connect(clientId.c_str(), mqtt_user, mqtt_password,
                            willTopic.c_str(), 1, true, willMsg.c_str()))

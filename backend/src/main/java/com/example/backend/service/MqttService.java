@@ -324,7 +324,7 @@ public class MqttService {
     // Check for offline devices every 2 seconds for real-time detection
     @Scheduled(fixedRate = 2000)
     public void checkOfflineDevices() {
-        LocalDateTime timeout = LocalDateTime.now().minusSeconds(15); // 15 second timeout (3x status interval)
+        LocalDateTime timeout = LocalDateTime.now().minusSeconds(10); // 10 second timeout (2x status interval)
         List<SensorDevice> allDevices = deviceRepository.findAll();
 
         for (SensorDevice device : allDevices) {

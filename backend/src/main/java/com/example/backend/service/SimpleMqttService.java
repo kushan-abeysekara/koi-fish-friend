@@ -6,11 +6,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.eclipse.paho.client.mqttv3.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 public class SimpleMqttService implements MqttCallback {
@@ -146,6 +148,23 @@ public class SimpleMqttService implements MqttCallback {
         
         deviceRepository.save(device);
         System.out.println("✓ Device updated: " + deviceId + " - Status: online - Hopper: " + device.getHopperLevel() + "g");
+    }
+    
+    // Check for offline devices every 2 seconds for real-time detection
+    @Scheduled(fixedRate = 2000)
+    public void checkOfflineDevices() {
+        LocalDateTime timeout = LocalDateTime.now().minusSeconds(10); // 10 second timeout (2x status interval)
+        List<SensorDevice> allDevices = deviceRepository.findAll();
+
+        for (SensorDevice device : allDevices) {
+            if (device.getLastSeen() != null && device.getLastSeen().isBefore(timeout)) {
+                if (!"offline".equals(device.getStatus())) {
+                    device.setStatus("offline");
+                    deviceRepository.save(device);
+                    System.out.println("Device marked offline due to timeout: " + device.getDeviceId());
+                }
+            }
+        }
     }
     
     public void publishMessage(String topic, String payload) {
