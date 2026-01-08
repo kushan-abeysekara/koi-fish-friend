@@ -19,6 +19,8 @@
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <WebSocketsServer.h>  // Hybrid: Local WebSocket for same network
+#include <ArduinoJson.h>       // JSON parsing for both MQTT and WebSocket
 
 // ==================== PIN DEFINITIONS ====================
 
@@ -73,8 +75,8 @@
 
 // ==================== CONSTANTS ====================
 
-#define VOLTAGE_THRESHOLD 8.5       // Voltage threshold for relay
-#define VOLTAGE_DIVIDER_RATIO 5.0   // Adjust based on your voltage divider
+#define VOLTAGE_THRESHOLD 5.5       // Voltage threshold for relay
+#define VOLTAGE_DIVIDER_RATIO 7.0   // Adjust based on your voltage divider
 #define OBSTACLE_DISTANCE_CM 30     // Obstacle detection distance
 #define BALANCE_ANGLE_THRESHOLD 15  // Angle threshold for balance control
 
@@ -98,6 +100,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_MOSI, OLED_CLK,
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+WebSocketsServer wsServer(81);  // WebSocket on port 81 for local direct communication
+
+// Hybrid Communication Stats
+int wsConnectedClients = 0;
+bool mqttConnected = false;
+String lastCommandSource = "none";  // "mqtt" or "websocket"
+unsigned long lastWiFiCheck = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 
 // ==================== GLOBAL VARIABLES ====================
 
@@ -124,11 +134,21 @@ bool autoMode = false;  // false = manual MQTT control, true = auto obstacle avo
 int remoteSpeed = 150;  // Speed from remote control (0-255) - default 150 for good motor response
 String currentCommand = "STOP";
 
+// Connection & Safety
+unsigned long lastHeartbeat = 0;
+unsigned long lastCommandReceived = 0;
+const unsigned long HEARTBEAT_TIMEOUT = 4000;  // 4 seconds - stop if no command received
+const unsigned long HEARTBEAT_INTERVAL = 1000; // Send heartbeat every 1 second
+int reconnectAttempts = 0;
+const int MAX_RECONNECT_ATTEMPTS = 3;  // Reduced for faster failover
+
 // Timing
 unsigned long lastSensorRead = 0;
 unsigned long lastDisplayUpdate = 0;
+unsigned long lastWatchdog = 0;
 const unsigned long SENSOR_READ_INTERVAL = 100;   // 100ms
 const unsigned long DISPLAY_UPDATE_INTERVAL = 500; // 500ms
+const unsigned long WATCHDOG_INTERVAL = 100;      // 100ms - check connection frequently
 
 // ==================== SETUP ====================
 
@@ -245,29 +265,84 @@ void setup() {
   // Connect to WiFi
   connectWiFi();
   
-  // Setup MQTT
+  // Setup MQTT with optimized settings
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(15);  // Faster keepalive for quick disconnection detection
+  mqttClient.setSocketTimeout(5);  // 5 second socket timeout
+  
+  // Setup WebSocket server for hybrid local communication
+  wsServer.begin();
+  wsServer.onEvent(webSocketEvent);
+  Serial.println("✓ WebSocket server started on port 81");
+  Serial.print("  Local access: ws://");
+  Serial.println(WiFi.localIP());
+  
+  // Initialize safety timers
+  lastHeartbeat = millis();
+  lastCommandReceived = millis();
+  lastWatchdog = millis();
+  lastWiFiCheck = millis();
   
   Serial.println("Initialization complete!");
+  Serial.println("Safety: Watchdog enabled (4s timeout)");
+  Serial.println("Hybrid Mode: MQTT + WebSocket (local network)");
   Serial.println("========================================");
 }
 
 // ==================== MAIN LOOP ====================
 
 void loop() {
-  // Maintain WiFi connection
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+  unsigned long currentMillis = millis();
+  
+  // WebSocket server loop - handle local connections
+  wsServer.loop();
+  
+  // Maintain WiFi connection with periodic checks
+  if (currentMillis - lastWiFiCheck >= WIFI_CHECK_INTERVAL) {
+    lastWiFiCheck = currentMillis;
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("⚠️ WiFi disconnected! Reconnecting...");
+      connectWiFi();
+      mqttConnected = false;
+    }
   }
   
   // Maintain MQTT connection
   if (!mqttClient.connected()) {
+    mqttConnected = false;
     reconnectMQTT();
+  } else {
+    mqttConnected = true;
+    reconnectAttempts = 0;  // Reset on successful connection
   }
   mqttClient.loop();
   
-  unsigned long currentMillis = millis();
+  // CRITICAL: Watchdog timer - Auto-stop if no command received
+  if (currentMillis - lastWatchdog >= WATCHDOG_INTERVAL) {
+    lastWatchdog = currentMillis;
+    
+    // Stop if no command for HEARTBEAT_TIMEOUT (now any connection counts)
+    bool anyConnection = mqttConnected || (wsConnectedClients > 0);
+    if (!anyConnection || (currentMillis - lastCommandReceived >= HEARTBEAT_TIMEOUT)) {
+      if (currentCommand != "STOP") {
+        Serial.print("⚠️ WATCHDOG: ");
+        if (!anyConnection) {
+          Serial.println("No connection - EMERGENCY STOP!");
+        } else {
+          Serial.println("Command timeout (4s) - EMERGENCY STOP!");
+        }
+        stopMotors();
+        autoMode = false;  // Disable auto mode for safety
+      }
+    }
+  }
+  
+  // Send heartbeat to frontend
+  if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    lastHeartbeat = currentMillis;
+    publishHeartbeat();
+  }
   
   // Read sensors at regular intervals
   if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL) {
@@ -284,14 +359,15 @@ void loop() {
     lastDisplayUpdate = currentMillis;
     printSensorData();
     updateDisplay();
-    publishSensorData();
+    publishSensorData();        // MQTT publishing
+    broadcastSensorDataWS();    // WebSocket broadcasting (hybrid)
   }
   
   // Control relay based on voltage
   controlRelay();
   
-  // Auto mode: balance and obstacle avoidance
-  if (autoMode) {
+  // Auto mode: balance and obstacle avoidance (only if connected)
+  if (autoMode && mqttConnected) {
     balanceControl();
     obstacleAvoidance();
   }
@@ -684,27 +760,47 @@ void connectWiFi() {
 void reconnectMQTT() {
   if (WiFi.status() != WL_CONNECTED) return;
   
-  int attempts = 0;
-  while (!mqttClient.connected() && attempts < 3) {
-    Serial.print("Connecting to MQTT...");
+  // Don't retry too many times - prevent blocking
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    Serial.println("⚠️ Max reconnect attempts reached. Waiting...");
+    delay(5000);
+    reconnectAttempts = 0;
+    return;
+  }
+  
+  if (!mqttClient.connected()) {
+    Serial.print("Connecting to MQTT (attempt ");
+    Serial.print(reconnectAttempts + 1);
+    Serial.print("/");
+    Serial.print(MAX_RECONNECT_ATTEMPTS);
+    Serial.print(")...");
     
     String clientId = "ESP32Boat_" + String(random(0xffff), HEX);
     
-    if (mqttClient.connect(clientId.c_str())) {
-      Serial.println(" Connected!");
+    // Use clean session and last will for disconnect detection
+    if (mqttClient.connect(clientId.c_str(), NULL, NULL, mqtt_topic_status, 0, true, "{\"status\":\"offline\"}")) {
+      Serial.println(" ✓ Connected!");
       mqttClient.subscribe(mqtt_topic_command, 0); // QoS 0 for fastest delivery
       Serial.print("Subscribed to: ");
       Serial.println(mqtt_topic_command);
       
       // Publish online status
-      String statusMsg = "{\"deviceId\":\"" + deviceId + "\",\"status\":\"online\",\"mode\":\"" + (autoMode ? "auto" : "manual") + "\"}";
-      mqttClient.publish(mqtt_topic_status, statusMsg.c_str());
+      String statusMsg = "{\"deviceId\":\"" + deviceId + "\",\"status\":\"online\",\"mode\":\"" + (autoMode ? "auto" : "manual") + "\",\"rssi\":" + String(WiFi.RSSI()) + "}";
+      mqttClient.publish(mqtt_topic_status, statusMsg.c_str(), true);  // Retain status
+      
+      mqttConnected = true;
+      reconnectAttempts = 0;
+      lastCommandReceived = millis();  // Reset timeout on reconnect
     } else {
-      Serial.print(" Failed, rc=");
+      Serial.print(" ✗ Failed, rc=");
       Serial.println(mqttClient.state());
-      delay(2000);
+      reconnectAttempts++;
+      
+      // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
+      int backoffDelay = min(500 * (1 << reconnectAttempts), 8000);
+      delay(backoffDelay);
+      mqttConnected = false;
     }
-    attempts++;
   }
 }
 
@@ -714,11 +810,132 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     message += (char)payload[i];
   }
   
-  Serial.print("MQTT Message: ");
+  Serial.print("📨 MQTT: ");
   Serial.println(message);
   
+  // Update heartbeat timer and source
+  lastCommandReceived = millis();
+  lastCommandSource = "mqtt";
+  
+  // Use unified command processor
+  processCommand(message);
+}
+
+void extractSpeed(String message) {
+  int speedIndex = message.indexOf("\"speed\":");
+  if (speedIndex > -1) {
+    int startIndex = speedIndex + 8;
+    int endIndex = message.indexOf(",", startIndex);
+    if (endIndex == -1) endIndex = message.indexOf("}", startIndex);
+    
+    String speedStr = message.substring(startIndex, endIndex);
+    int speed = speedStr.toInt();
+    if (speed >= 0 && speed <= 255) {
+      // Enforce minimum speed of 100 to ensure motors rotate
+      remoteSpeed = (speed > 0 && speed < 100) ? 100 : speed;
+      Serial.print("Speed set to: ");
+      Serial.println(remoteSpeed);
+    }
+  }
+}
+
+void publishHeartbeat() {
+  if (!mqttClient.connected()) return;
+  
+  // Send lightweight heartbeat with connection quality
+  String heartbeat = "{";
+  heartbeat += "\"deviceId\":\"" + deviceId + "\",";
+  heartbeat += "\"type\":\"heartbeat\",";
+  heartbeat += "\"timestamp\":" + String(millis()) + ",";
+  heartbeat += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  heartbeat += "\"connected\":true,";
+  heartbeat += "\"uptime\":" + String(millis() / 1000);
+  heartbeat += "}";
+  
+  mqttClient.publish(mqtt_topic_status, heartbeat.c_str());
+}
+
+void publishSensorData() {
+  if (!mqttClient.connected()) return;
+  
+  // Create JSON sensor data with connection info
+  String sensorData = "{";
+  sensorData += "\"deviceId\":\"" + deviceId + "\",";
+  sensorData += "\"voltage\":" + String(voltage, 2) + ",";
+  sensorData += "\"distanceFront\":" + String(distanceFront, 1) + ",";
+  sensorData += "\"distanceBack\":" + String(distanceBack, 1) + ",";
+  sensorData += "\"distanceLeft\":" + String(distanceLeft, 1) + ",";
+  sensorData += "\"distanceRight\":" + String(distanceRight, 1) + ",";
+  sensorData += "\"angleX\":" + String(angleX, 2) + ",";
+  sensorData += "\"angleY\":" + String(angleY, 2) + ",";
+  sensorData += "\"temperature\":" + String(temperature, 2) + ",";
+  sensorData += "\"motorLeft\":" + String(motorLeftSpeed) + ",";
+  sensorData += "\"motorRight\":" + String(motorRightSpeed) + ",";
+  sensorData += "\"command\":\"" + currentCommand + "\",";
+  sensorData += "\"mode\":\"" + String(autoMode ? "auto" : "manual") + "\",";
+  sensorData += "\"connected\":" + String(mqttConnected ? "true" : "false") + ",";
+  sensorData += "\"rssi\":" + String(WiFi.RSSI());
+  sensorData += "}";
+  
+  mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
+}
+
+// ==================== WEBSOCKET FUNCTIONS (HYBRID MODE) ====================
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[WS] Client #%u disconnected\n", num);
+      wsConnectedClients = max(0, wsConnectedClients - 1);
+      Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
+      break;
+      
+    case WStype_CONNECTED: {
+      IPAddress ip = wsServer.remoteIP(num);
+      Serial.printf("[WS] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+      wsConnectedClients++;
+      Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
+      
+      // Send initial status
+      String status = "{\"status\":\"connected\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"mode\":\"hybrid\"}";
+      wsServer.sendTXT(num, status);
+      break;
+    }
+      
+    case WStype_TEXT: {
+      String message = String((char*)payload);
+      Serial.printf("[WS] Command from #%u: %s\n", num, message.c_str());
+      
+      // Update heartbeat timer
+      lastCommandReceived = millis();
+      lastCommandSource = "websocket";
+      
+      // Process command (same format as MQTT)
+      processCommand(message);
+      
+      // Send acknowledgment
+      String ack = "{\"ack\":true,\"command\":\"" + currentCommand + "\"}";
+      wsServer.sendTXT(num, ack);
+      break;
+    }
+      
+    case WStype_BIN:
+    case WStype_ERROR:
+    case WStype_FRAGMENT_TEXT_START:
+    case WStype_FRAGMENT_BIN_START:
+    case WStype_FRAGMENT:
+    case WStype_FRAGMENT_FIN:
+      break;
+  }
+}
+
+// Unified command processor for both MQTT and WebSocket
+void processCommand(String message) {
   // Parse JSON command: {"command":"FORWARD","speed":128}
-  if (message.indexOf("FORWARD") > -1) {
+  if (message.indexOf("HEARTBEAT") > -1) {
+    // Just a keepalive ping - update timer only
+    Serial.println("💓 Heartbeat [" + lastCommandSource + "]");
+  } else if (message.indexOf("FORWARD") > -1) {
     autoMode = false;
     extractSpeed(message);
     moveForward(remoteSpeed);
@@ -747,51 +964,40 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     stopMotors();
   } else if (message.indexOf("AUTO") > -1) {
     autoMode = true;
-    Serial.println("Auto mode enabled");
+    Serial.println("🤖 Auto mode enabled [" + lastCommandSource + "]");
   } else if (message.indexOf("MANUAL") > -1) {
     autoMode = false;
     stopMotors();
-    Serial.println("Manual mode enabled");
+    Serial.println("🎮 Manual mode enabled [" + lastCommandSource + "]");
   }
 }
 
-void extractSpeed(String message) {
-  int speedIndex = message.indexOf("\"speed\":");
-  if (speedIndex > -1) {
-    int startIndex = speedIndex + 8;
-    int endIndex = message.indexOf(",", startIndex);
-    if (endIndex == -1) endIndex = message.indexOf("}", startIndex);
-    
-    String speedStr = message.substring(startIndex, endIndex);
-    int speed = speedStr.toInt();
-    if (speed >= 0 && speed <= 255) {
-      // Enforce minimum speed of 100 to ensure motors rotate
-      remoteSpeed = (speed > 0 && speed < 100) ? 100 : speed;
-      Serial.print("Speed set to: ");
-      Serial.println(remoteSpeed);
-    }
-  }
-}
-
-void publishSensorData() {
-  if (!mqttClient.connected()) return;
+// Broadcast sensor data to all WebSocket clients
+void broadcastSensorDataWS() {
+  if (wsConnectedClients == 0) return;
   
   // Create JSON sensor data
-  String sensorData = "{";
-  sensorData += "\"deviceId\":\"" + deviceId + "\",";
-  sensorData += "\"voltage\":" + String(voltage, 2) + ",";
-  sensorData += "\"distanceFront\":" + String(distanceFront, 1) + ",";
-  sensorData += "\"distanceBack\":" + String(distanceBack, 1) + ",";
-  sensorData += "\"distanceLeft\":" + String(distanceLeft, 1) + ",";
-  sensorData += "\"distanceRight\":" + String(distanceRight, 1) + ",";
-  sensorData += "\"angleX\":" + String(angleX, 2) + ",";
-  sensorData += "\"angleY\":" + String(angleY, 2) + ",";
-  sensorData += "\"temperature\":" + String(temperature, 2) + ",";
-  sensorData += "\"motorLeft\":" + String(motorLeftSpeed) + ",";
-  sensorData += "\"motorRight\":" + String(motorRightSpeed) + ",";
-  sensorData += "\"command\":\"" + currentCommand + "\",";
-  sensorData += "\"mode\":\"" + String(autoMode ? "auto" : "manual") + "\"";
-  sensorData += "}";
+  StaticJsonDocument<512> doc;
+  doc["deviceId"] = deviceId;
+  doc["voltage"] = round(voltage * 100) / 100.0;
+  doc["distanceFront"] = round(distanceFront * 10) / 10.0;
+  doc["distanceBack"] = round(distanceBack * 10) / 10.0;
+  doc["distanceLeft"] = round(distanceLeft * 10) / 10.0;
+  doc["distanceRight"] = round(distanceRight * 10) / 10.0;
+  doc["angleX"] = round(angleX * 100) / 100.0;
+  doc["angleY"] = round(angleY * 100) / 100.0;
+  doc["temperature"] = round(temperature * 100) / 100.0;
+  doc["motorLeft"] = motorLeftSpeed;
+  doc["motorRight"] = motorRightSpeed;
+  doc["command"] = currentCommand;
+  doc["mode"] = autoMode ? "auto" : "manual";
+  doc["connected"] = true;
+  doc["rssi"] = WiFi.RSSI();
+  doc["wsClients"] = wsConnectedClients;
+  doc["source"] = lastCommandSource;
   
-  mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
+  String output;
+  serializeJson(doc, output);
+  wsServer.broadcastTXT(output);
 }
+

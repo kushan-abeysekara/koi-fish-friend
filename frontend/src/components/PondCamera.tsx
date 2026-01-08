@@ -1,175 +1,247 @@
-import React, { useState, useEffect } from 'react';
-import { cameraApi, type CameraPond } from '../services/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { Video, VideoOff, AlertCircle, Download } from 'lucide-react';
+import io from 'socket.io-client';
+import axios from 'axios';
 
-interface CameraStatusBadgeProps {
-  status: 'online' | 'offline';
-}
-
-const CameraStatusBadge: React.FC<CameraStatusBadgeProps> = ({ status }) => {
-  return (
-    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${
-      status === 'online' 
-        ? 'bg-green-100 text-green-700' 
-        : 'bg-gray-100 text-gray-600'
-    }`}>
-      <span className={`w-2 h-2 rounded-full ${
-        status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'
-      }`}></span>
-      {status === 'online' ? 'Camera Online' : 'Camera Offline'}
-    </div>
-  );
-};
-
-interface PondStatusBadgeProps {
-  status: 'normal' | 'warning' | 'critical';
-}
-
-const PondStatusBadge: React.FC<PondStatusBadgeProps> = ({ status }) => {
-  const styles = {
-    normal: 'bg-green-100 text-green-700 border-green-200',
-    warning: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    critical: 'bg-red-100 text-red-700 border-red-200'
+// Detection Event Interface
+interface DetectionEvent {
+  id: string;
+  timestamp: string;
+  fishId: number;
+  healthClass: string;
+  confidence: number;
+  isCritical: boolean;
+  needsAttention: boolean;
+  bbox: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
   };
-
-  const icons = {
-    normal: 'fa-check-circle',
-    warning: 'fa-exclamation-triangle',
-    critical: 'fa-exclamation-circle'
-  };
-
-  return (
-    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium border ${styles[status]}`}>
-      <i className={`fas ${icons[status]}`}></i>
-      {status.charAt(0).toUpperCase() + status.slice(1)}
-    </div>
-  );
-};
+}
 
 const PondCamera: React.FC = () => {
-  const [ponds, setPonds] = useState<CameraPond[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedPond, setSelectedPond] = useState<number | null>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [streamError, setStreamError] = useState<Record<number, boolean>>({});
+  // Camera feed states
+  const [cameraConnected, setCameraConnected] = useState(false);
+  const [cameraFPS, setCameraFPS] = useState(0);
+  const [fishCount, setFishCount] = useState(0);
+  const [detections, setDetections] = useState<any[]>([]);
+  const [cameraFrame, setCameraFrame] = useState<string>('');
+  const cameraSocketRef = useRef<any>(null);
+  const CAMERA_SERVER_URL = 'http://192.168.8.101:5000';
+  
+  // Camera performance mode
+  const [cameraMode, setCameraMode] = useState<'quality' | 'balanced' | 'performance'>('balanced');
+  
+  // Event logging states
+  const [detectionEvents, setDetectionEvents] = useState<DetectionEvent[]>([]);
+  const [criticalAlerts, setCriticalAlerts] = useState<number>(0);
+  const [totalDetections, setTotalDetections] = useState<number>(0);
+  const [isRecording, setIsRecording] = useState(false);
 
+  // Camera Feed WebSocket Connection
   useEffect(() => {
-    fetchPonds();
-  }, []);
+    console.log('🎥 Connecting to camera server:', CAMERA_SERVER_URL);
+    
+    const socket = io(CAMERA_SERVER_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 2000,
+      reconnectionAttempts: 10
+    });
 
-  const fetchPonds = async () => {
-    try {
-      setLoading(true);
-      // Try to fetch from API first
+    socket.on('connect', () => {
+      console.log('✅ Camera server connected');
+      setCameraConnected(true);
+      
+      // Request optimized settings based on mode
+      const config = {
+        quality: { width: 960, height: 540, quality: 90 },
+        balanced: { width: 640, height: 360, quality: 75 },
+        performance: { width: 480, height: 270, quality: 60 }
+      };
+      
+      const settings = config[cameraMode];
+      
+      // Send configuration request
+      fetch(`${CAMERA_SERVER_URL}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      }).catch(err => console.warn('Could not update config:', err));
+      
+      // Start streaming
+      socket.emit('start_stream');
+    });
+
+    socket.on('disconnect', () => {
+      console.log('❌ Camera server disconnected');
+      setCameraConnected(false);
+      setCameraFrame('');
+      setFishCount(0);
+      setDetections([]);
+    });
+
+    socket.on('detection_update', (data: any) => {
       try {
-        const response = await cameraApi.getAllPonds();
-        if (response.success && response.data) {
-          setPonds(response.data);
-          if (response.data.length > 0) {
-            setSelectedPond(response.data[0].id);
+        // Update FPS and fish count
+        setCameraFPS(data.fps || 0);
+        setFishCount(data.fish_count || 0);
+        setDetections(data.detections || []);
+        setTotalDetections(prev => prev + (data.fish_count || 0));
+        
+        // Update frame (base64 JPEG)
+        if (data.frame) {
+          setCameraFrame(`data:image/jpeg;base64,${data.frame}`);
+        }
+        
+        // Process detection events for logging
+        if (data.detections && data.detections.length > 0) {
+          const newEvents: DetectionEvent[] = data.detections.map((fish: any) => ({
+            id: `${Date.now()}-${fish.id}`,
+            timestamp: data.timestamp || new Date().toISOString(),
+            fishId: fish.id,
+            healthClass: fish.health?.class || 'unknown',
+            confidence: fish.health?.confidence || 0,
+            isCritical: fish.health?.is_critical || false,
+            needsAttention: fish.health?.needs_attention || false,
+            bbox: fish.bbox
+          }));
+          
+          // Add new events to the log (keep last 100)
+          setDetectionEvents(prev => [...newEvents, ...prev].slice(0, 100));
+          
+          // Count critical alerts
+          const criticalCount = newEvents.filter(e => e.isCritical).length;
+          if (criticalCount > 0) {
+            setCriticalAlerts(prev => prev + criticalCount);
+            
+            // Send critical alert to backend
+            saveCriticalAlert(newEvents.filter(e => e.isCritical));
           }
-          return;
+          
+          // Save all events to backend
+          saveDetectionEvents(newEvents);
         }
-      } catch {
-        console.log('API not available, using mock data');
+      } catch (error) {
+        console.error('Error processing camera data:', error);
       }
-      
-      // Fallback to mock data if API fails
-      const mockPonds: CameraPond[] = [
-        {
-          id: 1,
-          name: 'Pond A - Main',
-          status: 'normal',
-          lastDetectionTime: new Date(Date.now() - 3600000).toISOString(),
-          lastAlertSummary: null,
-          cameraStatus: 'online',
-          streamUrl: cameraApi.getStreamUrl(1)
-        },
-        {
-          id: 2,
-          name: 'Pond B - Secondary',
-          status: 'warning',
-          lastDetectionTime: new Date(Date.now() - 1800000).toISOString(),
-          lastAlertSummary: 'Abnormal behavior detected during high humidity',
-          cameraStatus: 'online',
-          streamUrl: cameraApi.getStreamUrl(2)
-        },
-        {
-          id: 3,
-          name: 'Pond C - Nursery',
-          status: 'critical',
-          lastDetectionTime: new Date(Date.now() - 600000).toISOString(),
-          lastAlertSummary: 'Possible mortality detected during rainfall',
-          cameraStatus: 'online',
-          streamUrl: cameraApi.getStreamUrl(3)
-        },
-        {
-          id: 4,
-          name: 'Pond D - Quarantine',
-          status: 'normal',
-          lastDetectionTime: null,
-          lastAlertSummary: null,
-          cameraStatus: 'offline'
-        }
-      ];
-      
-      setPonds(mockPonds);
-      if (mockPonds.length > 0) {
-        setSelectedPond(mockPonds[0].id);
-      }
-    } catch (error) {
-      console.error('Error fetching ponds:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    });
 
-  const handleCaptureSnapshot = async (pondId: number) => {
+    socket.on('connect_error', (error: any) => {
+      console.warn('⚠️ Camera connection error:', error.message);
+    });
+
+    cameraSocketRef.current = socket;
+
+    return () => {
+      console.log('🔌 Disconnecting from camera server');
+      socket.emit('stop_stream');
+      socket.disconnect();
+    };
+  }, [cameraMode]);
+
+  // Save detection events to backend
+  const saveDetectionEvents = async (events: DetectionEvent[]) => {
     try {
-      setIsCapturing(true);
-      const response = await cameraApi.captureSnapshot(pondId);
-      
-      if (response.success) {
-        alert('Snapshot captured successfully!');
-      } else {
-        alert('Failed to capture snapshot: ' + response.message);
-      }
+      await axios.post('http://localhost:8080/api/camera/events', {
+        events: events.map(e => ({
+          timestamp: e.timestamp,
+          fishId: e.fishId,
+          healthStatus: e.healthClass,
+          confidence: e.confidence,
+          isCritical: e.isCritical,
+          needsAttention: e.needsAttention,
+          boundingBox: e.bbox
+        }))
+      });
     } catch (error) {
-      console.error('Error capturing snapshot:', error);
-      alert('Failed to capture snapshot - camera service may be unavailable');
-    } finally {
-      setIsCapturing(false);
+      console.error('Failed to save detection events:', error);
     }
   };
 
-  const formatTimestamp = (timestamp: string | null) => {
-    if (!timestamp) return 'Never';
-    
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins} minutes ago`;
-    
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `${diffHours} hours ago`;
-    
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+  // Save critical alerts
+  const saveCriticalAlert = async (events: DetectionEvent[]) => {
+    try {
+      await axios.post('http://localhost:8080/api/camera/alerts/critical', {
+        timestamp: new Date().toISOString(),
+        alertType: 'DEAD_FISH_DETECTED',
+        severity: 'CRITICAL',
+        fishCount: events.length,
+        details: events.map(e => ({
+          fishId: e.fishId,
+          healthClass: e.healthClass,
+          confidence: e.confidence
+        }))
+      });
+      
+      // Play alert sound
+      playAlertSound();
+    } catch (error) {
+      console.error('Failed to save critical alert:', error);
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <i className="fas fa-spinner fa-spin text-4xl text-cyan-500 mb-4"></i>
-          <p className="text-gray-600">Loading pond cameras...</p>
-        </div>
-      </div>
-    );
-  }
+  const playAlertSound = () => {
+    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjGH0fPTgjMGHm7A7+OZURE');
+    audio.play().catch(e => console.log('Could not play alert sound:', e));
+  };
 
-  const selectedPondData = ponds.find(p => p.id === selectedPond);
+  const handleCameraModeChange = (mode: 'quality' | 'balanced' | 'performance') => {
+    setCameraMode(mode);
+    if (cameraSocketRef.current) {
+      cameraSocketRef.current.disconnect();
+      cameraSocketRef.current.connect();
+    }
+  };
+
+  const getHealthColor = (healthClass: string) => {
+    switch (healthClass) {
+      case 'healthy': return 'text-green-500';
+      case 'bacterial': return 'text-orange-500';
+      case 'fungal': return 'text-purple-500';
+      case 'parasitic': return 'text-blue-500';
+      case 'white_tail': return 'text-yellow-500';
+      case 'dead': return 'text-red-500';
+      default: return 'text-gray-500';
+    }
+  };
+
+  const getHealthEmoji = (healthClass: string) => {
+    switch (healthClass) {
+      case 'healthy': return '🟢';
+      case 'bacterial': return '🟠';
+      case 'fungal': return '🟣';
+      case 'parasitic': return '🔵';
+      case 'white_tail': return '🟡';
+      case 'dead': return '🔴';
+      default: return '⚪';
+    }
+  };
+
+  const exportEventsToCSV = () => {
+    const csv = [
+      ['Timestamp', 'Fish ID', 'Health Status', 'Confidence', 'Critical', 'Needs Attention'].join(','),
+      ...detectionEvents.map(e => 
+        [e.timestamp, e.fishId, e.healthClass, e.confidence.toFixed(2), e.isCritical, e.needsAttention].join(',')
+      )
+    ].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fish-detection-events-${new Date().toISOString()}.csv`;
+    a.click();
+  };
+
+  const clearEvents = () => {
+    if (confirm('Clear all detection events?')) {
+      setDetectionEvents([]);
+      setCriticalAlerts(0);
+      setTotalDetections(0);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -177,18 +249,28 @@ const PondCamera: React.FC = () => {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
-            <i className="fas fa-video text-cyan-500"></i>
-            Pond Camera Monitoring
+            <Video className="text-cyan-500" size={32} />
+            Live Fish Health Monitoring
           </h2>
-          <p className="text-gray-600 mt-1">Live camera feeds and pond surveillance</p>
+          <p className="text-gray-600 mt-1">Real-time AI fish detection with health analysis</p>
         </div>
-        <button
-          onClick={fetchPonds}
-          className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
-        >
-          <i className="fas fa-sync-alt"></i>
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={exportEventsToCSV}
+            disabled={detectionEvents.length === 0}
+            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:bg-gray-300 flex items-center gap-2"
+          >
+            <Download size={16} />
+            Export Events
+          </button>
+          <button
+            onClick={clearEvents}
+            disabled={detectionEvents.length === 0}
+            className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:bg-gray-100 flex items-center gap-2"
+          >
+            Clear Events
+          </button>
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -196,11 +278,35 @@ const PondCamera: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Total Ponds</p>
-              <p className="text-3xl font-bold text-gray-800 mt-2">{ponds.length}</p>
+              <p className="text-gray-600 text-sm font-medium">Camera Status</p>
+              <p className="text-2xl font-bold mt-2">
+                {cameraConnected ? (
+                  <span className="text-green-600">Online</span>
+                ) : (
+                  <span className="text-red-600">Offline</span>
+                )}
+              </p>
+            </div>
+            <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+              cameraConnected ? 'bg-green-100' : 'bg-red-100'
+            }`}>
+              {cameraConnected ? (
+                <Video className="text-green-600" size={24} />
+              ) : (
+                <VideoOff className="text-red-600" size={24} />
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-600 text-sm font-medium">Fish Detected</p>
+              <p className="text-3xl font-bold text-cyan-600 mt-2">{fishCount}</p>
             </div>
             <div className="w-12 h-12 bg-cyan-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-water text-cyan-600 text-xl"></i>
+              <span className="text-2xl">🐟</span>
             </div>
           </div>
         </div>
@@ -208,27 +314,11 @@ const PondCamera: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Cameras Online</p>
-              <p className="text-3xl font-bold text-green-600 mt-2">
-                {ponds.filter(p => p.cameraStatus === 'online').length}
-              </p>
+              <p className="text-gray-600 text-sm font-medium">Total Events</p>
+              <p className="text-3xl font-bold text-blue-600 mt-2">{detectionEvents.length}</p>
             </div>
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-video text-green-600 text-xl"></i>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-600 text-sm font-medium">Warnings</p>
-              <p className="text-3xl font-bold text-yellow-600 mt-2">
-                {ponds.filter(p => p.status === 'warning').length}
-              </p>
-            </div>
-            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-exclamation-triangle text-yellow-600 text-xl"></i>
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+              <span className="text-2xl">📋</span>
             </div>
           </div>
         </div>
@@ -237,12 +327,10 @@ const PondCamera: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-600 text-sm font-medium">Critical Alerts</p>
-              <p className="text-3xl font-bold text-red-600 mt-2">
-                {ponds.filter(p => p.status === 'critical').length}
-              </p>
+              <p className="text-3xl font-bold text-red-600 mt-2">{criticalAlerts}</p>
             </div>
             <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-exclamation-circle text-red-600 text-xl"></i>
+              <AlertCircle className="text-red-600" size={24} />
             </div>
           </div>
         </div>
@@ -250,199 +338,248 @@ const PondCamera: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pond List */}
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Pond Overview</h3>
-            <div className="space-y-3">
-              {ponds.map(pond => (
-                <button
-                  key={pond.id}
-                  onClick={() => setSelectedPond(pond.id)}
-                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                    selectedPond === pond.id
-                      ? 'border-cyan-500 bg-cyan-50'
-                      : 'border-gray-200 bg-white hover:border-cyan-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <h4 className="font-semibold text-gray-800">{pond.name}</h4>
-                    <PondStatusBadge status={pond.status} />
+        {/* Live Camera Feed - 2/3 width */}
+        <div className="lg:col-span-2">
+          <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
+            <div className="bg-gray-700 px-4 py-3">
+              <h2 className="text-white font-semibold">Live Camera Feed</h2>
+              <p className="text-gray-400 text-sm">AI-Powered Fish Health Detection</p>
+            </div>
+            
+            <div className="relative aspect-video bg-gray-900 flex items-center justify-center">
+              {cameraConnected && cameraFrame ? (
+                <>
+                  {/* Live Video Feed with Detections */}
+                  <img 
+                    src={cameraFrame} 
+                    alt="Live Camera Feed" 
+                    className="w-full h-full object-contain"
+                  />
+                  
+                  {/* Detection Overlays */}
+                  <div className="absolute top-4 right-4 space-y-2">
+                    {detections.map((fish, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`px-3 py-1 rounded-lg text-sm font-semibold shadow-lg ${
+                          fish.health?.is_critical 
+                            ? 'bg-red-600 text-white animate-pulse' 
+                            : fish.health?.needs_attention
+                            ? 'bg-orange-500 text-white'
+                            : 'bg-green-500 bg-opacity-80 text-white'
+                        }`}
+                      >
+                        {getHealthEmoji(fish.health?.class || 'unknown')} Fish #{fish.id}: {fish.health?.class || 'detecting'} ({(fish.health?.confidence * 100 || 0).toFixed(0)}%)
+                      </div>
+                    ))}
                   </div>
                   
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Camera:</span>
-                      <CameraStatusBadge status={pond.cameraStatus} />
+                  {/* Live Indicator & Controls */}
+                  <div className="absolute top-4 left-4 space-y-2">
+                    <div className="bg-red-600 text-white px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2 shadow-lg">
+                      <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+                      <span>LIVE</span>
                     </div>
                     
-                    <div className="flex items-center gap-2 text-gray-600">
-                      <i className="fas fa-clock text-xs"></i>
-                      <span className="text-xs">Last detection: {formatTimestamp(pond.lastDetectionTime)}</span>
+                    {/* Performance Mode Selector */}
+                    <div className="bg-black bg-opacity-70 text-white px-3 py-2 rounded-lg text-xs space-y-1">
+                      <div className="text-gray-300 mb-1">Quality Mode:</div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleCameraModeChange('performance')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'performance' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          ⚡ Fast
+                        </button>
+                        <button
+                          onClick={() => handleCameraModeChange('balanced')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'balanced' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          ⚖️ Balanced
+                        </button>
+                        <button
+                          onClick={() => handleCameraModeChange('quality')}
+                          className={`px-2 py-1 rounded ${
+                            cameraMode === 'quality' 
+                              ? 'bg-cyan-500 text-white' 
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          🎯 Quality
+                        </button>
+                      </div>
                     </div>
-                    
-                    {pond.lastAlertSummary && (
-                      <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                        <i className="fas fa-info-circle mr-1"></i>
-                        {pond.lastAlertSummary}
+                  </div>
+                  
+                  {/* Stats Bar */}
+                  <div className="absolute bottom-4 left-4 right-4 flex gap-2">
+                    <div className={`px-3 py-1 rounded text-sm flex items-center gap-2 ${
+                      cameraFPS < 10 
+                        ? 'bg-red-600 bg-opacity-90 text-white font-bold'
+                        : cameraFPS < 15
+                        ? 'bg-yellow-600 bg-opacity-90 text-white'
+                        : 'bg-black bg-opacity-70 text-white'
+                    }`}>
+                      <Video size={16} />
+                      <span>{cameraFPS.toFixed(1)} FPS</span>
+                      {cameraFPS < 10 && <span>⚠️</span>}
+                    </div>
+                    <div className="bg-black bg-opacity-70 text-white px-3 py-1 rounded text-sm flex items-center gap-2">
+                      <span>🐟 {fishCount} Fish</span>
+                    </div>
+                    {detections.some(d => d.health?.is_critical) && (
+                      <div className="bg-red-600 text-white px-3 py-1 rounded text-sm font-bold animate-pulse">
+                        ⚠️ CRITICAL ALERT
+                      </div>
+                    )}
+                    {cameraFPS < 10 && (
+                      <div className="bg-orange-600 text-white px-3 py-1 rounded text-sm">
+                        💡 Try ⚡ Fast mode
                       </div>
                     )}
                   </div>
-                </button>
-              ))}
+                </>
+              ) : (
+                <div className="text-center p-6">
+                  <div className="w-24 h-24 mx-auto mb-4 opacity-50">
+                    {cameraConnected ? (
+                      <Video className="text-cyan-500 w-full h-full" />
+                    ) : (
+                      <VideoOff className="text-gray-600 w-full h-full" />
+                    )}
+                  </div>
+                  <p className="text-gray-400 text-lg mb-2">
+                    {cameraConnected ? 'Waiting for camera stream...' : 'Camera Server Not Connected'}
+                  </p>
+                  <p className="text-gray-500 text-sm">
+                    {cameraConnected 
+                      ? 'Initializing fish detection models...' 
+                      : `Trying to connect to ${CAMERA_SERVER_URL}`
+                    }
+                  </p>
+                  {!cameraConnected && (
+                    <div className="mt-4">
+                      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+                      <p className="text-sm text-gray-500 mt-2">Reconnecting...</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="bg-gray-700 px-4 py-2 text-center text-sm">
+              <div className="flex items-center justify-center gap-4 text-gray-300">
+                <span className="flex items-center gap-2">
+                  {cameraConnected ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                      <span>Camera: Connected</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                      <span>Camera: Disconnected</span>
+                    </>
+                  )}
+                </span>
+                <span>|</span>
+                <span>📹 Real-time AI Detection</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Live Camera Feed */}
-        <div className="lg:col-span-2">
-          {selectedPondData ? (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-              {/* Camera Header */}
-              <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xl font-semibold">{selectedPondData.name}</h3>
-                    <p className="text-sm text-gray-300 mt-1">Live Camera Feed</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <CameraStatusBadge status={selectedPondData.cameraStatus} />
-                    <PondStatusBadge status={selectedPondData.status} />
-                  </div>
+        {/* Event Log - 1/3 width */}
+        <div className="lg:col-span-1">
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-4 py-3">
+              <h3 className="font-semibold">Detection Events Log</h3>
+              <p className="text-sm text-cyan-100">Real-time event tracking</p>
+            </div>
+            
+            <div className="h-[600px] overflow-y-auto">
+              {detectionEvents.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <AlertCircle size={48} className="mx-auto mb-3 opacity-50" />
+                  <p>No detection events yet</p>
+                  <p className="text-sm mt-1">Events will appear here in real-time</p>
                 </div>
-              </div>
-
-              {/* Video Stream */}
-              <div className="relative bg-gray-900 aspect-video flex items-center justify-center">
-                {selectedPondData.cameraStatus === 'online' ? (
-                  <>
-                    {!streamError[selectedPondData.id] ? (
-                      <>
-                        {/* Live MJPEG Stream */}
-                        <div className="relative w-full h-full">
-                          <img
-                            src={`http://localhost:5000/api/camera/stream/${selectedPondData.id}`}
-                            alt={`${selectedPondData.name} live feed`}
-                            className="w-full h-full object-contain"
-                            onError={() => {
-                              console.error('Stream connection failed for pond', selectedPondData.id);
-                              setStreamError(prev => ({ ...prev, [selectedPondData.id]: true }));
-                            }}
-                          />
-                        </div>
-
-                        {/* Stream Overlay Info */}
-                        <div className="absolute top-4 left-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                            <span>LIVE</span>
+              ) : (
+                <div className="divide-y divide-gray-200">
+                  {detectionEvents.map((event) => (
+                    <div 
+                      key={event.id} 
+                      className={`p-4 hover:bg-gray-50 transition-colors ${
+                        event.isCritical ? 'bg-red-50 border-l-4 border-red-500' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl">{getHealthEmoji(event.healthClass)}</span>
+                          <div>
+                            <p className="font-semibold text-gray-800">
+                              Fish #{event.fishId}
+                            </p>
+                            <p className={`text-sm font-medium ${getHealthColor(event.healthClass)}`}>
+                              {event.healthClass.toUpperCase()}
+                            </p>
                           </div>
                         </div>
-
-                        {/* Timestamp */}
-                        <div className="absolute bottom-4 left-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg text-xs">
-                          {new Date().toLocaleString()}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-center text-gray-400">
-                        <i className="fas fa-video-slash text-6xl mb-4"></i>
-                        <p className="text-xl font-semibold">Stream Not Available</p>
-                        <p className="text-sm mt-2">Camera server is not running on port 5000</p>
-                        <button
-                          onClick={() => setStreamError(prev => ({ ...prev, [selectedPondData.id]: false }))}
-                          className="mt-4 px-4 py-2 bg-cyan-500 text-white rounded-lg hover:bg-cyan-600 transition-colors"
-                        >
-                          <i className="fas fa-sync-alt mr-2"></i>
-                          Retry Connection
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-center text-gray-400">
-                    <i className="fas fa-video-slash text-6xl mb-4"></i>
-                    <p className="text-xl font-semibold">Camera Offline</p>
-                    <p className="text-sm mt-2">Unable to connect to camera feed</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Camera Controls */}
-              <div className="p-4 bg-gray-50 border-t border-gray-200">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => handleCaptureSnapshot(selectedPondData.id)}
-                      disabled={selectedPondData.cameraStatus === 'offline' || isCapturing}
-                      className="px-4 py-2 bg-cyan-500 text-white rounded-lg hover:bg-cyan-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      <i className={`fas ${isCapturing ? 'fa-spinner fa-spin' : 'fa-camera'}`}></i>
-                      {isCapturing ? 'Capturing...' : 'Capture Snapshot'}
-                    </button>
-                    
-                    <button
-                      disabled={selectedPondData.cameraStatus === 'offline'}
-                      className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:bg-gray-100 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      <i className="fas fa-expand"></i>
-                      Fullscreen
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <i className="fas fa-signal"></i>
-                    <span>Quality: HD</span>
-                  </div>
-                </div>
-
-                {/* Last Detection Info */}
-                {selectedPondData.lastDetectionTime && (
-                  <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="flex items-start gap-3">
-                      <i className="fas fa-info-circle text-blue-500 mt-0.5"></i>
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-blue-900">Last Detection Activity</p>
-                        <p className="text-xs text-blue-700 mt-1">
-                          {formatTimestamp(selectedPondData.lastDetectionTime)}
-                        </p>
-                        {selectedPondData.lastAlertSummary && (
-                          <p className="text-sm text-blue-800 mt-2">
-                            {selectedPondData.lastAlertSummary}
-                          </p>
+                        {event.isCritical && (
+                          <span className="px-2 py-1 bg-red-600 text-white text-xs font-bold rounded">
+                            CRITICAL
+                          </span>
                         )}
                       </div>
+                      
+                      <div className="space-y-1 text-sm text-gray-600">
+                        <p>Confidence: {(event.confidence * 100).toFixed(1)}%</p>
+                        <p className="text-xs text-gray-500">
+                          {new Date(event.timestamp).toLocaleTimeString()}
+                        </p>
+                      </div>
+                      
+                      {event.needsAttention && !event.isCritical && (
+                        <div className="mt-2 px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded">
+                          ⚠️ Needs Attention
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
-              <i className="fas fa-water text-6xl text-gray-300 mb-4"></i>
-              <p className="text-gray-600">Select a pond to view camera feed</p>
-            </div>
-          )}
+          </div>
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-xl font-semibold mb-2">Camera System Status</h3>
-            <p className="text-cyan-100">
-              {ponds.filter(p => p.cameraStatus === 'online').length} of {ponds.length} cameras operational
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <button className="px-5 py-2 bg-white text-cyan-600 rounded-lg hover:bg-cyan-50 transition-colors font-medium">
-              View All Events
-            </button>
-            <button className="px-5 py-2 bg-cyan-600 text-white border-2 border-white rounded-lg hover:bg-cyan-700 transition-colors font-medium">
-              System Settings
-            </button>
-          </div>
+      {/* Health Statistics */}
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Health Status Distribution</h3>
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          {['healthy', 'bacterial', 'fungal', 'parasitic', 'white_tail', 'dead'].map((status) => {
+            const count = detectionEvents.filter(e => e.healthClass === status).length;
+            const percentage = detectionEvents.length > 0 
+              ? ((count / detectionEvents.length) * 100).toFixed(1) 
+              : '0';
+            
+            return (
+              <div key={status} className="text-center p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="text-3xl mb-2">{getHealthEmoji(status)}</div>
+                <p className={`font-bold text-2xl ${getHealthColor(status)}`}>{count}</p>
+                <p className="text-sm text-gray-600 capitalize">{status.replace('_', ' ')}</p>
+                <p className="text-xs text-gray-500 mt-1">{percentage}%</p>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
