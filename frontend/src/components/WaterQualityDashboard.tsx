@@ -73,12 +73,12 @@ const WaterQualityDashboard: React.FC = () => {
     }
   };
 
-  // WebSocket connection for real-time data (connect IMMEDIATELY - don't wait for backend)
+  // WebSocket connection for real-time data (connect IMMEDIATELY - don't wait for backend)dddrrr
   useEffect(() => {
     let isSubscribed = true;
     let connectionTimeout: NodeJS.Timeout | null = null;
     let connectionAttempts = 0;
-    const MAX_ATTEMPTS = 100; // Keep trying
+    const MAX_ATTEMPTS = 100; // Keep tryingee
     
     // Force update refs on mount
     selectedPondRef.current = 3;

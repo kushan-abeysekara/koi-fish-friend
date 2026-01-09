@@ -41,6 +41,9 @@ String lastCommandSource = "none";
 unsigned long lastWiFiCheck = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 
+// 🔧 FIX: Only use Serial when monitor is connected (prevents blocking)
+#define ENABLE_SERIAL false  // Set to true ONLY for debugging with Serial Monitor
+
 // Forward declarations
 void publishStatus();
 void publishStatusWithPond();
@@ -83,20 +86,24 @@ const unsigned long STATUS_PUBLISH_INTERVAL = 2000;    // Publish status every 2
 void setupWiFi()
 {
     delay(10);
-    Serial.println();
-    Serial.println("========================================");
-    Serial.println("🌐 Configuring Water Quality Device");
-    Serial.println("========================================");
+    if (ENABLE_SERIAL) {
+        Serial.println();
+        Serial.println("========================================");
+        Serial.println("🌐 Configuring Water Quality Device");
+        Serial.println("========================================");
+    }
     
     // Configure static IP
     if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
-        Serial.println("❌ Static IP configuration failed");
+        if (ENABLE_SERIAL) Serial.println("❌ Static IP configuration failed");
     } else {
-        Serial.println("✅ Static IP configured: 192.168.8.102");
+        if (ENABLE_SERIAL) Serial.println("✅ Static IP configured: 192.168.8.102");
     }
     
-    Serial.print("Connecting to ");
-    Serial.println(ssid);
+    if (ENABLE_SERIAL) {
+        Serial.print("Connecting to ");
+        Serial.println(ssid);
+    }
 
     WiFi.begin(ssid, password);
 
@@ -104,29 +111,33 @@ void setupWiFi()
     while (WiFi.status() != WL_CONNECTED && attempts < 40)
     {
         delay(250);
-        Serial.print(".");
+        if (ENABLE_SERIAL) Serial.print(".");
         attempts++;
     }
 
     if (WiFi.status() == WL_CONNECTED)
     {
-        Serial.println();
-        Serial.println("========================================");
-        Serial.println("✅ WiFi Connected!");
-        Serial.print("📍 IP Address: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("📡 RSSI: ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        Serial.print("🔗 WebSocket: ws://");
-        Serial.print(WiFi.localIP());
-        Serial.println(":81");
-        Serial.println("========================================");
+        if (ENABLE_SERIAL) {
+            Serial.println();
+            Serial.println("========================================");
+            Serial.println("✅ WiFi Connected!");
+            Serial.print("📍 IP Address: ");
+            Serial.println(WiFi.localIP());
+            Serial.print("📡 RSSI: ");
+            Serial.print(WiFi.RSSI());
+            Serial.println(" dBm");
+            Serial.print("🔗 WebSocket: ws://");
+            Serial.print(WiFi.localIP());
+            Serial.println(":81");
+            Serial.println("========================================");
+        }
     }
     else
     {
-        Serial.println();
-        Serial.println("WiFi Connection Failed!");
+        if (ENABLE_SERIAL) {
+            Serial.println();
+            Serial.println("WiFi Connection Failed!");
+        }
     }
 }
 
@@ -139,8 +150,10 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     for (unsigned int i = 0; i < length; i++)
         message += (char)payload[i];
 
-    Serial.print("📨 MQTT: ");
-    Serial.println(message);
+    if (ENABLE_SERIAL) {
+        Serial.print("📨 MQTT: ");
+        Serial.println(message);
+    }
     
     // Mark command source
     lastCommandSource = "mqtt";
@@ -165,7 +178,7 @@ void reconnectMQTT()
     }
     
     lastMqttAttempt = now;
-    Serial.print("Connecting to MQTT...");
+    if (ENABLE_SERIAL) Serial.print("Connecting to MQTT...");
 
     String clientId = "ESP32-" + deviceId;
 
@@ -176,15 +189,17 @@ void reconnectMQTT()
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password,
                        willTopic.c_str(), 1, true, willMsg.c_str()))
     {
-        Serial.println(" ✅ MQTT Connected!");
+        if (ENABLE_SERIAL) Serial.println(" ✅ MQTT Connected!");
         mqttConnected = true;
         client.subscribe(commandTopic.c_str());
         publishStatus();
     }
     else
     {
-        Serial.print(" ❌ MQTT Failed, rc=");
-        Serial.println(client.state());
+        if (ENABLE_SERIAL) {
+            Serial.print(" ❌ MQTT Failed, rc=");
+            Serial.println(client.state());
+        }
         mqttConnected = false;
     }
 }
@@ -207,8 +222,10 @@ void publishStatus()
     serializeJson(doc, json);
 
     client.publish(statusTopic.c_str(), json.c_str(), true);
-    Serial.print("✓ Status published: ");
-    Serial.println(json);
+    if (ENABLE_SERIAL) {
+        Serial.print("✓ Status published: ");
+        Serial.println(json);
+    }
 }
 
 // Publish status with pond assignment info (only after assign/unassign commands)
@@ -226,8 +243,10 @@ void publishStatusWithPond()
     serializeJson(doc, json);
 
     client.publish(statusTopic.c_str(), json.c_str(), true);
-    Serial.print("✓ Status with pond assignment sent: ");
-    Serial.println(json);
+    if (ENABLE_SERIAL) {
+        Serial.print("✓ Status with pond assignment sent: ");
+        Serial.println(json);
+    }
 }
 
 // ===============================================================
@@ -238,7 +257,7 @@ void publishSensorData()
     // Always publish data (use default pond 3 if not assigned)
     if (assignedPondId == 0) {
         assignedPondId = 3;  // Auto-assign to Pond 3 for standalone mode
-        Serial.println("ℹ️  Auto-assigned to Pond 3 (standalone mode)");
+        if (ENABLE_SERIAL) Serial.println("ℹ️  Auto-assigned to Pond 3 (standalone mode)");
     }
 
     StaticJsonDocument<400> doc;
@@ -650,8 +669,10 @@ void processCommand(String message) {
         }
     }
     else {
-        Serial.print("Unknown command: ");
-        Serial.println(command);
+        if (ENABLE_SERIAL) {
+            Serial.print("Unknown command: ");
+            Serial.println(command);
+        }
     }
 }
 
@@ -660,12 +681,14 @@ void processCommand(String message) {
 // ===============================================================
 void setup()
 {
-    Serial.begin(115200);
-    delay(1000);
+    Serial.begin(115200);  // Initialize Serial but don't wait for it
+    // NO delay() here - must start immediately for standalone operation!
     
-    Serial.println("\n\n=====================================");
-    Serial.println("Water Quality Monitor Starting...");
-    Serial.println("=====================================");
+    if (ENABLE_SERIAL) {
+        Serial.println("\n\n=====================================");
+        Serial.println("Water Quality Monitor Starting...");
+        Serial.println("=====================================");
+    }
 
     // Configure ADC for sensor readings
     // Set ADC attenuation to 11dB for ~0V to 3.6V range
@@ -685,20 +708,24 @@ void setup()
     deviceId = "WQ_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
     deviceId.toUpperCase();
 
-    Serial.print("Device ID: ");
-    Serial.println(deviceId);
+    if (ENABLE_SERIAL) {
+        Serial.print("Device ID: ");
+        Serial.println(deviceId);
+    }
 
     statusTopic = "koi/sensors/" + deviceId + "/status";
     dataTopic = "koi/sensors/" + deviceId + "/data";
     commandTopic = "koi/sensors/" + deviceId + "/command";
 
-    Serial.println("\nMQTT Topics:");
-    Serial.print("  Status: ");
-    Serial.println(statusTopic);
-    Serial.print("  Data: ");
-    Serial.println(dataTopic);
-    Serial.print("  Command: ");
-    Serial.println(commandTopic);
+    if (ENABLE_SERIAL) {
+        Serial.println("\nMQTT Topics:");
+        Serial.print("  Status: ");
+        Serial.println(statusTopic);
+        Serial.print("  Data: ");
+        Serial.println(dataTopic);
+        Serial.print("  Command: ");
+        Serial.println(commandTopic);
+    }
 
     setupWiFi();
 
@@ -760,36 +787,38 @@ void loop()
     ammonia = readAmmonia(MQ135_PIN, 30);   // Fast ammonia reading for real-time response
     waterQualityStatus = evaluateWaterQuality(phValue, turbidity, co2Level, ammonia);
 
-    // Print to Serial Monitor with connection status
-    static unsigned long lastSerialPrint = 0;
-    if (now - lastSerialPrint >= 2000) {
-        lastSerialPrint = now;
-        
-        // Connection Status Display
-        Serial.print("📡 MQTT: ");
-        Serial.print(mqttConnected ? "✅" : "❌");
-        Serial.print(" | ⚡ WS: ");
-        Serial.print(wsConnectedClients);
-        Serial.print(" clients | 📍 IP: ");
-        Serial.print(WiFi.localIP());
-        Serial.print(" | Signal: ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        
-        // Sensor Data
-        Serial.print("🏊 Pond: ");
-        Serial.print(assignedPondId);
-        Serial.print(" | pH: ");
-        Serial.print(phValue, 2);
-        Serial.print(" | Turbidity: ");
-        Serial.print(turbidity, 1);
-        Serial.print(" NTU | CO2: ");
-        Serial.print(co2Level, 0);
-        Serial.print(" PPM | NH3: ");
-        Serial.print(ammonia, 2);
-        Serial.print(" PPM | Status: ");
-        Serial.println(waterQualityStatus);
-        Serial.println();
+    // Print to Serial Monitor with connection status (only if enabled)
+    if (ENABLE_SERIAL) {
+        static unsigned long lastSerialPrint = 0;
+        if (now - lastSerialPrint >= 2000) {
+            lastSerialPrint = now;
+            
+            // Connection Status Display
+            Serial.print("📡 MQTT: ");
+            Serial.print(mqttConnected ? "✅" : "❌");
+            Serial.print(" | ⚡ WS: ");
+            Serial.print(wsConnectedClients);
+            Serial.print(" clients | 📍 IP: ");
+            Serial.print(WiFi.localIP());
+            Serial.print(" | Signal: ");
+            Serial.print(WiFi.RSSI());
+            Serial.println(" dBm");
+            
+            // Sensor Data
+            Serial.print("🏊 Pond: ");
+            Serial.print(assignedPondId);
+            Serial.print(" | pH: ");
+            Serial.print(phValue, 2);
+            Serial.print(" | Turbidity: ");
+            Serial.print(turbidity, 1);
+            Serial.print(" NTU | CO2: ");
+            Serial.print(co2Level, 0);
+            Serial.print(" PPM | NH3: ");
+            Serial.print(ammonia, 2);
+            Serial.print(" PPM | Status: ");
+            Serial.println(waterQualityStatus);
+            Serial.println();
+        }
     }
 
     // Publish sensor data periodically (only if assigned to a pond)
