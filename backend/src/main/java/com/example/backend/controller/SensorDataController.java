@@ -107,7 +107,8 @@ public class SensorDataController {
             System.out.println("   Pond ID: " + request.getPondId());
             System.out.println("   pH: " + request.getPhValue());
             System.out.println("   Turbidity: " + request.getTurbidity());
-            System.out.println("   DO: " + request.getDissolvedOxygen() + " mg/L");
+            System.out.println("   CO2: " + request.getCo2Level() + " PPM");
+            System.out.println("   NH3: " + request.getAmmonia() + " PPM");
             System.out.println("   Status: " + request.getWaterQualityStatus());
 
             // Find or create device
@@ -131,7 +132,8 @@ public class SensorDataController {
             data.setPond(pond);
             data.setPhValue(request.getPhValue());
             data.setTurbidity(request.getTurbidity());
-            data.setDissolvedOxygen(request.getDissolvedOxygen());
+            data.setCo2Level(request.getCo2Level());
+            data.setAmmonia(request.getAmmonia());
             data.setWaterQualityStatus(request.getWaterQualityStatus());
             data.setTimestamp(LocalDateTime.now());
 
@@ -141,7 +143,8 @@ public class SensorDataController {
             System.out.println("✅ Data saved successfully with ID: " + savedData.getId() +
                     " - pH:" + savedData.getPhValue() +
                     " Turb:" + savedData.getTurbidity() +
-                    " DO:" + savedData.getDissolvedOxygen() + "mg/L");
+                    " CO2:" + savedData.getCo2Level() + "PPM" +
+                    " NH3:" + savedData.getAmmonia() + "PPM");
 
             return ResponseEntity.ok(new ApiResponse(true, "Sensor data saved successfully", savedData));
         } catch (Exception e) {

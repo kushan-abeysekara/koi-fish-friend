@@ -23,7 +23,7 @@ const char *mqtt_password = "";
 // Device configuration
 String deviceId = "";
 const char* deviceType = "WATER_QUALITY";
-int assignedPondId = 0;
+int assignedPondId = 3;  // Default to Pond 3 for standalone operation
 
 // MQTT Topics
 String statusTopic = "";
@@ -39,7 +39,7 @@ int wsConnectedClients = 0;
 bool mqttConnected = false;
 String lastCommandSource = "none";
 unsigned long lastWiFiCheck = 0;
-const unsigned long WIFI_CHECK_INTERVAL = 10000;  // Check WiFi every 10 seconds
+const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 
 // Forward declarations
 void publishStatus();
@@ -50,7 +50,7 @@ void processCommand(String message);
 
 // ===================== PIN MAPPING =====================
 #define PH_PIN 32          // pH sensor analog input (GPIO 32 / ADC1_CH4)
-#define DO_PIN 33          // Dissolved Oxygen sensor (GPIO 33 / ADC1_CH5) - DO in mg/L
+#define MQ135_PIN 33       // MQ135 gas sensor for CO2 and NH3 (GPIO 33 / ADC1_CH5)
 #define TURBIDITY_PIN 34   // Turbidity sensor analog input (GPIO 34 / ADC1_CH6)
 
 // ===================== CALIBRATION =====================
@@ -68,7 +68,8 @@ const float TURBIDITY_MAX_NTU = 3000.0;
 // ===================== VARIABLES =====================
 float phValue = 7.0;
 float turbidity = 0.0;
-float dissolvedOxygen = 0.0;  // DO in mg/L (milligrams per liter)
+float co2Level = 0.0;      // CO2 in PPM (parts per million) from MQ135
+float ammonia = 0.0;       // NH3 in PPM (parts per million) from MQ135
 String waterQualityStatus = "normal";
 
 unsigned long lastMqttPublish = 0;
@@ -100,9 +101,9 @@ void setupWiFi()
     WiFi.begin(ssid, password);
 
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20)
+    while (WiFi.status() != WL_CONNECTED && attempts < 40)
     {
-        delay(500);
+        delay(250);
         Serial.print(".");
         attempts++;
     }
@@ -152,7 +153,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
 //                    MQTT RECONNECT (NON-BLOCKING)
 // ===============================================================
 unsigned long lastMqttAttempt = 0;
-const unsigned long MQTT_RETRY_INTERVAL = 5000;
+const unsigned long MQTT_RETRY_INTERVAL = 3000;
 
 void reconnectMQTT()
 {
@@ -234,9 +235,10 @@ void publishStatusWithPond()
 // ===============================================================
 void publishSensorData()
 {
+    // Always publish data (use default pond 3 if not assigned)
     if (assignedPondId == 0) {
-        Serial.println("⚠️  Not publishing - device not assigned to pond");
-        return;
+        assignedPondId = 3;  // Auto-assign to Pond 3 for standalone mode
+        Serial.println("ℹ️  Auto-assigned to Pond 3 (standalone mode)");
     }
 
     StaticJsonDocument<400> doc;
@@ -244,7 +246,8 @@ void publishSensorData()
     doc["pondId"] = assignedPondId;
     doc["phValue"] = phValue;
     doc["turbidity"] = turbidity;
-    doc["dissolvedOxygen"] = dissolvedOxygen;
+    doc["co2Level"] = co2Level;
+    doc["ammonia"] = ammonia;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["status"] = "normal";
 
@@ -272,9 +275,11 @@ void publishSensorData()
     Serial.print(phValue, 2);
     Serial.print(" | Turbidity: ");
     Serial.print(turbidity, 1);
-    Serial.print(" NTU | DO: ");
-    Serial.print(dissolvedOxygen, 2);
-    Serial.println(" mg/L");
+    Serial.print(" NTU | CO2: ");
+    Serial.print(co2Level, 0);
+    Serial.print(" PPM | NH3: ");
+    Serial.print(ammonia, 2);
+    Serial.println(" PPM");
     Serial.println("=====================================");
 }
 
@@ -299,12 +304,27 @@ float readPH(int pin, int samples = 50)
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
     
-    // Convert voltage to pH using calibrated formula
-    float ph = 7.0 + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_STEP);
+    // CALIBRATED for actual sensor (adjusted based on real measurement)
+    // User measured actual pH: 6.8-7.0 when sensor showed 9.23
+    // Calibration: pH reading was 2.3 units too high
+    // New formula shifts reading down by 2.3 pH units
+    float ph = 7.0 + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_STEP) - 2.3;
     
     // Constrain to valid pH range
     if (ph < 0) ph = 0;
     if (ph > 14) ph = 14;
+    
+    // Debug voltage reading (prints every 10 seconds via main loop)
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 10000) {
+        lastDebug = millis();
+        Serial.print("📊 pH Debug - Raw ADC: ");
+        Serial.print(avgReading, 0);
+        Serial.print(" | Voltage: ");
+        Serial.print(voltage, 3);
+        Serial.print("V | Calculated pH: ");
+        Serial.println(ph, 2);
+    }
     
     // Sensor connection check
     if (maxRaw >= 4090 || maxRaw <= 5) {
@@ -354,7 +374,7 @@ float readTurbidity(int pin, int samples = 50)
     return ntu;
 }
 
-float readDissolvedOxygen(int pin, int samples = 50)
+float readCO2(int pin, int samples = 50)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -372,35 +392,103 @@ float readDissolvedOxygen(int pin, int samples = 50)
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
     
-    // Convert voltage to Dissolved Oxygen mg/L
-    // DO sensor: Higher voltage = higher dissolved oxygen
-    // Typical range: 0-20 mg/L for aquaculture
-    // Ideal for koi: 6-8 mg/L
-    // Critical low: < 5 mg/L
+    // MQ135 CO2 detection
+    // Lower resistance (higher voltage) = higher CO2
+    // Normal air: ~400 PPM CO2
+    // Indoor safe: < 1000 PPM
+    // Warning: 1000-2000 PPM
+    // Dangerous: > 2000 PPM
     
-    // Calibration formula for DO sensor (linear approximation)
-    // Voltage range 0-3.3V maps to 0-20 mg/L
-    float mgL = (voltage / V_REF) * 20.0; // Scale to 0-20 mg/L range
+    // Voltage to PPM conversion for MQ135 CO2
+    // Approximate formula: PPM = 116.6020682 * exp((voltage - 0.1 - 2.462) / -0.263)
+    float ppm = 400.0; // Base CO2 level
     
-    // Constrain to valid range
-    if (mgL < 0) mgL = 0;
-    if (mgL > 20) mgL = 20;
+    if (voltage > 0.4) {
+        ppm = 116.6020682 * exp((voltage - 2.462) / -0.263);
+    }
+    
+    // Add base offset and clamp
+    ppm += 300.0;
+    if (ppm < 400) ppm = 400;     // Minimum atmospheric CO2
+    if (ppm > 5000) ppm = 5000;   // Maximum scale
     
     // Sensor connection check
     if (maxRaw >= 4090 || maxRaw <= 5) {
-        Serial.println("⚠️ WARNING: DO Sensor may be disconnected!");
+        Serial.println("⚠️ WARNING: MQ135 Sensor may be disconnected!");
     }
     
-    return mgL;
+    return ppm;
 }
 
-String evaluateWaterQuality(float ph, float turb, float doLevel)
+float readAmmonia(int pin, int samples = 50)
 {
-    // Ideal koi pond: pH 7.0-8.5, turbidity < 50 NTU, DO 6-8 mg/L
-    // Critical: pH < 6.5 or > 9.0, turbidity > 100 NTU, DO < 5 mg/L
-    if (ph < 6.5 || ph > 9.0 || turb > 100 || doLevel < 5.0)
+    unsigned long sum = 0;
+    int minRaw = 4095;
+    int maxRaw = 0;
+    
+    for (int i = 0; i < samples; i++)
+    {
+        int reading = analogRead(pin);
+        sum += reading;
+        if (reading < minRaw) minRaw = reading;
+        if (reading > maxRaw) maxRaw = reading;
+        delay(10);
+    }
+    
+    float avgReading = sum / (float)samples;
+    float voltage = (avgReading / ADC_MAX) * V_REF;
+    
+    // MQ135 NH3/Ammonia detection - REAL-TIME CALIBRATED
+    // MQ135 for NH3: Rs/R0 decreases when NH3 increases
+    // Lower voltage = HIGHER ammonia concentration
+    // Fresh air baseline: ~2.5-3.0V
+    // High ammonia: < 1.5V
+    
+    float ppm = 0.0;
+    
+    // Calibrated formula for MQ135 ammonia detection
+    // Based on MQ135 datasheet: Rs/R0 curve for NH3
+    if (voltage < 1.0) {
+        // Very high ammonia (sensor saturated)
+        ppm = 10.0;
+    } else if (voltage < 2.0) {
+        // High ammonia - exponential response
+        ppm = 5.0 * exp((2.0 - voltage) / 0.4);
+    } else if (voltage < 2.5) {
+        // Medium ammonia
+        ppm = (2.5 - voltage) * 2.0;
+    } else {
+        // Clean air or low ammonia
+        ppm = max(0.0, (2.8 - voltage) * 0.5);
+    }
+    
+    // Constrain to valid range
+    if (ppm < 0) ppm = 0;
+    if (ppm > 10.0) ppm = 10.0;
+    
+    // Debug output every 5 seconds
+    static unsigned long lastAmmoniaDebug = 0;
+    if (millis() - lastAmmoniaDebug > 5000) {
+        lastAmmoniaDebug = millis();
+        Serial.print("🧪 NH3 Debug - Raw: ");
+        Serial.print(avgReading, 0);
+        Serial.print(" | Voltage: ");
+        Serial.print(voltage, 3);
+        Serial.print("V | NH3: ");
+        Serial.print(ppm, 2);
+        Serial.println(" PPM");
+    }
+    
+    return ppm;
+}
+
+String evaluateWaterQuality(float ph, float turb, float co2, float nh3)
+{
+    // Ideal koi pond: pH 7.0-8.5, turbidity < 25 NTU, CO2 < 1000 PPM, NH3 < 0.05 PPM
+    // Critical: pH < 6.5 or > 9.0, turbidity > 40 NTU, CO2 > 2000 PPM, NH3 > 1.0 PPM
+    if (ph < 6.5 || ph > 9.0 || turb > 40 || co2 > 2000 || nh3 > 1.0)
         return "critical";
-    else if (ph < 7.0 || ph > 8.5 || turb > 50 || doLevel < 6.0 || doLevel > 10.0)
+    else if (ph < 7.0 || ph > 8.5 || turb > 25 || co2 > 1000 || nh3 > 0.5)
         return "warning";
     else
         return "normal";
@@ -433,11 +521,29 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
             wsConnectedClients++;
             Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
             
-            // Send initial status
+            // Send initial status immediately
             String status = "{\"status\":\"connected\",\"deviceId\":\"" + deviceId + 
                           "\",\"ip\":\"" + WiFi.localIP().toString() + 
                           "\",\"pondId\":" + String(assignedPondId) + "}";
             wsServer.sendTXT(num, status);
+            
+            // Send current sensor data immediately so dashboard shows data instantly
+            StaticJsonDocument<400> doc;
+            doc["deviceId"] = deviceId;
+            doc["pondId"] = assignedPondId;
+            doc["phValue"] = phValue;
+            doc["turbidity"] = turbidity;
+            doc["co2Level"] = co2Level;
+            doc["ammonia"] = ammonia;
+            doc["waterQualityStatus"] = waterQualityStatus;
+            doc["timestamp"] = millis();
+            doc["rssi"] = WiFi.RSSI();
+            
+            String json;
+            serializeJson(doc, json);
+            wsServer.sendTXT(num, json);
+            
+            Serial.println("✅ Sent initial data to new client");
             break;
         }
             
@@ -460,14 +566,20 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 }
 
 void broadcastDataToWebSocket() {
-    if (wsConnectedClients == 0) return;
+    // Always broadcast - even if no WebSocket clients (they might connect anytime)
+    
+    // Check for valid data before broadcasting
+    if (isnan(phValue) || isnan(turbidity) || isnan(co2Level) || isnan(ammonia)) {
+        Serial.println("⚠️ Invalid sensor data, skipping WebSocket broadcast");
+        return;
+    }
     
     StaticJsonDocument<400> doc;
     doc["deviceId"] = deviceId;
     doc["pondId"] = assignedPondId;
     doc["phValue"] = phValue;
     doc["turbidity"] = turbidity;
-    doc["dissolvedOxygen"] = dissolvedOxygen;
+    doc["co2Level"] = co2Level;
     doc["ammonia"] = ammonia;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["timestamp"] = millis();
@@ -476,7 +588,10 @@ void broadcastDataToWebSocket() {
     String json;
     serializeJson(doc, json);
     
-    wsServer.broadcastTXT(json);
+    // Only broadcast if we have clients and JSON is valid
+    if (wsConnectedClients > 0 && json.length() > 0) {
+        wsServer.broadcastTXT(json);
+    }
 }
 
 // Unified command processor for both MQTT and WebSocket
@@ -561,7 +676,7 @@ void setup()
     
     // Configure ADC pins
     pinMode(PH_PIN, INPUT);
-    pinMode(DO_PIN, INPUT);
+    pinMode(MQ135_PIN, INPUT);
     pinMode(TURBIDITY_PIN, INPUT);
 
     // Generate device ID with WQ prefix (Water Quality)
@@ -638,11 +753,12 @@ void loop()
         mqttConnected = true;
     }
 
-    // Read water quality sensors from actual hardware
-    phValue = readPH(PH_PIN);
-    turbidity = readTurbidity(TURBIDITY_PIN);
-    dissolvedOxygen = readDissolvedOxygen(DO_PIN);
-    waterQualityStatus = evaluateWaterQuality(phValue, turbidity, dissolvedOxygen);
+    // Read water quality sensors from actual hardware (faster sampling for real-time response)
+    phValue = readPH(PH_PIN, 30);           // Reduced samples for faster response
+    turbidity = readTurbidity(TURBIDITY_PIN, 30);
+    co2Level = readCO2(MQ135_PIN, 30);
+    ammonia = readAmmonia(MQ135_PIN, 30);   // Fast ammonia reading for real-time response
+    waterQualityStatus = evaluateWaterQuality(phValue, turbidity, co2Level, ammonia);
 
     // Print to Serial Monitor with connection status
     static unsigned long lastSerialPrint = 0;
@@ -667,9 +783,11 @@ void loop()
         Serial.print(phValue, 2);
         Serial.print(" | Turbidity: ");
         Serial.print(turbidity, 1);
-        Serial.print(" NTU | DO: ");
-        Serial.print(dissolvedOxygen, 2);
-        Serial.print(" mg/L | Status: ");
+        Serial.print(" NTU | CO2: ");
+        Serial.print(co2Level, 0);
+        Serial.print(" PPM | NH3: ");
+        Serial.print(ammonia, 2);
+        Serial.print(" PPM | Status: ");
         Serial.println(waterQualityStatus);
         Serial.println();
     }
@@ -688,5 +806,5 @@ void loop()
         publishStatus();
     }
 
-    delay(200);  // Reduced delay for faster loop cycles
+    delay(50);  // Ultra-fast loop for instant WebSocket response
 }

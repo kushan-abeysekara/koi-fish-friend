@@ -5,7 +5,8 @@ public class WebSocketDataRequest {
     private Long pondId;
     private Double phValue;
     private Double turbidity;
-    private Double dissolvedOxygen;
+    private Double co2Level;
+    private Double ammonia;
     private String waterQualityStatus;
 
     // Constructors
@@ -13,12 +14,13 @@ public class WebSocketDataRequest {
     }
 
     public WebSocketDataRequest(String deviceId, Long pondId, Double phValue, Double turbidity, 
-                                Double dissolvedOxygen, String waterQualityStatus) {
+                                Double co2Level, Double ammonia, String waterQualityStatus) {
         this.deviceId = deviceId;
         this.pondId = pondId;
         this.phValue = phValue;
         this.turbidity = turbidity;
-        this.dissolvedOxygen = dissolvedOxygen;
+        this.co2Level = co2Level;
+        this.ammonia = ammonia;
         this.waterQualityStatus = waterQualityStatus;
     }
 
@@ -55,12 +57,20 @@ public class WebSocketDataRequest {
         this.turbidity = turbidity;
     }
 
-    public Double getDissolvedOxygen() {
-        return dissolvedOxygen;
+    public Double getCo2Level() {
+        return co2Level;
     }
 
-    public void setDissolvedOxygen(Double dissolvedOxygen) {
-        this.dissolvedOxygen = dissolvedOxygen;
+    public void setCo2Level(Double co2Level) {
+        this.co2Level = co2Level;
+    }
+
+    public Double getAmmonia() {
+        return ammonia;
+    }
+
+    public void setAmmonia(Double ammonia) {
+        this.ammonia = ammonia;
     }
 
     public String getWaterQualityStatus() {

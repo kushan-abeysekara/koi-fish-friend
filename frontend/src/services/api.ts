@@ -641,8 +641,8 @@ export interface SensorData {
   // Water quality parameters
   phValue?: number;
   turbidity?: number;
-  dissolvedOxygen?: number;  // Dissolved Oxygen in mg/L
-  ammonia?: number;  // Keep for backward compatibility
+  co2Level?: number;  // CO2 in PPM from MQ135
+  ammonia?: number;   // Ammonia in PPM from MQ135
   airQuality?: number;
   waterQualityStatus?: string;
   status: string;

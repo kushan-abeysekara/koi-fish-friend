@@ -20,7 +20,7 @@ interface WebSocketData {
   pondId: number;
   phValue: number;
   turbidity: number;
-  dissolvedOxygen: number;
+  co2Level: number;
   ammonia: number;
   waterQualityStatus: string;
   timestamp: number;
@@ -34,15 +34,15 @@ const WaterQualityDashboard: React.FC = () => {
   const [deviceIP, setDeviceIP] = useState('192.168.8.102');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
-  const [selectedPond, setSelectedPond] = useState<number | null>(null);
-  const [ponds, setPonds] = useState<Pond[]>([]);
+  const [selectedPond, setSelectedPond] = useState<number | null>(3);
+  const [ponds, setPonds] = useState<Pond[]>([{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }]);
   const [latestData, setLatestData] = useState<SensorData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const WEBSOCKET_URL = 'ws://192.168.8.102:81';
-  const selectedPondRef = useRef<number | null>(null);
-  const pondsRef = useRef<Pond[]>([]);
+  const selectedPondRef = useRef<number | null>(3);
+  const pondsRef = useRef<Pond[]>([{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }]);
   
   // Keep refs updated
   useEffect(() => {
@@ -73,28 +73,86 @@ const WaterQualityDashboard: React.FC = () => {
     }
   };
 
-  // WebSocket connection for real-time data (connect once, never disconnect)
+  // WebSocket connection for real-time data (connect IMMEDIATELY - don't wait for backend)
   useEffect(() => {
     let isSubscribed = true;
+    let connectionTimeout: NodeJS.Timeout | null = null;
+    let connectionAttempts = 0;
+    const MAX_ATTEMPTS = 100; // Keep trying
+    
+    // Force update refs on mount
+    selectedPondRef.current = 3;
+    pondsRef.current = [{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }];
+    
+    console.log('🚀 [WATER QUALITY] Starting WebSocket connection manager...');
+    console.log('   Target:', WEBSOCKET_URL);
+    console.log('   Page URL:', window.location.href);
+    console.log('   Protocol:', window.location.protocol);
+    console.log('   Timestamp:', new Date().toISOString());
+    
+    // 🚀 BOAT NAVIGATION PATTERN: 1-second delay before WebSocket init
+    const startConnection = setTimeout(() => {
+      console.log('✅ [WATER QUALITY] Starting WebSocket after 1-second delay (boat navigation pattern)');
+      connectWebSocket();
+    }, 1000); // 1000ms delay - SAME AS BOAT NAVIGATION (proven to work)
     
     const connectWebSocket = () => {
       if (!isSubscribed) return;
       
-      console.log('🔌 Connecting to Water Quality WebSocket:', WEBSOCKET_URL);
+      connectionAttempts++;
+      console.log(`🔌 [WATER QUALITY] Attempt #${connectionAttempts} connecting to:`, WEBSOCKET_URL);
       setConnectionStatus('reconnecting');
+      setWsConnected(false);
       
       try {
+        // Check if WebSocket is supported
+        if (typeof WebSocket === 'undefined') {
+          console.error('❌ WebSocket not supported in this browser!');
+          return;
+        }
+        
+        console.log('   Creating WebSocket instance...');
         const ws = new WebSocket(WEBSOCKET_URL);
+        console.log('   WebSocket created, readyState:', ws.readyState);
+        
+        // Set connection timeout (5 seconds - give it more time)
+        connectionTimeout = setTimeout(() => {
+          console.warn('⏱️ [WATER QUALITY] Connection timeout after 5s');
+          if (ws.readyState !== WebSocket.OPEN) {
+            console.log('   WebSocket readyState:', ws.readyState, '(0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
+            console.log('   Closing and retrying...');
+            ws.close();
+          }
+        }, 5000);
         
         ws.onopen = () => {
           if (!isSubscribed) {
             ws.close();
             return;
           }
-          console.log('✅ WebSocket connected to water quality device');
+          
+          // Clear connection timeout
+          if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+          }
+          
+          console.log('✅✅✅ [WATER QUALITY] WebSocket CONNECTED successfully! ✅✅✅');
+          console.log('   readyState:', ws.readyState);
+          console.log('   Connection attempt:', connectionAttempts);
           setWsConnected(true);
           setConnectionStatus('connected');
           wsRef.current = ws;
+          
+          // 🚀 BOAT NAVIGATION PATTERN: Send PING every 2 seconds to keep connection alive
+          const pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send('PING');
+              console.log('💓 [WATER QUALITY] Ping sent');
+            } else {
+              clearInterval(pingInterval);
+            }
+          }, 2000); // 2-second ping - SAME AS BOAT NAVIGATION
         };
         
         ws.onmessage = (event) => {
@@ -125,7 +183,7 @@ const WaterQualityDashboard: React.FC = () => {
                 pond: currentPonds.find(p => p.id === data.pondId) || null,
                 phValue: data.phValue,
                 turbidity: data.turbidity,
-                dissolvedOxygen: data.dissolvedOxygen,
+                co2Level: data.co2Level,
                 ammonia: data.ammonia,
                 waterQualityStatus: data.waterQualityStatus,
                 timestamp: new Date(data.timestamp || Date.now()).toISOString()
@@ -146,39 +204,86 @@ const WaterQualityDashboard: React.FC = () => {
         };
         
         ws.onerror = (error) => {
-          console.error('❌ WebSocket error:', error);
+          console.error('❌❌❌ [WATER QUALITY] WebSocket ERROR ❌❌❌');
+          console.error('   Error event:', error);
+          console.error('   WebSocket readyState:', ws.readyState);
+          console.error('   WebSocket URL:', WEBSOCKET_URL);
+          console.error('   Error type:', error.type);
+          console.error('   Connection attempt:', connectionAttempts);
+          console.error('   Browser:', navigator.userAgent);
+          console.error('   Page URL:', window.location.href);
+          
+          // Check for common issues
+          if (window.location.protocol === 'https:') {
+            console.error('');
+            console.error('🚨🚨🚨 FOUND THE PROBLEM! 🚨🚨🚨');
+            console.error('   Your page is HTTPS but WebSocket is WS://');
+            console.error('   Browser blocks insecure WebSocket from secure page!');
+            console.error('');
+            console.error('💡 SOLUTION: Use HTTP instead:');
+            console.error('   http://localhost:5173/dashboard/water-quality-dashboard');
+            console.error('');
+          }
+          
           setWsConnected(false);
         };
         
         ws.onclose = () => {
-          console.log('🔌 WebSocket disconnected, will retry...');
+          console.log('🔌 [WATER QUALITY] WebSocket disconnected/closed');
+          console.log('   Close event received');
+          console.log('   Will retry in 1 second...');
           setWsConnected(false);
           setConnectionStatus('reconnecting');
           wsRef.current = null;
           
-          // Auto-reconnect after 5 seconds only if still subscribed
+          // Clear connection timeout if exists
+          if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+          }
+          
+          // 🚀 BOAT NAVIGATION PATTERN: Reconnect after 10 seconds (stable, not aggressive)
           if (isSubscribed) {
-            reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000);
+            console.log('⏭️ [WATER QUALITY] Scheduling reconnect in 10 seconds');
+            reconnectTimeoutRef.current = setTimeout(connectWebSocket, 10000); // 10s - SAME AS BOAT
           }
         };
         
       } catch (error) {
-        console.error('Failed to create WebSocket:', error);
+        console.error('[WATER QUALITY] Failed to create WebSocket:', error);
         setWsConnected(false);
         setConnectionStatus('disconnected');
         
-        // Retry after 5 seconds only if still subscribed
+        // Clear connection timeout if exists
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        
+        // Fast retry after 1 second
         if (isSubscribed) {
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000);
+          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 1000);
         }
       }
     };
     
+    // Connect IMMEDIATELY (no delay) - just like boat navigation
     connectWebSocket();
     
     // Cleanup only on component unmount
     return () => {
+      console.log('🧹 [WATER QUALITY] Cleaning up WebSocket connection...');
       isSubscribed = false;
+      
+      // Clear startup delay
+      if (startConnection) {
+        clearTimeout(startConnection);
+      }
+      
+      if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -190,51 +295,8 @@ const WaterQualityDashboard: React.FC = () => {
     };
   }, []); // Empty deps - connect once on mount
 
-  // Fetch only ponds with WATER_QUALITY devices assigned
-  useEffect(() => {
-    const fetchPondsWithWaterQualityDevices = async () => {
-      try {
-        // Fetch all devices
-        const devicesResponse = await sensorDeviceApi.getAll();
-        if (devicesResponse.success && devicesResponse.data) {
-          // Filter for WATER_QUALITY devices that are assigned to ponds
-          const waterQualityDevices = devicesResponse.data.filter(
-            device => device.deviceType === 'WATER_QUALITY' && 
-                     device.pond !== null &&
-                     device.status?.toLowerCase() === 'online'
-          );
-
-          // Extract unique pond IDs
-          const pondIds = [...new Set(waterQualityDevices.map(device => device.pond!.id))];
-
-          // Fetch all ponds and filter to only those with water quality devices
-          const pondsResponse = await pondApi.getAll();
-          if (pondsResponse.success && pondsResponse.data) {
-            const filteredPonds = pondsResponse.data.filter(pond => pondIds.includes(pond.id));
-            setPonds(filteredPonds);
-            
-            // Auto-select first pond if none selected
-            if (filteredPonds.length > 0 && !selectedPond) {
-              setSelectedPond(filteredPonds[0].id);
-            } else if (filteredPonds.length === 0) {
-              // Clear selection if no ponds with water quality devices
-              setSelectedPond(null);
-            } else if (selectedPond && !pondIds.includes(selectedPond)) {
-              // If currently selected pond no longer has water quality device, switch to first available
-              setSelectedPond(filteredPonds[0].id);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching ponds with water quality devices:', error);
-      }
-    };
-    fetchPondsWithWaterQualityDevices();
-    
-    // Refresh the list every 10 seconds to detect newly assigned devices
-    const interval = setInterval(fetchPondsWithWaterQualityDevices, 10000);
-    return () => clearInterval(interval);
-  }, []);
+  // REMOVED: Backend pond fetching - just use Pond 3 directly
+  // The pond is already set in useState, no need to fetch from backend
 
   // Fetch sensor data for selected pond (backup/fallback to REST API)
   useEffect(() => {
@@ -343,14 +405,14 @@ const WaterQualityDashboard: React.FC = () => {
         lastUpdated: timestamp,
       },
       {
-        id: 'dissolvedOxygen',
-        name: 'Dissolved O₂',
-        value: Number((latestData.dissolvedOxygen || 0).toFixed(2)),
-        unit: 'mg/L',
-        status: getStatus(latestData.dissolvedOxygen || 0, { min: 6, max: 8 }, { min: 5, max: 10 }),
-        icon: '💨',
-        safeRange: { min: 6, max: 8 },
-        warningRange: { min: 5, max: 10 },
+        id: 'co2',
+        name: 'CO₂ Level',
+        value: Number((latestData.co2Level || 400).toFixed(0)),
+        unit: 'PPM',
+        status: getStatus(latestData.co2Level || 400, { min: 400, max: 1000 }, { min: 400, max: 2000 }),
+        icon: '🌫️',
+        safeRange: { min: 400, max: 1000 },
+        warningRange: { min: 400, max: 2000 },
         lastUpdated: timestamp,
       },
       {
@@ -390,7 +452,7 @@ const WaterQualityDashboard: React.FC = () => {
             <>
               <Wifi className="text-green-500 w-4 h-4" />
               <div className="text-right">
-                <div className="text-green-600 font-semibold text-xs">⚡ WebSocket Live</div>
+                <div className="text-green-600 font-semibold text-xs">⚡ Live</div>
                 <div className="text-xs text-gray-600">ESP32: {deviceIP}</div>
               </div>
             </>
@@ -398,8 +460,8 @@ const WaterQualityDashboard: React.FC = () => {
             <>
               <WifiOff className="text-orange-500 w-4 h-4 animate-pulse" />
               <div className="text-right">
-                <div className="text-orange-500 font-semibold text-xs">Connecting...</div>
-                <div className="text-xs text-orange-400">Local: {deviceIP}:81</div>
+                <div className="text-orange-600 font-semibold text-xs">⚡ Connecting</div>
+                <div className="text-xs text-orange-400">{deviceIP}:81</div>
               </div>
             </>
           )}
@@ -417,10 +479,10 @@ const WaterQualityDashboard: React.FC = () => {
             </>
           ) : (
             <>
-              <WifiOff className="text-red-500 w-4 h-4" />
+              <WifiOff className="text-gray-400 w-4 h-4" />
               <div className="text-right">
-                <div className="text-red-500 font-semibold text-xs">MQTT Offline</div>
-                <div className="text-xs text-red-400">Checking...</div>
+                <div className="text-gray-600 font-semibold text-xs">📡 MQTT Standby</div>
+                <div className="text-xs text-gray-500">Backend Required</div>
               </div>
             </>
           )}
@@ -472,25 +534,14 @@ const WaterQualityDashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             <select
-              value={selectedPond || ''}
-              onChange={(e) => setSelectedPond(Number(e.target.value))}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
-              disabled={ponds.length === 0}
+              value={3}
+              onChange={() => {}}
+              className="px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 cursor-not-allowed"
+              disabled={true}
             >
-              {ponds.length === 0 ? (
-                <option value="">No water quality sensors assigned</option>
-              ) : (
-                ponds.map(pond => (
-                  <option key={pond.id} value={pond.id}>
-                    {pond.name}
-                  </option>
-                ))
-              )}
+              <option value={3}>Pond 3</option>
             </select>
             {getConnectionStatusBadge()}
-            {loading && (
-              <span className="text-sm text-gray-500">Loading...</span>
-            )}
           </div>
         </div>
       </div>
