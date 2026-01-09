@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { pondApi, expenditureApi } from '../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { pondApi, expenditureApi, sensorDataApi } from '../services/api';
+import type { SensorData } from '../services/api';
 
 interface Expenditure {
   id: number;
@@ -48,12 +49,7 @@ interface StockTransaction {
 const Expenditures: React.FC = () => {
   const [expenditures, setExpenditures] = useState<Expenditure[]>([]);
   const [ponds, setPonds] = useState<Pond[]>([]);
-
-  // Load ponds and expenditures from API on mount
-  useEffect(() => {
-    loadPonds();
-    loadExpenditures();
-  }, []);
+  const [sensorData, setSensorData] = useState<Record<number, SensorData | null>>({});
 
   const loadPonds = async () => {
     try {
@@ -91,6 +87,39 @@ const Expenditures: React.FC = () => {
       alert('Failed to load expenditures: ' + errorMessage);
     }
   };
+
+  const loadSensorData = useCallback(async () => {
+    const newSensorData: Record<number, SensorData | null> = {};
+    
+    for (const pond of ponds) {
+      try {
+        const response = await sensorDataApi.getLatestEnergyByPond(pond.id);
+        if (response.success && response.data) {
+          newSensorData[pond.id] = response.data;
+        } else {
+          newSensorData[pond.id] = null;
+        }
+      } catch (error) {
+        console.error(`Error loading sensor data for pond ${pond.id}:`, error);
+        newSensorData[pond.id] = null;
+      }
+    }
+    
+    setSensorData(newSensorData);
+  }, [ponds]);
+
+  // Load ponds and expenditures from API on mount
+  useEffect(() => {
+    loadPonds();
+    loadExpenditures();
+  }, []);
+
+  // Load sensor data for all ponds
+  useEffect(() => {
+    if (ponds.length > 0) {
+      loadSensorData();
+    }
+  }, [ponds, loadSensorData]);
   
   // Inventory Management State
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([
@@ -705,169 +734,135 @@ const Expenditures: React.FC = () => {
         })}
       </div>
 
-      {/* Sensor Data Cards - Realtime Current & Calculate Kwh */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <i className="fas fa-bolt text-yellow-500"></i>
-          Sensor Monitoring - Pond-wise Data
-        </h3>
+      {/* Sensor Data Cards - Realtime Current & Calculate Kwh - Only for Selected Pond */}
+      {selectedPond !== 'all' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+            <i className="fas fa-bolt text-yellow-500"></i>
+            Sensor Monitoring - {ponds.find(p => p.id === selectedPond)?.name}
+          </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Realtime Current Card */}
-          <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-6 hover:shadow-lg transition-all duration-200">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-4xl">⚡</span>
-              <div className="px-3 py-1 bg-indigo-100 border border-indigo-300 rounded-full">
-                <span className="text-sm font-bold text-indigo-700">
-                  {selectedPond === 'all' ? ponds.length : 1} Pond{selectedPond === 'all' && ponds.length > 1 ? 's' : ''}
-                </span>
+          {sensorData[selectedPond] ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Realtime Current Card */}
+              <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-6 hover:shadow-lg transition-all duration-200">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-4xl">⚡</span>
+                  <div className="px-3 py-1 bg-indigo-100 border border-indigo-300 rounded-full">
+                    <span className="text-xs font-semibold text-indigo-700">LIVE</span>
+                  </div>
+                </div>
+                <h3 className="text-lg font-bold text-indigo-600 mb-2">Realtime Current</h3>
+                <p className="text-sm text-gray-600 mb-4">Live electrical current monitoring</p>
+
+                <div className="bg-white rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-600">Current</span>
+                    <span className="text-2xl font-bold text-indigo-600">
+                      {sensorData[selectedPond].current.toFixed(2)} A
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-600">Voltage</span>
+                    <span className="text-lg font-semibold text-gray-700">
+                      {sensorData[selectedPond].voltage.toFixed(1)} V
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Power</span>
+                    <span className="text-lg font-semibold text-gray-700">
+                      {sensorData[selectedPond].power.toFixed(1)} W
+                    </span>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <span className="text-xs text-gray-500">
+                      Last updated: {new Date(sensorData[selectedPond].timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => window.location.href = '/dashboard/realtime-current'}
+                  className="mt-4 w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white py-2 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2"
+                >
+                  <i className="fas fa-arrow-right"></i>
+                  View Details
+                </button>
+              </div>
+
+              {/* Calculate Kwh Card */}
+              <div className="bg-gradient-to-br from-green-50 to-teal-50 border-2 border-green-200 rounded-xl p-6 hover:shadow-lg transition-all duration-200">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-4xl">📊</span>
+                  <div className="px-3 py-1 bg-green-100 border border-green-300 rounded-full">
+                    <span className="text-xs font-semibold text-green-700">ENERGY</span>
+                  </div>
+                </div>
+                <h3 className="text-lg font-bold text-green-600 mb-2">Energy Consumption</h3>
+                <p className="text-sm text-gray-600 mb-4">Power consumption and cost calculations</p>
+
+                <div className="bg-white rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-600">Energy</span>
+                    <span className="text-2xl font-bold text-green-600">
+                      {(sensorData[selectedPond].energyWh / 1000).toFixed(2)} kWh
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-600">Cost (LKR 25/kWh)</span>
+                    <span className="text-lg font-semibold text-gray-700">
+                      {formatCurrency((sensorData[selectedPond].energyWh / 1000) * 25)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Current Power</span>
+                    <span className="text-lg font-semibold text-gray-700">
+                      {sensorData[selectedPond].power.toFixed(1)} W
+                    </span>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <span className="text-xs text-gray-500">
+                      Last updated: {new Date(sensorData[selectedPond].timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => window.location.href = '/dashboard/calculate-kwh'}
+                  className="mt-4 w-full bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white py-2 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2"
+                >
+                  <i className="fas fa-arrow-right"></i>
+                  View Details
+                </button>
               </div>
             </div>
-            <h3 className="text-lg font-bold text-indigo-600 mb-2">Realtime Current</h3>
-            <p className="text-sm text-gray-600 mb-4">Live electrical current monitoring from sensors</p>
-
-            {selectedPond === 'all' ? (
-              <div className="space-y-2">
-                {ponds.map((pond) => {
-                  const pondColorClasses = pondColors[pond.color];
-                  const mockCurrent = (Math.random() * 15 + 5).toFixed(2); // Mock data
-                  const mockPower = (parseFloat(mockCurrent) * 230 / 1000).toFixed(2);
-
-                  return (
-                    <div key={pond.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${pondColorClasses.bg} ${pondColorClasses.text}`}>
-                        <i className="fas fa-water mr-1"></i>
-                        {pond.name}
-                      </span>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-gray-800">{mockCurrent} A</p>
-                        <p className="text-xs text-gray-500">{mockPower} kW</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="bg-white rounded-lg p-4">
-                {(() => {
-                  const mockCurrent = (Math.random() * 15 + 5).toFixed(2);
-                  const mockVoltage = (230 + Math.random() * 10 - 5).toFixed(2);
-                  const mockPower = (parseFloat(mockCurrent) * parseFloat(mockVoltage) / 1000).toFixed(2);
-
-                  return (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-gray-600">Current:</span>
-                        <span className="text-2xl font-bold text-indigo-600">{mockCurrent} A</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-gray-600">Voltage:</span>
-                        <span className="text-xl font-bold text-gray-700">{mockVoltage} V</span>
-                      </div>
-                      <div className="flex items-center justify-between border-t pt-2">
-                        <span className="text-sm font-semibold text-gray-600">Power:</span>
-                        <span className="text-2xl font-bold text-green-600">{mockPower} kW</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            <button
-              onClick={() => window.location.href = '/dashboard/realtime-current'}
-              className="mt-4 w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white py-2 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2"
-            >
-              <i className="fas fa-arrow-right"></i>
-              View Details
-            </button>
-          </div>
-
-          {/* Calculate Kwh Card */}
-          <div className="bg-gradient-to-br from-green-50 to-teal-50 border-2 border-green-200 rounded-xl p-6 hover:shadow-lg transition-all duration-200">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-4xl">📊</span>
-              <div className="px-3 py-1 bg-green-100 border border-green-300 rounded-full">
-                <span className="text-sm font-bold text-green-700">
-                  {selectedPond === 'all' ? ponds.length : 1} Pond{selectedPond === 'all' && ponds.length > 1 ? 's' : ''}
-                </span>
+          ) : (
+            <div className="bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded">
+              <div className="flex items-start gap-3">
+                <i className="fas fa-exclamation-triangle text-yellow-500 text-lg mt-0.5"></i>
+                <div className="text-sm text-yellow-800">
+                  <p className="font-semibold mb-1">No Sensor Data Available</p>
+                  <p>
+                    No sensor data is available for this pond. Make sure a sensor device is assigned and sending data.
+                  </p>
+                </div>
               </div>
             </div>
-            <h3 className="text-lg font-bold text-green-600 mb-2">Calculate Kwh</h3>
-            <p className="text-sm text-gray-600 mb-4">Power consumption and cost calculations</p>
+          )}
 
-            {selectedPond === 'all' ? (
-              <div className="space-y-2">
-                {ponds.map((pond) => {
-                  const pondColorClasses = pondColors[pond.color];
-                  const mockTodayKwh = (Math.random() * 20 + 40).toFixed(2); // Mock data
-                  const mockCost = (parseFloat(mockTodayKwh) * 25).toFixed(2); // 25 LKR per kWh
-
-                  return (
-                    <div key={pond.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${pondColorClasses.bg} ${pondColorClasses.text}`}>
-                        <i className="fas fa-water mr-1"></i>
-                        {pond.name}
-                      </span>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-gray-800">{mockTodayKwh} kWh</p>
-                        <p className="text-xs text-green-600">Rs {mockCost} today</p>
-                      </div>
-                    </div>
-                  );
-                })}
+          <div className="mt-4 bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+            <div className="flex items-start gap-3">
+              <i className="fas fa-info-circle text-blue-500 text-lg mt-0.5"></i>
+              <div className="text-sm text-blue-800">
+                <p className="font-semibold mb-1">Real-time Sensor Data</p>
+                <p>
+                  This section displays live sensor data for the selected pond. Click "View Details" to see comprehensive analytics and historical trends.
+                </p>
               </div>
-            ) : (
-              <div className="bg-white rounded-lg p-4">
-                {(() => {
-                  const mockTodayKwh = (Math.random() * 20 + 40).toFixed(2);
-                  const mockWeekKwh = (parseFloat(mockTodayKwh) * 7).toFixed(2);
-                  const mockMonthKwh = (parseFloat(mockTodayKwh) * 30).toFixed(2);
-                  const mockMonthlyCost = (parseFloat(mockMonthKwh) * 25).toFixed(2);
-
-                  return (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-gray-600">Today:</span>
-                        <span className="text-xl font-bold text-gray-700">{mockTodayKwh} kWh</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-gray-600">This Week:</span>
-                        <span className="text-xl font-bold text-gray-700">{mockWeekKwh} kWh</span>
-                      </div>
-                      <div className="flex items-center justify-between border-t pt-2">
-                        <span className="text-sm font-semibold text-gray-600">Monthly Cost:</span>
-                        <span className="text-2xl font-bold text-green-600">{formatCurrency(parseFloat(mockMonthlyCost))}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            <button
-              onClick={() => window.location.href = '/dashboard/calculate-kwh'}
-              className="mt-4 w-full bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white py-2 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2"
-            >
-              <i className="fas fa-arrow-right"></i>
-              View Details
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
-          <div className="flex items-start gap-3">
-            <i className="fas fa-info-circle text-blue-500 text-lg mt-0.5"></i>
-            <div className="text-sm text-blue-800">
-              <p className="font-semibold mb-1">Sensor Data Preview</p>
-              <p>
-                This section shows real-time sensor data for electrical monitoring. Click "View Details" to see comprehensive analytics and historical trends.
-                {selectedPond !== 'all' && ` Currently showing data for ${ponds.find(p => p.id === selectedPond)?.name}.`}
-              </p>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Expenditures List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

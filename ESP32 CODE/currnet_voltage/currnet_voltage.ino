@@ -35,8 +35,8 @@ PowerSchedule schedules[MAX_SCHEDULES];
 int scheduleCount = 0;
 
 // ===================== WiFi & MQTT CONFIG =====================
-const char *ssid = "kavish99";
-const char *password = "kavish99";
+const char *ssid = "Dulshan Dialog 4G 643";
+const char *password = "Chuki000";
 
 // HiveMQ Public Broker
 const char *mqtt_server = "broker.hivemq.com";
