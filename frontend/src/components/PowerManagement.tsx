@@ -1,20 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { powerScheduleApi, sensorDeviceApi, pondApi } from '../services/api';
 import type { PowerSchedule, Pond, SensorDevice } from '../services/api';
-import { Edit2, Trash2, Plus, Calendar, Clock, Power, PowerOff, RefreshCw, Check, X } from 'lucide-react';
+import { Edit2, Trash2, Plus, Calendar, Clock, Power, RefreshCw, Check, X } from 'lucide-react';
+
+// Extended device state for power control
+interface DeviceState extends SensorDevice {
+  relayState?: 'ON' | 'OFF';
+  controlMode?: 'manual' | 'schedule' | 'auto';
+  scheduleCount?: number;
+}
 
 export default function PowerManagement() {
   const [activeTab, setActiveTab] = useState<'control' | 'schedules'>('control');
   const [ponds, setPonds] = useState<Pond[]>([]);
   const [selectedPondId, setSelectedPondId] = useState<number | null>(null);
-  const [device, setDevice] = useState<SensorDevice | null>(null);
+  const [device, setDevice] = useState<DeviceState | null>(null);
   const [schedules, setSchedules] = useState<PowerSchedule[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastCommand, setLastCommand] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<PowerSchedule | null>(null);
-  const [controlMode, setControlMode] = useState<'manual-on' | 'manual-off' | 'auto' | 'schedule' | null>(null);
+  const [commandInProgress, setCommandInProgress] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -59,7 +65,14 @@ export default function PowerManagement() {
         if (deviceRes.success && deviceRes.data && deviceRes.data.length > 0) {
           const budgetDevice = deviceRes.data.find(d => d.deviceType === 'BUDGET_MANAGEMENT');
           if (budgetDevice) {
-            setDevice(budgetDevice);
+            // Parse device state from response (backend may include relayState/controlMode)
+            const extendedDevice: DeviceState = {
+              ...budgetDevice,
+              relayState: (budgetDevice as DeviceState).relayState,
+              controlMode: (budgetDevice as DeviceState).controlMode,
+              scheduleCount: (budgetDevice as DeviceState).scheduleCount
+            };
+            setDevice(extendedDevice);
           } else {
             setDevice(null);
             setError('No BUDGET_MANAGEMENT device found for this pond');
@@ -81,13 +94,7 @@ export default function PowerManagement() {
   }, [selectedPondId]);
 
   // Fetch schedules when device is available and schedule tab is active
-  useEffect(() => {
-    if (device && activeTab === 'schedules') {
-      fetchSchedules();
-    }
-  }, [device, activeTab]);
-
-  const fetchSchedules = async () => {
+  const fetchSchedules = useCallback(async () => {
     if (!device) return;
 
     try {
@@ -98,90 +105,194 @@ export default function PowerManagement() {
     } catch {
       setError('Failed to fetch schedules');
     }
-  };
+  }, [device]);
 
-  // Power Control Functions
+  useEffect(() => {
+    if (device && activeTab === 'schedules') {
+      fetchSchedules();
+    }
+  }, [device, activeTab, fetchSchedules]);
+
+  // Power Control Functions with retry and state refresh
   const handlePowerOn = async () => {
-    if (!device) return;
+    if (!device || commandInProgress) return;
 
     try {
+      setCommandInProgress(true);
       setLoading(true);
       setError(null);
-      await sensorDeviceApi.powerOn(device.deviceId);
-      setLastCommand('POWER ON');
-      setControlMode('manual-on');
-      alert('✅ Power turned ON successfully!');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to turn power on');
-      alert('❌ Failed to turn power ON');
+      
+      const response = await sensorDeviceApi.powerOn(device.deviceId);
+      
+      if (response.success) {
+        // Optimistically update UI
+        setDevice(prev => prev ? { ...prev, relayState: 'ON', controlMode: 'manual' } : null);
+        
+        // Wait a moment for device to process
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Refresh device state from backend
+        if (selectedPondId) {
+          const deviceRes = await sensorDeviceApi.getByPond(selectedPondId);
+          if (deviceRes.success && deviceRes.data) {
+            const updated = deviceRes.data.find(d => d.deviceId === device.deviceId);
+            if (updated) {
+              setDevice({ ...updated, relayState: (updated as DeviceState).relayState, controlMode: (updated as DeviceState).controlMode });
+            }
+          }
+        }
+        
+        alert('✅ Power turned ON successfully!');
+      } else {
+        throw new Error(response.message || 'Failed to turn power on');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error && 'response' in err 
+        ? (err as { response?: { data?: { message?: string } } }).response?.data?.message 
+        : undefined;
+      setError(errorMessage || (err instanceof Error ? err.message : 'Failed to turn power on'));
+      alert('❌ Failed to turn power ON\n\n' + (errorMessage || 'Check if device is online'));
     } finally {
       setLoading(false);
+      setCommandInProgress(false);
     }
   };
 
   const handlePowerOff = async () => {
-    if (!device) return;
+    if (!device || commandInProgress) return;
 
     if (!confirm('⚠️ WARNING: Turn OFF Power?\n\nThis will CUT POWER to all connected equipment.\n\nAre you sure?')) {
       return;
     }
 
     try {
+      setCommandInProgress(true);
       setLoading(true);
       setError(null);
-      await sensorDeviceApi.powerOff(device.deviceId);
-      setLastCommand('POWER OFF');
-      setControlMode('manual-off');
-      alert('✅ Power turned OFF successfully!');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to turn power off');
-      alert('❌ Failed to turn power OFF');
+      
+      const response = await sensorDeviceApi.powerOff(device.deviceId);
+      
+      if (response.success) {
+        // Optimistically update UI
+        setDevice(prev => prev ? { ...prev, relayState: 'OFF', controlMode: 'manual' } : null);
+        
+        // Wait for device to process
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Refresh device state
+        if (selectedPondId) {
+          const deviceRes = await sensorDeviceApi.getByPond(selectedPondId);
+          if (deviceRes.success && deviceRes.data) {
+            const updated = deviceRes.data.find(d => d.deviceId === device.deviceId);
+            if (updated) {
+              setDevice({ ...updated, relayState: (updated as DeviceState).relayState, controlMode: (updated as DeviceState).controlMode });
+            }
+          }
+        }
+        
+        alert('✅ Power turned OFF successfully!');
+      } else {
+        throw new Error(response.message || 'Failed to turn power off');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error && 'response' in err 
+        ? (err as { response?: { data?: { message?: string } } }).response?.data?.message 
+        : undefined;
+      setError(errorMessage || (err instanceof Error ? err.message : 'Failed to turn power off'));
+      alert('❌ Failed to turn power OFF\n\n' + (errorMessage || 'Check if device is online'));
     } finally {
       setLoading(false);
+      setCommandInProgress(false);
     }
   };
 
   const handleAutoMode = async () => {
-    if (!device) return;
+    if (!device || commandInProgress) return;
 
     if (!confirm('🤖 Switch to AUTO Mode?\n\nVoltage-based control (210V - 250V).\n\nContinue?')) {
       return;
     }
 
     try {
+      setCommandInProgress(true);
       setLoading(true);
       setError(null);
-      await sensorDeviceApi.setAutoMode(device.deviceId);
-      setLastCommand('AUTO MODE');
-      setControlMode('auto');
-      alert('✅ Switched to AUTO mode successfully!');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to set auto mode');
-      alert('❌ Failed to set AUTO mode');
+      
+      const response = await sensorDeviceApi.setAutoMode(device.deviceId);
+      
+      if (response.success) {
+        setDevice(prev => prev ? { ...prev, controlMode: 'auto' } : null);
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        if (selectedPondId) {
+          const deviceRes = await sensorDeviceApi.getByPond(selectedPondId);
+          if (deviceRes.success && deviceRes.data) {
+            const updated = deviceRes.data.find(d => d.deviceId === device.deviceId);
+            if (updated) {
+              setDevice({ ...updated, relayState: (updated as DeviceState).relayState, controlMode: (updated as DeviceState).controlMode });
+            }
+          }
+        }
+        
+        alert('✅ Switched to AUTO mode successfully!');
+      } else {
+        throw new Error(response.message || 'Failed to set auto mode');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error && 'response' in err 
+        ? (err as { response?: { data?: { message?: string } } }).response?.data?.message 
+        : undefined;
+      setError(errorMessage || (err instanceof Error ? err.message : 'Failed to set auto mode'));
+      alert('❌ Failed to set AUTO mode\n\n' + (errorMessage || 'Check if device is online'));
     } finally {
       setLoading(false);
+      setCommandInProgress(false);
     }
   };
 
   const handleScheduleMode = async () => {
-    if (!device) return;
+    if (!device || commandInProgress) return;
 
     if (!confirm('📅 Switch to SCHEDULE Mode?\n\nTime-based control. Requires schedules to be created.\n\nContinue?')) {
       return;
     }
 
     try {
+      setCommandInProgress(true);
       setLoading(true);
       setError(null);
-      await sensorDeviceApi.setScheduleMode(device.deviceId);
-      setLastCommand('SCHEDULE MODE');
-      setControlMode('schedule');
-      alert('✅ Switched to SCHEDULE mode successfully!');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to set schedule mode');
-      alert('❌ Failed to set SCHEDULE mode');
+      
+      const response = await sensorDeviceApi.setScheduleMode(device.deviceId);
+      
+      if (response.success) {
+        setDevice(prev => prev ? { ...prev, controlMode: 'schedule' } : null);
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        if (selectedPondId) {
+          const deviceRes = await sensorDeviceApi.getByPond(selectedPondId);
+          if (deviceRes.success && deviceRes.data) {
+            const updated = deviceRes.data.find(d => d.deviceId === device.deviceId);
+            if (updated) {
+              setDevice({ ...updated, relayState: (updated as DeviceState).relayState, controlMode: (updated as DeviceState).controlMode });
+            }
+          }
+        }
+        
+        alert('✅ Switched to SCHEDULE mode successfully!');
+      } else {
+        throw new Error(response.message || 'Failed to set schedule mode');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error && 'response' in err 
+        ? (err as { response?: { data?: { message?: string } } }).response?.data?.message 
+        : undefined;
+      setError(errorMessage || (err instanceof Error ? err.message : 'Failed to set schedule mode'));
+      alert('❌ Failed to set SCHEDULE mode\n\n' + (errorMessage || 'Check if device is online'));
     } finally {
       setLoading(false);
+      setCommandInProgress(false);
     }
   };
 
@@ -201,8 +312,6 @@ export default function PowerManagement() {
 
     try {
       setLoading(true);
-      const [startHour, startMinute] = formData.startTime.split(':').map(Number);
-      const [endHour, endMinute] = formData.endTime.split(':').map(Number);
 
       await powerScheduleApi.create({
         deviceId: device.deviceId,
@@ -225,7 +334,7 @@ export default function PowerManagement() {
   };
 
   const handleUpdateSchedule = async () => {
-    if (!editingSchedule) return;
+    if (!editingSchedule || !editingSchedule.id) return;
 
     try {
       setLoading(true);
@@ -291,7 +400,7 @@ export default function PowerManagement() {
       endTime: schedule.endTime,
       daysOfWeek: schedule.daysOfWeek,
       enabled: schedule.enabled,
-      autoMode: (schedule as any).autoMode || false
+      autoMode: (schedule as PowerSchedule & { autoMode?: boolean }).autoMode || false
     });
     setShowForm(true);
   };
@@ -378,6 +487,24 @@ export default function PowerManagement() {
                 <p className="font-mono font-semibold">{device.ipAddress}</p>
               </div>
             )}
+            {device.relayState && (
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Relay State</p>
+                <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+                  device.relayState === 'ON' ? 'bg-green-500 text-white' : 'bg-gray-500 text-white'
+                }`}>
+                  {device.relayState}
+                </span>
+              </div>
+            )}
+            {device.controlMode && (
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Control Mode</p>
+                <span className="px-3 py-1 rounded-full text-sm font-bold bg-blue-500 text-white uppercase">
+                  {device.controlMode}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -416,12 +543,12 @@ export default function PowerManagement() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                 <button
                   onClick={handlePowerOn}
-                  disabled={loading || device.status !== 'online'}
+                  disabled={loading || commandInProgress || device.status !== 'online'}
                   className={`bg-gradient-to-br from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white p-8 rounded-2xl font-bold transition-all shadow-xl hover:shadow-2xl transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                    controlMode === 'manual-on' ? 'ring-4 ring-green-300 ring-offset-4 scale-105' : ''
+                    device.controlMode === 'manual' && device.relayState === 'ON' ? 'ring-4 ring-green-300 ring-offset-4 scale-105' : ''
                   }`}
                 >
-                  {controlMode === 'manual-on' && (
+                  {device.controlMode === 'manual' && device.relayState === 'ON' && (
                     <div className="absolute -top-3 right-4 bg-white text-green-600 px-3 py-1 rounded-full text-xs font-bold shadow-lg">
                       🟢 ACTIVE
                     </div>
@@ -435,12 +562,12 @@ export default function PowerManagement() {
 
                 <button
                   onClick={handlePowerOff}
-                  disabled={loading || device.status !== 'online'}
+                  disabled={loading || commandInProgress || device.status !== 'online'}
                   className={`bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white p-8 rounded-2xl font-bold transition-all shadow-xl hover:shadow-2xl transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                    controlMode === 'manual-off' ? 'ring-4 ring-red-300 ring-offset-4 scale-105' : ''
+                    device.controlMode === 'manual' && device.relayState === 'OFF' ? 'ring-4 ring-red-300 ring-offset-4 scale-105' : ''
                   }`}
                 >
-                  {controlMode === 'manual-off' && (
+                  {device.controlMode === 'manual' && device.relayState === 'OFF' && (
                     <div className="absolute -top-3 right-4 bg-white text-red-600 px-3 py-1 rounded-full text-xs font-bold shadow-lg">
                       🔴 ACTIVE
                     </div>
@@ -454,12 +581,12 @@ export default function PowerManagement() {
 
                 <button
                   onClick={handleAutoMode}
-                  disabled={loading || device.status !== 'online'}
+                  disabled={loading || commandInProgress || device.status !== 'online'}
                   className={`bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white p-8 rounded-2xl font-bold transition-all shadow-xl hover:shadow-2xl transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                    controlMode === 'auto' ? 'ring-4 ring-blue-300 ring-offset-4 scale-105' : ''
+                    device.controlMode === 'auto' ? 'ring-4 ring-blue-300 ring-offset-4 scale-105' : ''
                   }`}
                 >
-                  {controlMode === 'auto' && (
+                  {device.controlMode === 'auto' && (
                     <div className="absolute -top-3 right-4 bg-white text-blue-600 px-3 py-1 rounded-full text-xs font-bold shadow-lg">
                       🔵 ACTIVE
                     </div>
@@ -473,12 +600,12 @@ export default function PowerManagement() {
 
                 <button
                   onClick={handleScheduleMode}
-                  disabled={loading || device.status !== 'online'}
+                  disabled={loading || commandInProgress || device.status !== 'online'}
                   className={`bg-gradient-to-br from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white p-8 rounded-2xl font-bold transition-all shadow-xl hover:shadow-2xl transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed relative ${
-                    controlMode === 'schedule' ? 'ring-4 ring-purple-300 ring-offset-4 scale-105' : ''
+                    device.controlMode === 'schedule' ? 'ring-4 ring-purple-300 ring-offset-4 scale-105' : ''
                   }`}
                 >
-                  {controlMode === 'schedule' && (
+                  {device.controlMode === 'schedule' && (
                     <div className="absolute -top-3 right-4 bg-white text-purple-600 px-3 py-1 rounded-full text-xs font-bold shadow-lg">
                       🟣 ACTIVE
                     </div>
@@ -672,7 +799,7 @@ export default function PowerManagement() {
                             >
                               {schedule.enabled ? 'ACTIVE' : 'DISABLED'}
                             </span>
-                            {(schedule as any).autoMode && (
+                            {(schedule as PowerSchedule & { autoMode?: boolean }).autoMode && (
                               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 flex items-center gap-1">
                                 <span>🤖</span>
                                 AUTO MODE
@@ -707,7 +834,7 @@ export default function PowerManagement() {
 
                         <div className="flex gap-2">
                           <button
-                            onClick={() => handleToggleSchedule(schedule.id)}
+                            onClick={() => schedule.id && handleToggleSchedule(schedule.id)}
                             className={`p-2 rounded-lg ${
                               schedule.enabled
                                 ? 'bg-yellow-100 hover:bg-yellow-200 text-yellow-700'
@@ -725,7 +852,7 @@ export default function PowerManagement() {
                             <Edit2 className="w-5 h-5" />
                           </button>
                           <button
-                            onClick={() => handleDeleteSchedule(schedule.id)}
+                            onClick={() => schedule.id && handleDeleteSchedule(schedule.id)}
                             className="p-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg"
                             title="Delete"
                           >
