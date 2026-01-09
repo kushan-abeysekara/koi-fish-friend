@@ -32,7 +32,6 @@ const BoatNavigation: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
-  const [commandInterval, setCommandInterval] = useState<NodeJS.Timeout | null>(null);
   
   // Camera feed states
   const [cameraConnected, setCameraConnected] = useState(false);
@@ -246,11 +245,6 @@ const BoatNavigation: React.FC = () => {
       clearInterval(statusInterval);
       clearTimeout(wsTimeout);
       
-      // Stop any active command intervals
-      if (commandInterval) {
-        clearInterval(commandInterval);
-      }
-      
       if (client) {
         // Send final STOP
         const stopCmd = JSON.stringify({ command: 'STOP', speed: 0 });
@@ -408,34 +402,13 @@ const BoatNavigation: React.FC = () => {
     }
   };
 
-  const handleMouseDown = (command: string) => {
-    // Clear any existing interval
-    if (commandInterval) {
-      clearInterval(commandInterval);
-    }
-    
-    // Send command immediately
+  const handleClick = (command: string) => {
+    // Send command once - boat will continue moving until another command is sent
     sendCommand(command);
-    
-    // Keep sending command every 2 seconds to prevent watchdog timeout
-    const interval = setInterval(() => {
-      sendCommand(command);
-      console.log('🔁 Repeating command:', command);
-    }, 2000); // Send every 2 seconds (watchdog timeout is 4s)
-    
-    setCommandInterval(interval);
+    console.log('🚤 Continuous movement:', command);
   };
 
-  const handleMouseUp = () => {
-    // Stop repeating commands
-    if (commandInterval) {
-      clearInterval(commandInterval);
-      setCommandInterval(null);
-    }
-    
-    // Send STOP command
-    sendCommand('STOP');
-  };
+
 
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newSpeed = parseInt(e.target.value);
@@ -444,12 +417,6 @@ const BoatNavigation: React.FC = () => {
   };
 
   const handleEmergencyStop = () => {
-    // Stop any active command intervals
-    if (commandInterval) {
-      clearInterval(commandInterval);
-      setCommandInterval(null);
-    }
-    
     sendCommand('STOP');
     setSpeed(0);
   };
@@ -488,35 +455,58 @@ const BoatNavigation: React.FC = () => {
               <p className="text-gray-500">Remote control with live camera feed</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {isConnected ? (
-              <>
-                <Wifi className="text-green-500 w-6 h-6" />
-                <div className="text-right">
-                  <span className="text-green-500 font-semibold block">
-                    Connected
-                    {connectionMode === 'hybrid' && <span className="ml-1 text-xs font-bold">🔄 HYBRID</span>}
-                    {connectionMode === 'websocket' && <span className="ml-1 text-xs font-bold">⚡ LOCAL</span>}
-                    {connectionMode === 'mqtt' && <span className="ml-1 text-xs">🌐 MQTT</span>}
-                  </span>
-                  {connectionQuality !== 0 && (
-                    <span className={`text-xs ${getConnectionQualityLabel().color}`}>
-                      {getConnectionQualityLabel().label} ({connectionQuality} dBm)
-                    </span>
-                  )}
-                  {esp32IP && (
-                    <span className="text-xs text-gray-500 block">{esp32IP}</span>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <WifiOff className="text-orange-500 w-6 h-6" />
-                <div className="text-right">
-                  <span className="text-orange-500 font-semibold block">Connecting...</span>
-                  <span className="text-xs text-orange-400">Auto-stop in 4s</span>
-                </div>
-              </>
+          
+          {/* Always Show Connection Status - Top Right Corner */}
+          <div className="flex flex-col gap-2">
+            {/* WebSocket Status */}
+            <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-lg border-2 border-gray-200">
+              {wsConnected ? (
+                <>
+                  <Wifi className="text-green-500 w-5 h-5" />
+                  <div className="text-right">
+                    <div className="text-green-600 font-bold text-sm">⚡ LOCAL WebSocket</div>
+                    <div className="text-xs text-gray-600">ESP32: {esp32IP || '192.168.8.100'}</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="text-orange-500 w-5 h-5 animate-pulse" />
+                  <div className="text-right">
+                    <div className="text-orange-500 font-semibold text-sm">Connecting...</div>
+                    <div className="text-xs text-orange-400">Local: 192.168.8.100:81</div>
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {/* MQTT Status */}
+            <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-lg border-2 border-gray-200">
+              {mqttConnected ? (
+                <>
+                  <Wifi className="text-blue-500 w-5 h-5" />
+                  <div className="text-right">
+                    <div className="text-blue-600 font-bold text-sm">🌐 MQTT Connected</div>
+                    <div className="text-xs text-gray-600">broker.hivemq.com:8000</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="text-red-500 w-5 h-5" />
+                  <div className="text-right">
+                    <div className="text-red-500 font-semibold text-sm">MQTT Offline</div>
+                    <div className="text-xs text-red-400">Reconnecting...</div>
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {/* Connection Quality */}
+            {connectionQuality !== 0 && (
+              <div className="text-right text-xs">
+                <span className={`font-semibold ${getConnectionQualityLabel().color}`}>
+                  Signal: {getConnectionQualityLabel().label} ({connectionQuality} dBm)
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -726,11 +716,7 @@ const BoatNavigation: React.FC = () => {
             <div className="flex flex-col items-center gap-3 mb-4">
               {/* Up Button */}
               <button
-                onMouseDown={() => handleMouseDown('FORWARD')}
-                onMouseUp={handleMouseUp}
-                onTouchStart={() => handleMouseDown('FORWARD')}
-                onTouchEnd={handleMouseUp}
-                onContextMenu={(e) => e.preventDefault()}
+                onClick={() => handleClick('FORWARD')}
                 className="w-20 h-20 bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-all transform hover:scale-105 active:scale-95"
               >
                 <ArrowUp size={32} />
@@ -739,11 +725,7 @@ const BoatNavigation: React.FC = () => {
               {/* Left, Stop, Right Buttons */}
               <div className="flex gap-3">
                 <button
-                  onMouseDown={() => handleMouseDown('LEFT_ONLY')}
-                  onMouseUp={handleMouseUp}
-                  onTouchStart={() => handleMouseDown('LEFT_ONLY')}
-                  onTouchEnd={handleMouseUp}
-                  onContextMenu={(e) => e.preventDefault()}
+                  onClick={() => handleClick('LEFT_ONLY')}
                   className="w-20 h-20 bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-all transform hover:scale-105 active:scale-95"
                 >
                   <ArrowLeft size={32} />
@@ -757,11 +739,7 @@ const BoatNavigation: React.FC = () => {
                 </button>
 
                 <button
-                  onMouseDown={() => handleMouseDown('RIGHT_ONLY')}
-                  onMouseUp={handleMouseUp}
-                  onTouchStart={() => handleMouseDown('RIGHT_ONLY')}
-                  onTouchEnd={handleMouseUp}
-                  onContextMenu={(e) => e.preventDefault()}
+                  onClick={() => handleClick('RIGHT_ONLY')}
                   className="w-20 h-20 bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-all transform hover:scale-105 active:scale-95"
                 >
                   <ArrowRight size={32} />
@@ -770,10 +748,7 @@ const BoatNavigation: React.FC = () => {
 
               {/* Down Button */}
               <button
-                onMouseDown={() => handleMouseDown('BACKWARD')}
-                onMouseUp={handleMouseUp}
-                onTouchStart={() => handleMouseDown('BACKWARD')}
-                onTouchEnd={handleMouseUp}
+                onClick={() => handleClick('BACKWARD')}
                 className="w-20 h-20 bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-all transform hover:scale-105 active:scale-95"
               >
                 <ArrowDown size={32} />
@@ -781,8 +756,11 @@ const BoatNavigation: React.FC = () => {
             </div>
 
             <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-center">
-              <p className="text-sm text-blue-700">
-                💡 Hold buttons to move. Release to stop automatically.
+              <p className="text-sm text-blue-700 font-semibold">
+                💡 Click once to move continuously. Click STOP (red) to halt.
+              </p>
+              <p className="text-xs text-blue-600 mt-1">
+                No watchdog - boat keeps moving until you send another command
               </p>
             </div>
           </div>

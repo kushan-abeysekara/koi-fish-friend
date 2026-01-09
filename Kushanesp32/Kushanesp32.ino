@@ -136,8 +136,6 @@ String currentCommand = "STOP";
 
 // Connection & Safety
 unsigned long lastHeartbeat = 0;
-unsigned long lastCommandReceived = 0;
-const unsigned long HEARTBEAT_TIMEOUT = 4000;  // 4 seconds - stop if no command received
 const unsigned long HEARTBEAT_INTERVAL = 1000; // Send heartbeat every 1 second
 int reconnectAttempts = 0;
 const int MAX_RECONNECT_ATTEMPTS = 3;  // Reduced for faster failover
@@ -145,10 +143,8 @@ const int MAX_RECONNECT_ATTEMPTS = 3;  // Reduced for faster failover
 // Timing
 unsigned long lastSensorRead = 0;
 unsigned long lastDisplayUpdate = 0;
-unsigned long lastWatchdog = 0;
 const unsigned long SENSOR_READ_INTERVAL = 100;   // 100ms
 const unsigned long DISPLAY_UPDATE_INTERVAL = 500; // 500ms
-const unsigned long WATCHDOG_INTERVAL = 100;      // 100ms - check connection frequently
 
 // ==================== SETUP ====================
 
@@ -280,12 +276,10 @@ void setup() {
   
   // Initialize safety timers
   lastHeartbeat = millis();
-  lastCommandReceived = millis();
-  lastWatchdog = millis();
   lastWiFiCheck = millis();
   
   Serial.println("Initialization complete!");
-  Serial.println("Safety: Watchdog enabled (4s timeout)");
+  Serial.println("Mode: Continuous movement - no watchdog");
   Serial.println("Hybrid Mode: MQTT + WebSocket (local network)");
   Serial.println("========================================");
 }
@@ -317,26 +311,6 @@ void loop() {
     reconnectAttempts = 0;  // Reset on successful connection
   }
   mqttClient.loop();
-  
-  // CRITICAL: Watchdog timer - Auto-stop if no command received
-  if (currentMillis - lastWatchdog >= WATCHDOG_INTERVAL) {
-    lastWatchdog = currentMillis;
-    
-    // Stop if no command for HEARTBEAT_TIMEOUT (now any connection counts)
-    bool anyConnection = mqttConnected || (wsConnectedClients > 0);
-    if (!anyConnection || (currentMillis - lastCommandReceived >= HEARTBEAT_TIMEOUT)) {
-      if (currentCommand != "STOP") {
-        Serial.print("⚠️ WATCHDOG: ");
-        if (!anyConnection) {
-          Serial.println("No connection - EMERGENCY STOP!");
-        } else {
-          Serial.println("Command timeout (4s) - EMERGENCY STOP!");
-        }
-        stopMotors();
-        autoMode = false;  // Disable auto mode for safety
-      }
-    }
-  }
   
   // Send heartbeat to frontend
   if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
@@ -790,7 +764,6 @@ void reconnectMQTT() {
       
       mqttConnected = true;
       reconnectAttempts = 0;
-      lastCommandReceived = millis();  // Reset timeout on reconnect
     } else {
       Serial.print(" ✗ Failed, rc=");
       Serial.println(mqttClient.state());
@@ -813,8 +786,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("📨 MQTT: ");
   Serial.println(message);
   
-  // Update heartbeat timer and source
-  lastCommandReceived = millis();
+  // Mark command source
   lastCommandSource = "mqtt";
   
   // Use unified command processor
@@ -906,8 +878,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       String message = String((char*)payload);
       Serial.printf("[WS] Command from #%u: %s\n", num, message.c_str());
       
-      // Update heartbeat timer
-      lastCommandReceived = millis();
+      // Mark command source
       lastCommandSource = "websocket";
       
       // Process command (same format as MQTT)
