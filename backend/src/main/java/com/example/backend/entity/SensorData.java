@@ -26,7 +26,8 @@ public class SensorData {
     // Water quality parameters
     private Double phValue;
     private Double turbidity;
-    private Double ammonia;  // NH3 in PPM
+    private Double ammonia;  // NH3 in PPM (legacy - kept for backward compatibility)
+    private Double dissolvedOxygen;  // DO in mg/L
     private String waterQualityStatus; // normal, warning, critical
     
     private String status; // normal, warning, critical
@@ -130,6 +131,14 @@ public class SensorData {
 
     public void setAmmonia(Double ammonia) {
         this.ammonia = ammonia;
+    }
+
+    public Double getDissolvedOxygen() {
+        return dissolvedOxygen;
+    }
+
+    public void setDissolvedOxygen(Double dissolvedOxygen) {
+        this.dissolvedOxygen = dissolvedOxygen;
     }
 
     public String getWaterQualityStatus() {

@@ -1,10 +1,13 @@
 package com.example.backend.controller;
 
 import com.example.backend.dto.ApiResponse;
+import com.example.backend.dto.WebSocketDataRequest;
 import com.example.backend.entity.SensorData;
 import com.example.backend.entity.SensorDevice;
+import com.example.backend.entity.Pond;
 import com.example.backend.repository.SensorDataRepository;
 import com.example.backend.repository.SensorDeviceRepository;
+import com.example.backend.repository.PondRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +26,9 @@ public class SensorDataController {
 
     @Autowired
     private SensorDeviceRepository deviceRepository;
+
+    @Autowired
+    private PondRepository pondRepository;
 
     @GetMapping("/pond/{pondId}")
     public ResponseEntity<ApiResponse> getDataByPond(@PathVariable Long pondId) {
@@ -90,6 +96,59 @@ public class SensorDataController {
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse(false, "Error retrieving latest sensor data: " + e.getMessage(), null));
+        }
+    }
+
+    @PostMapping("/websocket")
+    public ResponseEntity<ApiResponse> saveFromWebSocket(@RequestBody WebSocketDataRequest request) {
+        try {
+            System.out.println("📥 Received WebSocket data save request:");
+            System.out.println("   Device ID: " + request.getDeviceId());
+            System.out.println("   Pond ID: " + request.getPondId());
+            System.out.println("   pH: " + request.getPhValue());
+            System.out.println("   Turbidity: " + request.getTurbidity());
+            System.out.println("   DO: " + request.getDissolvedOxygen() + " mg/L");
+            System.out.println("   Status: " + request.getWaterQualityStatus());
+
+            // Find or create device
+            SensorDevice device = deviceRepository.findByDeviceId(request.getDeviceId())
+                    .orElseGet(() -> {
+                        System.out.println("⚠️ Device not found, creating new device: " + request.getDeviceId());
+                        SensorDevice newDevice = new SensorDevice();
+                        newDevice.setDeviceId(request.getDeviceId());
+                        newDevice.setDeviceType(SensorDevice.DeviceType.WATER_QUALITY);
+                        newDevice.setStatus("ONLINE");
+                        return deviceRepository.save(newDevice);
+                    });
+
+            // Find pond
+            Pond pond = pondRepository.findById(request.getPondId())
+                    .orElseThrow(() -> new RuntimeException("Pond not found: " + request.getPondId()));
+
+            // Create sensor data
+            SensorData data = new SensorData();
+            data.setDevice(device);
+            data.setPond(pond);
+            data.setPhValue(request.getPhValue());
+            data.setTurbidity(request.getTurbidity());
+            data.setDissolvedOxygen(request.getDissolvedOxygen());
+            data.setWaterQualityStatus(request.getWaterQualityStatus());
+            data.setTimestamp(LocalDateTime.now());
+
+            // Save to database
+            SensorData savedData = dataRepository.save(data);
+
+            System.out.println("✅ Data saved successfully with ID: " + savedData.getId() +
+                    " - pH:" + savedData.getPhValue() +
+                    " Turb:" + savedData.getTurbidity() +
+                    " DO:" + savedData.getDissolvedOxygen() + "mg/L");
+
+            return ResponseEntity.ok(new ApiResponse(true, "Sensor data saved successfully", savedData));
+        } catch (Exception e) {
+            System.err.println("❌ Error saving WebSocket data: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error saving sensor data: " + e.getMessage(), null));
         }
     }
 

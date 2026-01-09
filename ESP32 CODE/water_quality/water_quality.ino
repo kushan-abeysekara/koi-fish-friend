@@ -1,10 +1,18 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <WebSocketsServer.h>
 #include <ArduinoJson.h>
 
 // ===================== WiFi & MQTT CONFIG =====================
-const char *ssid = "kavish99";
-const char *password = "kavish99";
+const char *ssid = "Dulshan Dialog 4G 643";
+const char *password = "Chuki000";
+
+// Static IP Configuration for Water Quality Device
+IPAddress local_IP(192, 168, 8, 102);  // Water Quality Device IP
+IPAddress gateway(192, 168, 8, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
 
 // HiveMQ Public Broker
 const char *mqtt_server = "broker.hivemq.com";
@@ -24,14 +32,25 @@ String commandTopic = "";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+WebSocketsServer wsServer(81);  // WebSocket on port 81 (same as boat)
+
+// Connection tracking
+int wsConnectedClients = 0;
+bool mqttConnected = false;
+String lastCommandSource = "none";
+unsigned long lastWiFiCheck = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 10000;  // Check WiFi every 10 seconds
 
 // Forward declarations
 void publishStatus();
 void publishStatusWithPond();
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
+void broadcastDataToWebSocket();
+void processCommand(String message);
 
 // ===================== PIN MAPPING =====================
 #define PH_PIN 32          // pH sensor analog input (GPIO 32 / ADC1_CH4)
-#define MQ135_PIN 33       // MQ135 ammonia sensor (GPIO 33 / ADC1_CH5) - NH3 detection
+#define DO_PIN 33          // Dissolved Oxygen sensor (GPIO 33 / ADC1_CH5) - DO in mg/L
 #define TURBIDITY_PIN 34   // Turbidity sensor analog input (GPIO 34 / ADC1_CH6)
 
 // ===================== CALIBRATION =====================
@@ -49,7 +68,7 @@ const float TURBIDITY_MAX_NTU = 3000.0;
 // ===================== VARIABLES =====================
 float phValue = 7.0;
 float turbidity = 0.0;
-float ammonia = 0.0;  // NH3 in PPM
+float dissolvedOxygen = 0.0;  // DO in mg/L (milligrams per liter)
 String waterQualityStatus = "normal";
 
 unsigned long lastMqttPublish = 0;
@@ -64,6 +83,17 @@ void setupWiFi()
 {
     delay(10);
     Serial.println();
+    Serial.println("========================================");
+    Serial.println("🌐 Configuring Water Quality Device");
+    Serial.println("========================================");
+    
+    // Configure static IP
+    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+        Serial.println("❌ Static IP configuration failed");
+    } else {
+        Serial.println("✅ Static IP configured: 192.168.8.102");
+    }
+    
     Serial.print("Connecting to ");
     Serial.println(ssid);
 
@@ -80,11 +110,17 @@ void setupWiFi()
     if (WiFi.status() == WL_CONNECTED)
     {
         Serial.println();
-        Serial.println("WiFi Connected!");
-        Serial.print("IP Address: ");
+        Serial.println("========================================");
+        Serial.println("✅ WiFi Connected!");
+        Serial.print("📍 IP Address: ");
         Serial.println(WiFi.localIP());
-        Serial.print("RSSI: ");
-        Serial.println(WiFi.RSSI());
+        Serial.print("📡 RSSI: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+        Serial.print("🔗 WebSocket: ws://");
+        Serial.print(WiFi.localIP());
+        Serial.println(":81");
+        Serial.println("========================================");
     }
     else
     {
@@ -98,62 +134,18 @@ void setupWiFi()
 // ===============================================================
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
-
     String message = "";
     for (unsigned int i = 0; i < length; i++)
         message += (char)payload[i];
 
+    Serial.print("📨 MQTT: ");
     Serial.println(message);
-
-    StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, message);
-
-    if (error)
-    {
-        Serial.print("JSON error: ");
-        Serial.println(error.c_str());
-        return;
-    }
-
-    if (!doc.containsKey("command"))
-    {
-        Serial.println("Missing 'command'");
-        return;
-    }
-
-    const char *command = doc["command"];
-
-    if (strcmp(command, "assign") == 0)
-    {
-        if (!doc.containsKey("pondId"))
-        {
-            Serial.println("No pondId in assign command");
-            return;
-        }
-
-        assignedPondId = doc["pondId"].as<int>();
-        Serial.print("✓ Assigned to Pond: ");
-        Serial.println(assignedPondId);
-
-        // Send status with pond info immediately for confirmation
-        publishStatusWithPond();
-    }
-    else if (strcmp(command, "unassign") == 0)
-    {
-        assignedPondId = 0;
-        Serial.println("✓ Unassigned from pond");
-
-        // Send status with pondId=0 immediately for confirmation
-        publishStatusWithPond();
-    }
-    else
-    {
-        Serial.print("Unknown command: ");
-        Serial.println(command);
-    }
+    
+    // Mark command source
+    lastCommandSource = "mqtt";
+    
+    // Use unified command processor
+    processCommand(message);
 }
 
 // ===============================================================
@@ -183,14 +175,16 @@ void reconnectMQTT()
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password,
                        willTopic.c_str(), 1, true, willMsg.c_str()))
     {
-        Serial.println(" Connected!");
+        Serial.println(" ✅ MQTT Connected!");
+        mqttConnected = true;
         client.subscribe(commandTopic.c_str());
         publishStatus();
     }
     else
     {
-        Serial.print(" Failed, rc=");
+        Serial.print(" ❌ MQTT Failed, rc=");
         Serial.println(client.state());
+        mqttConnected = false;
     }
 }
 
@@ -240,36 +234,47 @@ void publishStatusWithPond()
 // ===============================================================
 void publishSensorData()
 {
-    if (assignedPondId == 0)
+    if (assignedPondId == 0) {
+        Serial.println("⚠️  Not publishing - device not assigned to pond");
         return;
+    }
 
     StaticJsonDocument<400> doc;
     doc["deviceId"] = deviceId;
     doc["pondId"] = assignedPondId;
     doc["phValue"] = phValue;
     doc["turbidity"] = turbidity;
-    doc["ammonia"] = ammonia;
+    doc["dissolvedOxygen"] = dissolvedOxygen;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["status"] = "normal";
 
     String json;
     serializeJson(doc, json);
 
-    client.publish(dataTopic.c_str(), json.c_str());
+    // Publish via MQTT (only if connected)
+    if (mqttConnected && client.connected()) {
+        bool published = client.publish(dataTopic.c_str(), json.c_str());
+        if (!published) {
+            Serial.println("❌ MQTT publish failed!");
+        }
+    }
+    
+    // Also broadcast via WebSocket for real-time dashboard
+    broadcastDataToWebSocket();
+    
     Serial.println("=====================================");
-    Serial.println("✓ MQTT Data Published:");
-    Serial.print("  Topic: ");
-    Serial.println(dataTopic);
-    Serial.print("  JSON: ");
-    Serial.println(json);
-    Serial.print("  pH Value: ");
-    Serial.println(phValue, 3);
-    Serial.print("  Turbidity: ");
-    Serial.print(turbidity, 2);
-    Serial.println(" NTU");
-    Serial.print("  Ammonia: ");
-    Serial.print(ammonia, 3);
-    Serial.println(" PPM");
+    Serial.println("✓ Data Published (MQTT + WebSocket):");
+    Serial.print("  MQTT: ");
+    Serial.print(mqttConnected ? "✅" : "❌");
+    Serial.print(" | WS Clients: ");
+    Serial.println(wsConnectedClients);
+    Serial.print("  pH: ");
+    Serial.print(phValue, 2);
+    Serial.print(" | Turbidity: ");
+    Serial.print(turbidity, 1);
+    Serial.print(" NTU | DO: ");
+    Serial.print(dissolvedOxygen, 2);
+    Serial.println(" mg/L");
     Serial.println("=====================================");
 }
 
@@ -349,7 +354,7 @@ float readTurbidity(int pin, int samples = 50)
     return ntu;
 }
 
-float readAmmonia(int pin, int samples = 50)
+float readDissolvedOxygen(int pin, int samples = 50)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -367,32 +372,172 @@ float readAmmonia(int pin, int samples = 50)
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
     
-    // Convert voltage to ammonia PPM (NH3)
-    // MQ135 sensor: Higher voltage = higher ammonia concentration
-    // Typical range: 10-300 PPM for aquaculture
-    // Safe level for koi: < 0.5 PPM (we'll scale this)
+    // Convert voltage to Dissolved Oxygen mg/L
+    // DO sensor: Higher voltage = higher dissolved oxygen
+    // Typical range: 0-20 mg/L for aquaculture
+    // Ideal for koi: 6-8 mg/L
+    // Critical low: < 5 mg/L
     
-    // Calibration formula for MQ135 ammonia detection
-    // This is a simplified linear approximation
-    float ppm = (voltage / V_REF) * 5.0; // Scale to 0-5 PPM range
+    // Calibration formula for DO sensor (linear approximation)
+    // Voltage range 0-3.3V maps to 0-20 mg/L
+    float mgL = (voltage / V_REF) * 20.0; // Scale to 0-20 mg/L range
+    
+    // Constrain to valid range
+    if (mgL < 0) mgL = 0;
+    if (mgL > 20) mgL = 20;
     
     // Sensor connection check
     if (maxRaw >= 4090 || maxRaw <= 5) {
-        Serial.println("⚠️ WARNING: MQ135 Ammonia Sensor may be disconnected!");
+        Serial.println("⚠️ WARNING: DO Sensor may be disconnected!");
     }
     
-    return ppm;
+    return mgL;
 }
 
-String evaluateWaterQuality(float ph, float turb, float nh3)
+String evaluateWaterQuality(float ph, float turb, float doLevel)
 {
-    // Ideal koi pond: pH 7.0-8.5, turbidity < 50 NTU, ammonia < 0.5 PPM
-    if (ph < 6.5 || ph > 9.0 || turb > 100 || nh3 > 1.0)
+    // Ideal koi pond: pH 7.0-8.5, turbidity < 50 NTU, DO 6-8 mg/L
+    // Critical: pH < 6.5 or > 9.0, turbidity > 100 NTU, DO < 5 mg/L
+    if (ph < 6.5 || ph > 9.0 || turb > 100 || doLevel < 5.0)
         return "critical";
-    else if (ph < 7.0 || ph > 8.5 || turb > 50 || nh3 > 0.5)
+    else if (ph < 7.0 || ph > 8.5 || turb > 50 || doLevel < 6.0 || doLevel > 10.0)
         return "warning";
     else
         return "normal";
+}
+
+// ===============================================================
+//                    WEBSOCKET FUNCTIONS
+// ===============================================================
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+    switch(type) {
+        case WStype_DISCONNECTED:
+            Serial.printf("[WS] Client #%u disconnected\n", num);
+            wsConnectedClients = max(0, wsConnectedClients - 1);
+            Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
+            break;
+            
+        case WStype_PING:
+            // WebSocket ping received, respond with pong automatically
+            Serial.printf("[WS] Ping from #%u\n", num);
+            break;
+            
+        case WStype_PONG:
+            // WebSocket pong received
+            Serial.printf("[WS] Pong from #%u\n", num);
+            break;
+            
+        case WStype_CONNECTED: {
+            IPAddress ip = wsServer.remoteIP(num);
+            Serial.printf("[WS] ⚡ Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+            wsConnectedClients++;
+            Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
+            
+            // Send initial status
+            String status = "{\"status\":\"connected\",\"deviceId\":\"" + deviceId + 
+                          "\",\"ip\":\"" + WiFi.localIP().toString() + 
+                          "\",\"pondId\":" + String(assignedPondId) + "}";
+            wsServer.sendTXT(num, status);
+            break;
+        }
+            
+        case WStype_TEXT: {
+            String message = String((char*)payload);
+            Serial.printf("[WS] Command from #%u: %s\n", num, message.c_str());
+            
+            // Mark command source
+            lastCommandSource = "websocket";
+            
+            // Process command
+            processCommand(message);
+            
+            // Send acknowledgment
+            String ack = "{\"ack\":true,\"deviceId\":\"" + deviceId + "\"}";
+            wsServer.sendTXT(num, ack);
+            break;
+        }
+    }
+}
+
+void broadcastDataToWebSocket() {
+    if (wsConnectedClients == 0) return;
+    
+    StaticJsonDocument<400> doc;
+    doc["deviceId"] = deviceId;
+    doc["pondId"] = assignedPondId;
+    doc["phValue"] = phValue;
+    doc["turbidity"] = turbidity;
+    doc["dissolvedOxygen"] = dissolvedOxygen;
+    doc["ammonia"] = ammonia;
+    doc["waterQualityStatus"] = waterQualityStatus;
+    doc["timestamp"] = millis();
+    doc["rssi"] = WiFi.RSSI();
+    
+    String json;
+    serializeJson(doc, json);
+    
+    wsServer.broadcastTXT(json);
+}
+
+// Unified command processor for both MQTT and WebSocket
+void processCommand(String message) {
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, message);
+
+    if (error) {
+        Serial.print("JSON error: ");
+        Serial.println(error.c_str());
+        return;
+    }
+
+    if (!doc.containsKey("command")) {
+        Serial.println("Missing 'command'");
+        return;
+    }
+
+    const char *command = doc["command"];
+
+    if (strcmp(command, "assign") == 0) {
+        if (!doc.containsKey("pondId")) {
+            Serial.println("No pondId in assign command");
+            return;
+        }
+
+        assignedPondId = doc["pondId"].as<int>();
+        Serial.print("✓ Assigned to Pond: ");
+        Serial.print(assignedPondId);
+        Serial.print(" [");
+        Serial.print(lastCommandSource);
+        Serial.println("]");
+
+        // Send status with pond info immediately for confirmation
+        publishStatusWithPond();
+        
+        // Also broadcast to WebSocket clients
+        if (wsConnectedClients > 0) {
+            String response = "{\"status\":\"assigned\",\"pondId\":" + String(assignedPondId) + "}";
+            wsServer.broadcastTXT(response);
+        }
+    }
+    else if (strcmp(command, "unassign") == 0) {
+        assignedPondId = 0;
+        Serial.print("✓ Unassigned from pond [");
+        Serial.print(lastCommandSource);
+        Serial.println("]");
+
+        // Send status with pondId=0 immediately for confirmation
+        publishStatusWithPond();
+        
+        // Also broadcast to WebSocket clients
+        if (wsConnectedClients > 0) {
+            String response = "{\"status\":\"unassigned\",\"pondId\":0}";
+            wsServer.broadcastTXT(response);
+        }
+    }
+    else {
+        Serial.print("Unknown command: ");
+        Serial.println(command);
+    }
 }
 
 // ===============================================================
@@ -416,7 +561,7 @@ void setup()
     
     // Configure ADC pins
     pinMode(PH_PIN, INPUT);
-    pinMode(MQ135_PIN, INPUT);
+    pinMode(DO_PIN, INPUT);
     pinMode(TURBIDITY_PIN, INPUT);
 
     // Generate device ID with WQ prefix (Water Quality)
@@ -442,12 +587,24 @@ void setup()
 
     setupWiFi();
 
+    // Initialize MQTT
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(mqttCallback);
     client.setBufferSize(512);
+    client.setKeepAlive(15);  // Send MQTT keepalive every 15 seconds
+    
+    // Initialize WebSocket Server
+    wsServer.begin();
+    wsServer.onEvent(webSocketEvent);
+    Serial.println("✅ WebSocket server started on port 81");
+    Serial.print("   Connect at: ws://");
+    Serial.print(WiFi.localIP());
+    Serial.println(":81");
 
-    Serial.println("\nSetup complete! Starting main loop...");
-    Serial.println("=====================================");
+    Serial.println("\n========================================");
+    Serial.println("✅ Setup complete! Hybrid Mode Active");
+    Serial.println("   MQTT + WebSocket for real-time data");
+    Serial.println("========================================");
 }
 
 // ===============================================================
@@ -455,43 +612,66 @@ void setup()
 // ===============================================================
 void loop()
 {
-    // Maintain WiFi connection
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.println("\n! WiFi disconnected, reconnecting...");
-        setupWiFi();
+    unsigned long now = millis();
+    
+    // WebSocket server loop - handle local connections
+    wsServer.loop();
+    
+    // Maintain WiFi connection with periodic checks
+    if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL) {
+        lastWiFiCheck = now;
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("\n⚠️ WiFi disconnected, reconnecting...");
+            setupWiFi();
+            mqttConnected = false;
+        }
     }
 
-    // Maintain MQTT connection
+    // Maintain MQTT connection - call client.loop() first to process keepalive
+    client.loop();
+    
     if (!client.connected())
     {
+        mqttConnected = false;
         reconnectMQTT();
+    } else {
+        mqttConnected = true;
     }
-
-    client.loop();
-
-    unsigned long now = millis();
 
     // Read water quality sensors from actual hardware
     phValue = readPH(PH_PIN);
     turbidity = readTurbidity(TURBIDITY_PIN);
-    ammonia = readAmmonia(MQ135_PIN);
-    waterQualityStatus = evaluateWaterQuality(phValue, turbidity, ammonia);
+    dissolvedOxygen = readDissolvedOxygen(DO_PIN);
+    waterQualityStatus = evaluateWaterQuality(phValue, turbidity, dissolvedOxygen);
 
-    // Print to Serial Monitor only when publishing data (reduce serial spam)
+    // Print to Serial Monitor with connection status
     static unsigned long lastSerialPrint = 0;
     if (now - lastSerialPrint >= 2000) {
         lastSerialPrint = now;
-        Serial.print("Pond: ");
+        
+        // Connection Status Display
+        Serial.print("📡 MQTT: ");
+        Serial.print(mqttConnected ? "✅" : "❌");
+        Serial.print(" | ⚡ WS: ");
+        Serial.print(wsConnectedClients);
+        Serial.print(" clients | 📍 IP: ");
+        Serial.print(WiFi.localIP());
+        Serial.print(" | Signal: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+        
+        // Sensor Data
+        Serial.print("🏊 Pond: ");
         Serial.print(assignedPondId);
         Serial.print(" | pH: ");
         Serial.print(phValue, 2);
-        Serial.print(" | Turb: ");
+        Serial.print(" | Turbidity: ");
         Serial.print(turbidity, 1);
-        Serial.print(" NTU | NH3: ");
-        Serial.print(ammonia, 2);
-        Serial.print(" PPM | ");
+        Serial.print(" NTU | DO: ");
+        Serial.print(dissolvedOxygen, 2);
+        Serial.print(" mg/L | Status: ");
         Serial.println(waterQualityStatus);
+        Serial.println();
     }
 
     // Publish sensor data periodically (only if assigned to a pond)

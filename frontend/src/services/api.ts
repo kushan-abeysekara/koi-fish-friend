@@ -641,6 +641,8 @@ export interface SensorData {
   // Water quality parameters
   phValue?: number;
   turbidity?: number;
+  dissolvedOxygen?: number;  // Dissolved Oxygen in mg/L
+  ammonia?: number;  // Keep for backward compatibility
   airQuality?: number;
   waterQualityStatus?: string;
   status: string;
@@ -674,6 +676,19 @@ export const sensorDataApi = {
     const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history/energy`, {
       params: { hours }
     });
+    return response.data;
+  },
+
+  // Save sensor data from WebSocket (bypass MQTT)
+  saveFromWebSocket: async (data: {
+    deviceId: string;
+    pondId: number;
+    phValue: number;
+    turbidity: number;
+    dissolvedOxygen: number;
+    waterQualityStatus: string;
+  }): Promise<ApiResponse<SensorData>> => {
+    const response = await api.post<ApiResponse<SensorData>>('/sensor-data/websocket', data);
     return response.data;
   },
 };

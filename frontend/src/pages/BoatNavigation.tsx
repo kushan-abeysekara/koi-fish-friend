@@ -27,7 +27,6 @@ const BoatNavigation: React.FC = () => {
   const [mqttClient, setMqttClient] = useState<mqtt.MqttClient | null>(null);
   const [wsClient, setWsClient] = useState<WebSocket | null>(null);
   const [connectionQuality, setConnectionQuality] = useState(0); // WiFi RSSI
-  const [connectionMode, setConnectionMode] = useState<'mqtt' | 'websocket' | 'hybrid' | 'none'>('none');
   const [esp32IP, setEsp32IP] = useState<string>(''); // Auto-detected ESP32 IP
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
@@ -229,13 +228,10 @@ const BoatNavigation: React.FC = () => {
     const statusInterval = setInterval(() => {
       if (wsConnected) {
         setIsConnected(true);
-        setConnectionMode(mqttConnected ? 'hybrid' : 'websocket');
       } else if (mqttConnected) {
         setIsConnected(true);
-        setConnectionMode('mqtt');
       } else {
         setIsConnected(false);
-        setConnectionMode('none');
       }
     }, 1000);
 
