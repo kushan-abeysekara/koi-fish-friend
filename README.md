@@ -2,6 +2,8 @@
 
 A full-stack application with Spring Boot backend and React frontend featuring a demo login system and credential update functionality.
 
+![image alt](https://github.com/kushan-abeysekara/koi-fish-friend/blob/022313eef563a5738be0931d9fe19d15cae3fe71/architecture_diagram.jpg)
+
 ## Tech Stack
 
 ### Backend
