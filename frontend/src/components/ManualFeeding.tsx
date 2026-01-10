@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
+import api from '../services/api';
 
 const ManualFeeding: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [feedAmount, setFeedAmount] = useState<string>('5.0');
   const [unit, setUnit] = useState<'kg' | 'g'>('kg');
   const [isFeeding, setIsFeeding] = useState(false);
+  const [deviceId] = useState('feed_device_001');
   const [feedingHistory, setFeedingHistory] = useState<
     Array<{ time: string; pond: string; amount: string; unit: string }>
   >([
@@ -12,7 +14,7 @@ const ManualFeeding: React.FC = () => {
     { time: '2025-12-25 09:15 AM', pond: 'Pond B', amount: '2000', unit: 'g' },
   ]);
 
-  const handleFeedNow = () => {
+  const handleFeedNow = async () => {
     if (!feedAmount || parseFloat(feedAmount) <= 0) {
       alert('Please enter a valid feed amount');
       return;
@@ -25,9 +27,11 @@ const ManualFeeding: React.FC = () => {
     ) {
       setIsFeeding(true);
 
-      // Simulate feeding
-      setTimeout(() => {
-        setIsFeeding(false);
+      try {
+        // Send MQTT command to start feeding
+        const response = await api.post(`/feeding/start?deviceId=${deviceId}`);
+        console.log('Manual feeding started:', response.data);
+
         const newEntry = {
           time: new Date().toLocaleString('en-US', {
             year: 'numeric',
@@ -41,9 +45,28 @@ const ManualFeeding: React.FC = () => {
           unit: unit,
         };
         setFeedingHistory([newEntry, ...feedingHistory]);
-        alert(`Manual feeding completed! ${feedAmount} ${unit} dispensed to ${selectedPond}`);
+        
+        alert(`Manual feeding started! ${feedAmount} ${unit} dispensing to ${selectedPond}.\n\nMotors are now running. Click "Stop Feeding" when done.`);
         setFeedAmount('5.0');
-      }, 3000);
+      } catch (error) {
+        console.error('Failed to start manual feeding:', error);
+        alert('Failed to start feeding. Please check backend connection and try again.');
+        setIsFeeding(false);
+      }
+    }
+  };
+
+  const handleStopFeeding = async () => {
+    try {
+      // Send MQTT command to stop feeding
+      const response = await api.post(`/feeding/stop?deviceId=${deviceId}`);
+      console.log('Feeding stopped:', response.data);
+      
+      setIsFeeding(false);
+      alert('Feeding stopped successfully! Motors are now in sleep mode.');
+    } catch (error) {
+      console.error('Failed to stop feeding:', error);
+      alert('Failed to stop feeding. Please check backend connection.');
     }
   };
 
@@ -183,29 +206,38 @@ const ManualFeeding: React.FC = () => {
             </div>
           </div>
 
-          {/* Feed Now Button */}
+          {/* Feed Now & Stop Buttons */}
           <div className="pt-4 border-t border-gray-200">
-            <button
-              onClick={handleFeedNow}
-              disabled={isFeeding || !feedAmount || parseFloat(feedAmount) <= 0}
-              className={`w-full py-4 rounded-xl font-bold text-xl transition-all flex items-center justify-center gap-3 ${
-                isFeeding || !feedAmount || parseFloat(feedAmount) <= 0
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 shadow-lg hover:shadow-xl'
-              }`}
-            >
-              {isFeeding ? (
-                <>
-                  <i className="fas fa-spinner fa-spin text-2xl"></i>
-                  Feeding in Progress...
-                </>
-              ) : (
-                <>
-                  <i className="fas fa-play-circle text-2xl"></i>
-                  Feed Now
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={handleFeedNow}
+                disabled={isFeeding || !feedAmount || parseFloat(feedAmount) <= 0}
+                className={`py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 ${
+                  isFeeding || !feedAmount || parseFloat(feedAmount) <= 0
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 shadow-lg hover:shadow-xl'
+                }`}
+              >
+                {isFeeding ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin text-xl"></i>
+                    Feeding...
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-play-circle text-xl"></i>
+                    Feed Now
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleStopFeeding}
+                className="py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 bg-yellow-500 text-white hover:bg-yellow-600 shadow-lg hover:shadow-xl"
+              >
+                <i className="fas fa-stop-circle text-xl"></i>
+                Stop Feeding
+              </button>
+            </div>
           </div>
 
           {/* Current Status */}

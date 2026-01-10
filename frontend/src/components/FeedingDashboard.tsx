@@ -30,9 +30,13 @@ const FeedingDashboard: React.FC = () => {
     const fetchDeviceStatus = async () => {
       try {
         const response = await api.get(`/sensors/device/${deviceId}`);
+        console.log('Device status response:', response.data);
+        
         if (response.data.success && response.data.data) {
           const device = response.data.data;
           const isOnline = device.status === 'online';
+          
+          console.log(`Device ${deviceId}: status=${device.status}, isOnline=${isOnline}, feedingActive=${device.feedingActive}`);
           
           setDeviceStatus({
             hopperLevel: device.hopperLevel || 0,
@@ -48,7 +52,7 @@ const FeedingDashboard: React.FC = () => {
             [selectedPond]: {
               ...prev[selectedPond],
               hopperFeedLevel: isOnline ? ((device.hopperLevel || 0) / 1000) : 0,
-              status: isOnline ? (device.feedingActive ? 'Feeding' : 'Ready') : 'Blocked',
+              status: device.feedingActive ? 'Feeding' : 'Ready',
               batteryLevel: 87,
               lastFeedingTime: '2025-12-25 08:30 AM',
               lastTargetAmount: 5.0,
@@ -56,13 +60,14 @@ const FeedingDashboard: React.FC = () => {
             }
           }));
         } else {
+          console.warn(`Device ${deviceId}: Not found or unsuccessful response`);
           // Device offline
           setFeederData(prev => ({
             ...prev,
             [selectedPond]: {
               ...prev[selectedPond],
               hopperFeedLevel: 0,
-              status: 'Blocked',
+              status: 'Ready',
               batteryLevel: 87,
               lastFeedingTime: 'N/A',
               lastTargetAmount: 0,
@@ -72,6 +77,9 @@ const FeedingDashboard: React.FC = () => {
         }
       } catch (error) {
         console.error('Failed to fetch device status:', error);
+        if (error.response) {
+          console.error('Error response:', error.response.status, error.response.data);
+        }
         // On error, show device as offline
         setFeederData(prev => ({
           ...prev,
@@ -89,7 +97,7 @@ const FeedingDashboard: React.FC = () => {
     };
 
     fetchDeviceStatus();
-    const interval = setInterval(fetchDeviceStatus, 5000);
+    const interval = setInterval(fetchDeviceStatus, 3000); // Real-time update every 3 seconds
     return () => clearInterval(interval);
   }, [deviceId, selectedPond]);
 
@@ -143,34 +151,32 @@ const FeedingDashboard: React.FC = () => {
   };
 
   const handleStartFeeding = async () => {
-    if (currentFeeder.status === 'Ready') {
-      try {
-        setFeedingInProgress(true);
-        setFeederData(prev => ({
-          ...prev,
-          [selectedPond]: {
-            ...prev[selectedPond],
-            status: 'Feeding',
-          },
-        }));
+    try {
+      setFeedingInProgress(true);
+      setFeederData(prev => ({
+        ...prev,
+        [selectedPond]: {
+          ...prev[selectedPond],
+          status: 'Feeding',
+        },
+      }));
 
-        // Send MQTT command to start feeding
-        const response = await api.post(`/feeding/start?deviceId=${deviceId}`);
-        console.log('Feeding started:', response.data);
-        
-        alert('Feeding started successfully! Motors running at configured speeds.');
-      } catch (error) {
-        console.error('Failed to start feeding:', error);
-        alert('Failed to start feeding. Please check backend connection.');
-        setFeedingInProgress(false);
-        setFeederData(prev => ({
-          ...prev,
-          [selectedPond]: {
-            ...prev[selectedPond],
-            status: 'Ready',
-          },
-        }));
-      }
+      // Send MQTT command to start feeding
+      const response = await api.post(`/feeding/start?deviceId=${deviceId}`);
+      console.log('Feeding started:', response.data);
+      
+      alert('Feeding started successfully! Motors running at configured speeds.');
+    } catch (error) {
+      console.error('Failed to start feeding:', error);
+      alert('Failed to start feeding. Please check backend connection.');
+      setFeedingInProgress(false);
+      setFeederData(prev => ({
+        ...prev,
+        [selectedPond]: {
+          ...prev[selectedPond],
+          status: 'Blocked',
+        },
+      }));
     }
   };
 
@@ -282,13 +288,32 @@ const FeedingDashboard: React.FC = () => {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-gray-600 font-medium">Status:</span>
-              <span
-                className={`px-4 py-2 rounded-lg font-semibold border-2 ${getStatusColor(
-                  currentFeeder.status
-                )}`}
-              >
-                {currentFeeder.status}
-              </span>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`px-4 py-2 rounded-lg font-semibold border-2 ${getStatusColor(
+                    currentFeeder.status
+                  )}`}
+                >
+                  {currentFeeder.status}
+                </span>
+                {currentFeeder.status === 'Blocked' && (
+                  <div className="group relative">
+                    <i className="fas fa-info-circle text-red-500 cursor-help"></i>
+                    <div className="hidden group-hover:block absolute z-10 right-0 top-6 w-80 p-4 bg-gray-900 text-white text-sm rounded-lg shadow-xl">
+                      <p className="font-semibold mb-2">Device Offline</p>
+                      <p className="mb-2">The ESP32 feeding device is not sending status updates.</p>
+                      <p className="text-xs">Possible causes:</p>
+                      <ul className="text-xs ml-4 list-disc space-y-1">
+                        <li>ESP32 is powered off</li>
+                        <li>WiFi connection lost</li>
+                        <li>MQTT broker connection failed</li>
+                        <li>Device code not uploaded</li>
+                      </ul>
+                      <p className="text-xs mt-2 text-yellow-300">Run: fix-blocked-status.bat for temporary fix</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="border-t border-gray-200 pt-4">
@@ -322,7 +347,7 @@ const FeedingDashboard: React.FC = () => {
                   Hopper Feed Level:
                 </span>
                 <span className={`font-bold text-xl ${getHopperColor(currentFeeder.hopperFeedLevel)}`}>
-                  {currentFeeder.hopperFeedLevel} kg
+                  {currentFeeder.hopperFeedLevel.toFixed(2)} kg
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
@@ -391,10 +416,12 @@ const FeedingDashboard: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <button
             onClick={handleStartFeeding}
-            disabled={currentFeeder.status !== 'Ready' || feedingInProgress}
+            disabled={feedingInProgress}
             className={`py-4 px-6 rounded-xl font-semibold text-lg transition-all flex items-center justify-center gap-3 ${
-              currentFeeder.status === 'Ready' && !feedingInProgress
-                ? 'bg-green-500 text-white hover:bg-green-600 shadow-lg hover:shadow-xl'
+              !feedingInProgress
+                ? currentFeeder.status === 'Blocked' 
+                  ? 'bg-orange-500 text-white hover:bg-orange-600 shadow-lg hover:shadow-xl'
+                  : 'bg-green-500 text-white hover:bg-green-600 shadow-lg hover:shadow-xl'
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
@@ -403,12 +430,7 @@ const FeedingDashboard: React.FC = () => {
           </button>
           <button
             onClick={handleStopFeeding}
-            disabled={currentFeeder.status !== 'Feeding'}
-            className={`py-4 px-6 rounded-xl font-semibold text-lg transition-all flex items-center justify-center gap-3 ${
-              currentFeeder.status === 'Feeding'
-                ? 'bg-yellow-500 text-white hover:bg-yellow-600 shadow-lg hover:shadow-xl'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-            }`}
+            className="py-4 px-6 rounded-xl font-semibold text-lg transition-all flex items-center justify-center gap-3 bg-yellow-500 text-white hover:bg-yellow-600 shadow-lg hover:shadow-xl"
           >
             <i className="fas fa-stop-circle text-2xl"></i>
             Stop Feeding

@@ -144,10 +144,21 @@ const FeedingSchedule: React.FC = () => {
 
   // Sync schedules to ESP32 device
   const syncSchedulesToDevice = async () => {
+    if (schedules.length === 0) {
+      alert('No schedules to sync! Create at least one schedule first.');
+      return;
+    }
+
     setSyncStatus('syncing');
     try {
       const activeSchedules = schedules.filter(s => s.status === 'Active');
       
+      if (activeSchedules.length === 0) {
+        alert('No active schedules to sync! Enable at least one schedule.');
+        setSyncStatus('idle');
+        return;
+      }
+
       const schedulesData = {
         schedules: activeSchedules.map(s => ({
           time: s.timeOfDay,
@@ -157,15 +168,18 @@ const FeedingSchedule: React.FC = () => {
         }))
       };
 
+      console.log('Syncing schedules to device:', schedulesData);
       await api.post(`/feeding/schedule?deviceId=${deviceId}`, schedulesData);
       setSyncStatus('success');
       setTimeout(() => setSyncStatus('idle'), 3000);
-      alert('Schedules synced to device successfully!');
+      
+      const currentTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      alert(`✅ Schedules synced successfully!\n\n📋 ${activeSchedules.length} active schedule(s) sent to device\n\n⏰ Current time: ${currentTime}\n\n⚠️ IMPORTANT:\n1. ESP32 must be connected to WiFi\n2. ESP32 must have internet access for time sync\n3. Check Serial Monitor for "Schedule triggered" message\n4. Schedules execute automatically at set time\n5. Each schedule runs once per day\n\n💡 TIP: Set a schedule 2-3 minutes from now to test!`);
     } catch (error) {
       console.error('Failed to sync schedules:', error);
       setSyncStatus('error');
       setTimeout(() => setSyncStatus('idle'), 3000);
-      alert('Failed to sync schedules to device');
+      alert('❌ Failed to sync schedules to device\n\nPlease check:\n1. Backend is running (port 8080)\n2. MQTT broker is connected\n3. ESP32 is powered on');
     }
   };
 
