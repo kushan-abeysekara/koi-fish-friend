@@ -33,7 +33,7 @@ interface SafetyEvent {
 const FeederHealthSafety: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [deviceId] = useState('feed_device_001');
-  const [_deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
+  const [, setDeviceStatus] = useState<DeviceStatus>({});
   const [statusIndicators, setStatusIndicators] = useState<Record<string, StatusIndicator[]>>({});
 
   // Fetch device status every 3 seconds for real-time updates

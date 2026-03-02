@@ -115,11 +115,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     setIsFeedingExpanded(!isFeedingExpanded);
   };
 
-  const _handleNavigation = (path: string) => {
-    navigate(path);
-    onClose(); // Close sidebar after navigation on mobile
-  };
-
   return (
     <>
       {/* Backdrop Overlay for Mobile */}

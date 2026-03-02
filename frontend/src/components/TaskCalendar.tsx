@@ -687,7 +687,6 @@ const TaskCalendar: React.FC = () => {
                 return <div key={`empty-${idx}`} className="aspect-square"></div>;
               }
               const dayTasks = getTasksForDate(day);
-              const _hasHighPriority = dayTasks.some(t => t.priority === 'high');
               return (
                 <div
                   key={day.toISOString()}

@@ -63,7 +63,7 @@ const Settings: React.FC = () => {
   });
 
   // Notification Recipients
-  const [recipients, _setRecipients] = useState<NotificationRecipient[]>([
+  const [recipients] = useState<NotificationRecipient[]>([
     {
       id: '1',
       name: 'John Doe',
@@ -84,7 +84,7 @@ const Settings: React.FC = () => {
     },
   ]);
 
-  const [_showAddRecipient, setShowAddRecipient] = useState(false);
+  const [, setShowAddRecipient] = useState(false);
 
   // Feeding Settings State
   const [feedingSettings, setFeedingSettings] = useState({

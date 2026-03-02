@@ -32,14 +32,24 @@ const WaterQualityDashboard: React.FC = () => {
   const [, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
-  const [, setDeviceIP] = useState('192.168.8.102');
+  const [deviceIP] = useState('192.168.8.102');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
+  const [selectedPond] = useState<number | null>(3);
+  const [ponds] = useState<Pond[]>([{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }]);
   const [latestData, setLatestData] = useState<SensorData | null>(null);
   const [, setLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const WEBSOCKET_URL = 'ws://192.168.8.102:81';
+  const selectedPondRef = useRef<number | null>(3);
+  const pondsRef = useRef<Pond[]>([{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }]);
+  
+  // Keep refs updated
+  useEffect(() => {
+    selectedPondRef.current = selectedPond;
+    pondsRef.current = ponds;
+  }, [selectedPond, ponds]);
 
   // Function to save sensor data to database via REST API
   const saveSensorDataToDatabase = async (data: WebSocketData) => {
@@ -69,7 +79,9 @@ const WaterQualityDashboard: React.FC = () => {
     let isSubscribed = true;
     let connectionTimeout: NodeJS.Timeout | null = null;
     let connectionAttempts = 0;
-    const _MAX_ATTEMPTS = 100; // Keep tryingee
+    // Force update refs on mount
+    selectedPondRef.current = 3;
+    pondsRef.current = [{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }];
     
     console.log('🚀 [WATER QUALITY] Starting WebSocket connection manager...');
     console.log('   Target:', WEBSOCKET_URL);
@@ -160,14 +172,24 @@ const WaterQualityDashboard: React.FC = () => {
                 deviceId: data.deviceId,
                 deviceType: 'WATER_QUALITY',
                 pond: null,
-                status: 'online'
+                status: 'online',
+                ipAddress: '',
+                rssi: data.rssi || 0,
+                energyWh: 0,
+                lastSeen: new Date().toISOString(),
+                createdAt: new Date().toISOString()
               },
               pond: null,
+              voltage: 0,
+              current: 0,
+              power: 0,
+              energyWh: 0,
               phValue: data.phValue,
               turbidity: data.turbidity,
               co2Level: data.co2Level,
               ammonia: data.ammonia,
               waterQualityStatus: data.waterQualityStatus,
+              status: 'active',
               timestamp: new Date(data.timestamp || Date.now()).toISOString()
             };
 

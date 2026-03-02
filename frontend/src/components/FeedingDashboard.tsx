@@ -23,7 +23,7 @@ const FeedingDashboard: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [deviceId] = useState('feed_device_001');
-  const [_deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
+  const [, setDeviceStatus] = useState<DeviceStatus>({});
 
   // Fetch device status every 5 seconds
   useEffect(() => {

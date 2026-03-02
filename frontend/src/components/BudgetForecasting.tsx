@@ -486,7 +486,6 @@ const BudgetForecasting: React.FC = () => {
   };
 
   const maxHistoricalValue = Math.max(...historicalData.map(d => d.value), ...forecastData.map(d => d.upperBound));
-  const _minValue = Math.min(...historicalData.map(d => d.value), ...forecastData.map(d => d.lowerBound));
 
   return (
     <div className="space-y-6">

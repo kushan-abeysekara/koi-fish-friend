@@ -28,7 +28,6 @@ const SensorCareCalibration: React.FC = () => {
   const [reminders, setReminders] = useState<MaintenanceReminder[]>([]);
   const [showCalibrationWizard, setShowCalibrationWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
-  const [_selectedSensor, _setSelectedSensor] = useState<'pH' | 'turbidity' | 'temperature' | 'do'>('pH');
   
   // Calibration wizard form data
   const [calibrationData, setCalibrationData] = useState({
