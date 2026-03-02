@@ -198,7 +198,7 @@ const TreatmentDosingLog: React.FC = () => {
         beforeValue: formData.beforeValue ? parseFloat(formData.beforeValue) : undefined,
         afterValue: editingLog?.afterValue,
         photoUrl: editingLog?.photoUrl,
-        status: (editingLog?.status || 'logged') as const,
+        status: (editingLog?.status || 'logged') as 'logged' | 'verified' | 'flagged' | 'completed',
       };
 
       let response;

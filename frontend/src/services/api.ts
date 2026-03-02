@@ -45,6 +45,8 @@ export interface Pond {
   id: number;
   name: string;
   color: string;
+  capacity?: number;
+  currentFishCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -645,6 +647,7 @@ export interface SensorData {
   ammonia?: number;   // Ammonia in PPM from MQ135
   airQuality?: number;
   waterQualityStatus?: string;
+  dissolvedOxygen?: number;
   status: string;
   timestamp: string;
 }

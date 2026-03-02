@@ -363,7 +363,7 @@ const BudgetForecasting: React.FC = () => {
     return Math.sqrt(variance);
   };
 
-  const calculateMetrics = (forecast: ForecastData[]) => {
+  const calculateMetrics = (_forecast: ForecastData[]) => {
     if (historicalData.length < 12) {
       setForecastMetrics(null);
       return;
@@ -381,7 +381,7 @@ const BudgetForecasting: React.FC = () => {
 
     const trainMean = trainData.reduce((sum, d) => sum + d.value, 0) / trainData.length;
 
-    testData.forEach((actual, i) => {
+    testData.forEach((actual, _i) => {
       const predicted = trainData[trainData.length - 1].value; // Simple prediction
       const error = actual.value - predicted;
       
@@ -486,7 +486,7 @@ const BudgetForecasting: React.FC = () => {
   };
 
   const maxHistoricalValue = Math.max(...historicalData.map(d => d.value), ...forecastData.map(d => d.upperBound));
-  const minValue = Math.min(...historicalData.map(d => d.value), ...forecastData.map(d => d.lowerBound));
+  const _minValue = Math.min(...historicalData.map(d => d.value), ...forecastData.map(d => d.lowerBound));
 
   return (
     <div className="space-y-6">

@@ -36,8 +36,8 @@ const PondCamera: React.FC = () => {
   // Event logging states
   const [detectionEvents, setDetectionEvents] = useState<DetectionEvent[]>([]);
   const [criticalAlerts, setCriticalAlerts] = useState<number>(0);
-  const [totalDetections, setTotalDetections] = useState<number>(0);
-  const [isRecording, setIsRecording] = useState(false);
+  const [_totalDetections, setTotalDetections] = useState<number>(0);
+  const [_isRecording, _setIsRecording] = useState(false);
 
   // Camera Feed WebSocket Connection
   useEffect(() => {
