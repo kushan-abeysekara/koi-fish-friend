@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sensorDataApi } from '../services/api';
-import type { SensorData } from '../services/api';
+import type { Pond, SensorData } from '../services/api';
 import { Wifi, WifiOff } from 'lucide-react';
 
 interface WaterParameter {

@@ -75,7 +75,6 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, onClose }) => {
   const location = useLocation();
-  const navigate = useNavigate();
   const [isBudgetExpanded, setIsBudgetExpanded] = useState(
     location.pathname.includes('/expenditures') || 
     location.pathname.includes('/inventory') || 
