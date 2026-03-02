@@ -17,6 +17,7 @@ import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import com.example.backend.websocket.FeedingWebSocketHandler;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +37,9 @@ public class MqttService {
 
     @Autowired
     private MessageChannel mqttOutboundChannel;
+
+    @Autowired
+    private FeedingWebSocketHandler feedingWebSocketHandler;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = true; // Assume connected (Spring Integration handles connection)
@@ -65,6 +69,10 @@ public class MqttService {
 
             if (topic.contains("/status")) {
                 handleStatusUpdate(deviceId, jsonNode);
+                // Broadcast raw MQTT payload to WebSocket clients for real-time dashboard
+                if (deviceId.contains("feed_device")) {
+                    feedingWebSocketHandler.broadcast(payload);
+                }
             } else if (topic.contains("/data")) {
                 handleSensorData(deviceId, jsonNode);
             }

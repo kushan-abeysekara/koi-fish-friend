@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import mqtt from 'mqtt';
 import api from '../services/api';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell
 } from 'recharts';
 
-const MQTT_WS_URL = import.meta.env.VITE_MQTT_WS_URL || 'wss://mqtt-emqx-h6rsrl-b2b524-187-77-189-5.traefik.me/mqtt';
+// Build WebSocket URL from the REST API URL (same backend, /ws/feeding endpoint)
+const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding';
 const DEVICE_ID = 'feed_device_001';
-const STATUS_TOPIC = `koi/devices/${DEVICE_ID}/feeding/status`;
 
 interface DeviceData {
   status: string;
@@ -73,15 +73,16 @@ const FeedingDashboard: React.FC = () => {
   const [messageRate, setMessageRate] = useState(0);
   const prevFeedCount = useRef(0);
   const msgCountRef = useRef(0);
-  const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isOnline = device.status !== 'offline';
 
-  // ─── Parse incoming MQTT message from ESP32 ───
-  const handleMqttMessage = useCallback((payload: Buffer) => {
+  // ─── Parse incoming WebSocket message (relayed from backend MQTT) ───
+  const handleWsMessage = useCallback((rawPayload: string) => {
     try {
-      const d = JSON.parse(payload.toString());
+      const d = JSON.parse(rawPayload);
       const now = new Date();
       const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -137,49 +138,49 @@ const FeedingDashboard: React.FC = () => {
         setDevice(prev => ({ ...prev, status: 'offline' }));
       }, 6000);
     } catch (err) {
-      console.error('Failed to parse MQTT message:', err);
+      console.error('Failed to parse WebSocket message:', err);
     }
   }, []);
 
-  // ─── MQTT WebSocket connection ───
+  // ─── WebSocket connection to backend (relays MQTT messages) ───
   useEffect(() => {
-    setMqttStatus('connecting');
+    let isMounted = true;
 
-    const client = mqtt.connect(MQTT_WS_URL, {
-      clientId: `dashboard_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      clean: true,
-      connectTimeout: 10000,
-      reconnectPeriod: 3000,
-      keepalive: 30,
-    });
-
-    mqttClientRef.current = client;
-
-    client.on('connect', () => {
-      console.log('[MQTT] Connected to', MQTT_WS_URL);
-      setMqttStatus('connected');
-      client.subscribe(STATUS_TOPIC, { qos: 0 }, (err) => {
-        if (err) console.error('[MQTT] Subscribe error:', err);
-        else console.log('[MQTT] Subscribed to', STATUS_TOPIC);
-      });
-    });
-
-    client.on('message', (_topic: string, payload: Buffer) => {
-      handleMqttMessage(payload);
-    });
-
-    client.on('error', (err) => {
-      console.error('[MQTT] Error:', err);
-      setMqttStatus('error');
-    });
-
-    client.on('close', () => {
-      setMqttStatus('disconnected');
-    });
-
-    client.on('reconnect', () => {
+    const connect = () => {
+      if (!isMounted) return;
       setMqttStatus('connecting');
-    });
+      console.log('[WS] Connecting to', WS_URL);
+
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (!isMounted) return;
+        console.log('[WS] Connected to backend WebSocket');
+        setMqttStatus('connected');
+      };
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        handleWsMessage(event.data);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WS] Error:', err);
+        if (isMounted) setMqttStatus('error');
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        console.log('[WS] Disconnected, reconnecting in 3s...');
+        setMqttStatus('disconnected');
+        wsRef.current = null;
+        // Auto-reconnect after 3 seconds
+        reconnectTimerRef.current = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
 
     // Message rate calculator (msgs/sec)
     const rateInterval = setInterval(() => {
@@ -188,12 +189,16 @@ const FeedingDashboard: React.FC = () => {
     }, 1000);
 
     return () => {
+      isMounted = false;
       clearInterval(rateInterval);
       if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      client.end(true);
-      mqttClientRef.current = null;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
-  }, [handleMqttMessage]);
+  }, [handleWsMessage]);
 
   // ─── Fetch initial data from REST (one-time bootstrap) ───
   useEffect(() => {
@@ -283,9 +288,9 @@ const FeedingDashboard: React.FC = () => {
 
   const getMqttStatusDisplay = () => {
     switch (mqttStatus) {
-      case 'connected': return { text: 'MQTT Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
+      case 'connected': return { text: 'Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
       case 'connecting': return { text: 'Connecting...', color: 'bg-yellow-400/30 text-yellow-100', dot: 'bg-yellow-400 animate-pulse' };
-      case 'error': return { text: 'MQTT Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
+      case 'error': return { text: 'WS Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
       default: return { text: 'Disconnected', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
     }
   };
@@ -716,7 +721,7 @@ const FeedingDashboard: React.FC = () => {
               mqttStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
             }`}>
               <i className={`fas fa-circle text-[8px] mr-1`}></i>
-              {mqttStatus === 'connected' ? 'MQTT WebSocket' : mqttStatus === 'connecting' ? 'Reconnecting...' : 'Disconnected'}
+              {mqttStatus === 'connected' ? 'WebSocket Live' : mqttStatus === 'connecting' ? 'Reconnecting...' : 'Disconnected'}
             </span>
           </div>
         </div>
