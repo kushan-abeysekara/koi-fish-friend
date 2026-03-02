@@ -5,20 +5,16 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Accept build-time API URL (set in Dokploy Environment → Build Args)
-ARG VITE_API_URL
-ENV VITE_API_URL=$VITE_API_URL
-
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
 RUN npm ci
 
-# Copy source code
+# Copy source code (includes .env with VITE_API_URL)
 COPY . .
 
-# Build the application
+# Build the application (Vite reads VITE_API_URL from .env at build time)
 RUN npm run build
 
 # Stage 2: Production server with Nginx
