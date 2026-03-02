@@ -57,7 +57,6 @@ public class MqttConfig {
         adapter.setQos(1);
         adapter.setOutputChannel(mqttInputChannel());
         adapter.setAutoStartup(true);
-        adapter.setRecoveryInterval(5000); // Retry every 5s on connection loss
         return adapter;
     }
 
