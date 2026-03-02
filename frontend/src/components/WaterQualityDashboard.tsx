@@ -469,7 +469,7 @@ const WaterQualityDashboard: React.FC = () => {
               <Wifi className="text-blue-500 w-4 h-4" />
               <div className="text-right">
                 <div className="text-blue-600 font-semibold text-xs">🌐 MQTT Active</div>
-                <div className="text-xs text-gray-600">broker.hivemq.com</div>
+                <div className="text-xs text-gray-600">EMQX (VPS)</div>
               </div>
             </>
           ) : (

@@ -17,7 +17,7 @@ import org.springframework.messaging.MessageHandler;
 @Configuration
 public class MqttConfig {
 
-    private static final String BROKER_URL = "tcp://broker.hivemq.com:1883"; // HiveMQ public broker
+    private static final String BROKER_URL = "tcp://emqx-service:1883"; // Self-hosted EMQX on Dokploy (Docker network)
     private static final String CLIENT_ID = "spring-server";
     private static final String[] TOPICS = { 
         "koi/sensors/+/data", 
@@ -34,9 +34,9 @@ public class MqttConfig {
         options.setCleanSession(true);
         options.setConnectionTimeout(10);
         options.setKeepAliveInterval(20);
-        // Add credentials if HiveMQ requires authentication
-        // options.setUserName("your_username");
-        // options.setPassword("your_password".toCharArray());
+        // EMQX default credentials
+        // options.setUserName("admin");
+        // options.setPassword("public".toCharArray());
         factory.setConnectionOptions(options);
         return factory;
     }

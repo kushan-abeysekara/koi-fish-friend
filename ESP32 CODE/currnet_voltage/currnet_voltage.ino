@@ -38,8 +38,8 @@ int scheduleCount = 0;
 const char *ssid = "Dulshan Dialog 4G 643";
 const char *password = "Chuki000";
 
-// HiveMQ Public Broker
-const char *mqtt_server = "broker.hivemq.com";
+// Self-hosted EMQX Broker on VPS
+const char *mqtt_server = "187.77.189.5";
 const int mqtt_port = 1883;
 const char *mqtt_user = "";
 const char *mqtt_password = "";

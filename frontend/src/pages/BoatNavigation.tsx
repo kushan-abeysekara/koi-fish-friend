@@ -58,7 +58,8 @@ const BoatNavigation: React.FC = () => {
 
   useEffect(() => {
     // MQTT: Always connect - runs in background
-    const client = mqtt.connect('ws://broker.hivemq.com:8000/mqtt', {
+    const mqttUrl = import.meta.env.VITE_MQTT_WS_URL || 'ws://broker.hivemq.com:8000/mqtt';
+    const client = mqtt.connect(mqttUrl, {
       clientId: 'BoatControl_' + Math.random().toString(16).substr(2, 8),
       clean: true,
       keepalive: 30,  // Increased from 15 for stability
@@ -482,7 +483,7 @@ const BoatNavigation: React.FC = () => {
                   <Wifi className="text-blue-500 w-5 h-5" />
                   <div className="text-right">
                     <div className="text-blue-600 font-bold text-sm">🌐 MQTT Connected</div>
-                    <div className="text-xs text-gray-600">broker.hivemq.com:8000</div>
+                    <div className="text-xs text-gray-600">EMQX (VPS)</div>
                   </div>
                 </>
               ) : (

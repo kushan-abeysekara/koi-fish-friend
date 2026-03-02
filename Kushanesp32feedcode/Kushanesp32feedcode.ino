@@ -28,8 +28,8 @@
 const char* ssid = "Dulshan Dialog 4G 643";
 const char* password = "Chuki000";
 
-// MQTT Configuration
-const char* mqtt_server = "broker.hivemq.com";
+// MQTT Configuration - Self-hosted EMQX on VPS
+const char* mqtt_server = "187.77.189.5";
 const int mqtt_port = 1883;
 const char* device_id = "feed_device_001";
 
