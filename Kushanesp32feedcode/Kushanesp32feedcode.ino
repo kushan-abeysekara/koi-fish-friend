@@ -486,7 +486,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 
 // Publish status to MQTT
 void publishStatus(String status) {
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<768> doc;
   doc["deviceId"] = device_id;
   doc["status"] = status;
   doc["feedingActive"] = feedingActive;
@@ -506,8 +506,11 @@ void publishStatus(String status) {
   doc["hopperPercentage"] = (totalTankWeight / maxTankCapacity) * 100.0;
   doc["plateSpeed"] = calculateStepperRPM(stepperSpeed);
   doc["motorStatus"] = stepperActive ? "RUNNING" : "STOPPED";
+  doc["rssi"] = WiFi.RSSI();
+  doc["ipAddress"] = WiFi.localIP().toString();
+  doc["uptimeMs"] = millis();
   
-  char buffer[512];
+  char buffer[768];
   serializeJson(doc, buffer);
   mqttClient.publish(statusTopic.c_str(), buffer);
   Serial.print("Published status: ");
@@ -741,6 +744,15 @@ void loop() {
         setESCPercent(targetESCPercent);
       }
     }
+  }
+  
+  // ===== Periodic MQTT Status Publish (every 2 seconds) =====
+  static unsigned long lastMqttPublish = 0;
+  if (millis() - lastMqttPublish > 2000) {
+    if (mqttClient.connected()) {
+      publishStatus(feedingActive ? "feeding" : "online");
+    }
+    lastMqttPublish = millis();
   }
   
   // ===== Update OLED Display =====

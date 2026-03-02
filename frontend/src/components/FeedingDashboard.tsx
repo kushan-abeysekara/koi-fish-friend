@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import mqtt from 'mqtt';
 import api from '../services/api';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell
 } from 'recharts';
+
+const MQTT_WS_URL = import.meta.env.VITE_MQTT_WS_URL || 'wss://mqtt-emqx-h6rsrl-b2b524-187-77-189-5.traefik.me/mqtt';
+const DEVICE_ID = 'feed_device_001';
+const STATUS_TOPIC = `koi/devices/${DEVICE_ID}/feeding/status`;
 
 interface DeviceData {
   status: string;
@@ -22,6 +27,8 @@ interface DeviceData {
   rssi: number | null;
   ipAddress: string | null;
   scheduleCount: number;
+  escPercent: number;
+  uptimeMs: number;
 }
 
 interface WeightHistoryPoint {
@@ -35,120 +42,190 @@ interface FeedEvent {
   amount: number;
 }
 
+const INITIAL_DEVICE: DeviceData = {
+  status: 'offline',
+  feedingActive: false,
+  hopperLevel: 0,
+  hopperCapacity: 20000,
+  hopperPercentage: 0,
+  currentWeight: 0,
+  targetWeight: 0,
+  feedCount: 0,
+  totalGramsFed: 0,
+  motorStatus: 'STOPPED',
+  plateSpeed: 0,
+  lastFeedingTime: null,
+  lastSeen: null,
+  rssi: null,
+  ipAddress: null,
+  scheduleCount: 0,
+  escPercent: 0,
+  uptimeMs: 0,
+};
+
 const FeedingDashboard: React.FC = () => {
-  const [deviceId] = useState('feed_device_001');
-  const [device, setDevice] = useState<DeviceData>({
-    status: 'offline',
-    feedingActive: false,
-    hopperLevel: 0,
-    hopperCapacity: 20000,
-    hopperPercentage: 0,
-    currentWeight: 0,
-    targetWeight: 0,
-    feedCount: 0,
-    totalGramsFed: 0,
-    motorStatus: 'STOPPED',
-    plateSpeed: 0,
-    lastFeedingTime: null,
-    lastSeen: null,
-    rssi: null,
-    ipAddress: null,
-    scheduleCount: 0,
-  });
+  const [device, setDevice] = useState<DeviceData>(INITIAL_DEVICE);
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [weightHistory, setWeightHistory] = useState<WeightHistoryPoint[]>([]);
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
-  const [lastFetchTime, setLastFetchTime] = useState<Date>(new Date());
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
+  const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
+  const [lastMqttMsg, setLastMqttMsg] = useState<Date | null>(null);
+  const [messageRate, setMessageRate] = useState(0);
   const prevFeedCount = useRef(0);
+  const msgCountRef = useRef(0);
+  const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isOnline = device.status === 'online';
+  const isOnline = device.status !== 'offline';
 
-  const fetchDeviceStatus = useCallback(async () => {
+  // ─── Parse incoming MQTT message from ESP32 ───
+  const handleMqttMessage = useCallback((payload: Buffer) => {
     try {
-      const response = await api.get(`/sensors/device/${deviceId}`);
-      if (response.data.success && response.data.data) {
-        const d = response.data.data;
-        const online = d.status === 'online';
+      const d = JSON.parse(payload.toString());
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-        setDevice({
-          status: d.status || 'offline',
-          feedingActive: d.feedingActive || false,
-          hopperLevel: d.hopperLevel || 0,
-          hopperCapacity: d.hopperCapacity || 20000,
-          hopperPercentage: d.hopperPercentage || 0,
-          currentWeight: d.currentWeight || 0,
-          targetWeight: d.targetWeight || 0,
-          feedCount: d.feedCount || 0,
-          totalGramsFed: d.totalGramsFed || 0,
-          motorStatus: d.motorStatus || 'STOPPED',
-          plateSpeed: d.plateSpeed || 0,
-          lastFeedingTime: d.lastFeedingTime || null,
-          lastSeen: d.lastSeen || null,
-          rssi: d.rssi || null,
-          ipAddress: d.ipAddress || null,
-          scheduleCount: d.scheduleCount || 0,
+      setDevice({
+        status: d.status || 'online',
+        feedingActive: d.feedingActive || false,
+        hopperLevel: d.hopperLevel || 0,
+        hopperCapacity: d.hopperCapacity || 20000,
+        hopperPercentage: d.hopperPercentage || 0,
+        currentWeight: d.weight || 0,
+        targetWeight: d.targetWeight || 0,
+        feedCount: d.feedCount || 0,
+        totalGramsFed: d.totalGrams || 0,
+        motorStatus: d.motorStatus || 'STOPPED',
+        plateSpeed: d.plateSpeed || 0,
+        lastFeedingTime: d.status === 'feeding_stopped' ? now.toISOString() : null,
+        lastSeen: now.toISOString(),
+        rssi: d.rssi ?? null,
+        ipAddress: d.ipAddress || null,
+        scheduleCount: d.scheduleCount || 0,
+        escPercent: d.escPercent || 0,
+        uptimeMs: d.uptimeMs || 0,
+      });
+
+      if (d.feedingActive) setFeedingInProgress(true);
+      else setFeedingInProgress(false);
+
+      setLastMqttMsg(now);
+      msgCountRef.current++;
+
+      // Weight history (keep last 60 data points = ~2 min at 2s interval)
+      setWeightHistory(prev => {
+        const next = [...prev, { time: timeStr, weight: d.weight || 0, hopper: (d.hopperLevel || 0) / 1000 }];
+        return next.slice(-60);
+      });
+
+      // Feed events tracking
+      const newFeedCount = d.feedCount || 0;
+      if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
+        setFeedEvents(prev => {
+          const next = [...prev, {
+            time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            amount: (d.totalGrams || 0) / 1000,
+          }];
+          return next.slice(-10);
         });
-
-        if (d.feedingActive) setFeedingInProgress(true);
-        else setFeedingInProgress(false);
-
-        setConnectionStatus(online ? 'connected' : 'disconnected');
-        setLastFetchTime(new Date());
-
-        // Track weight history (keep last 30 data points)
-        if (online) {
-          const now = new Date();
-          const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-          setWeightHistory(prev => {
-            const next = [...prev, { time: timeStr, weight: d.currentWeight || 0, hopper: (d.hopperLevel || 0) / 1000 }];
-            return next.slice(-30);
-          });
-        }
-
-        // Track feed events
-        const newFeedCount = d.feedCount || 0;
-        if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
-          const now = new Date();
-          setFeedEvents(prev => {
-            const next = [...prev, {
-              time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-              amount: (d.totalGramsFed || 0) / 1000,
-            }];
-            return next.slice(-10);
-          });
-        }
-        prevFeedCount.current = newFeedCount;
-      } else {
-        setConnectionStatus('disconnected');
-        setDevice(prev => ({ ...prev, status: 'offline' }));
       }
-    } catch {
-      setConnectionStatus('disconnected');
-      setDevice(prev => ({ ...prev, status: 'offline' }));
+      prevFeedCount.current = newFeedCount;
+
+      // Reset offline timer — if no message in 6s, mark offline
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      offlineTimerRef.current = setTimeout(() => {
+        setDevice(prev => ({ ...prev, status: 'offline' }));
+      }, 6000);
+    } catch (err) {
+      console.error('Failed to parse MQTT message:', err);
     }
-  }, [deviceId]);
+  }, []);
 
+  // ─── MQTT WebSocket connection ───
   useEffect(() => {
-    fetchDeviceStatus();
-    const interval = setInterval(fetchDeviceStatus, 3000);
-    return () => clearInterval(interval);
-  }, [fetchDeviceStatus]);
+    setMqttStatus('connecting');
 
-  // -- Action Handlers --
+    const client = mqtt.connect(MQTT_WS_URL, {
+      clientId: `dashboard_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      clean: true,
+      connectTimeout: 10000,
+      reconnectPeriod: 3000,
+      keepalive: 30,
+    });
+
+    mqttClientRef.current = client;
+
+    client.on('connect', () => {
+      console.log('[MQTT] Connected to', MQTT_WS_URL);
+      setMqttStatus('connected');
+      client.subscribe(STATUS_TOPIC, { qos: 0 }, (err) => {
+        if (err) console.error('[MQTT] Subscribe error:', err);
+        else console.log('[MQTT] Subscribed to', STATUS_TOPIC);
+      });
+    });
+
+    client.on('message', (_topic: string, payload: Buffer) => {
+      handleMqttMessage(payload);
+    });
+
+    client.on('error', (err) => {
+      console.error('[MQTT] Error:', err);
+      setMqttStatus('error');
+    });
+
+    client.on('close', () => {
+      setMqttStatus('disconnected');
+    });
+
+    client.on('reconnect', () => {
+      setMqttStatus('connecting');
+    });
+
+    // Message rate calculator (msgs/sec)
+    const rateInterval = setInterval(() => {
+      setMessageRate(msgCountRef.current);
+      msgCountRef.current = 0;
+    }, 1000);
+
+    return () => {
+      clearInterval(rateInterval);
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      client.end(true);
+      mqttClientRef.current = null;
+    };
+  }, [handleMqttMessage]);
+
+  // ─── Fetch initial data from REST (one-time bootstrap) ───
+  useEffect(() => {
+    const fetchInitial = async () => {
+      try {
+        const response = await api.get(`/sensors/device/${DEVICE_ID}`);
+        if (response.data.success && response.data.data) {
+          const d = response.data.data;
+          if (d.lastFeedingTime) {
+            setDevice(prev => ({ ...prev, lastFeedingTime: d.lastFeedingTime }));
+          }
+          if (d.feedCount) prevFeedCount.current = d.feedCount;
+        }
+      } catch { /* ignore — MQTT is primary */ }
+    };
+    fetchInitial();
+  }, []);
+
+  // ── Action Handlers ──
   const handleStartFeeding = async () => {
     try {
       setFeedingInProgress(true);
-      await api.post(`/feeding/start?deviceId=${deviceId}`);
+      await api.post(`/feeding/start?deviceId=${DEVICE_ID}`);
     } catch {
-      alert('Failed to start feeding. Check backend connection.');
+      alert('Failed to start feeding.');
       setFeedingInProgress(false);
     }
   };
 
   const handleStopFeeding = async () => {
     try {
-      await api.post(`/feeding/stop?deviceId=${deviceId}`);
+      await api.post(`/feeding/stop?deviceId=${DEVICE_ID}`);
       setFeedingInProgress(false);
     } catch {
       alert('Failed to stop feeding.');
@@ -158,7 +235,7 @@ const FeedingDashboard: React.FC = () => {
   const handleEmergencyStop = async () => {
     if (!confirm('EMERGENCY STOP — Are you sure?')) return;
     try {
-      await api.post(`/feeding/stop?deviceId=${deviceId}`);
+      await api.post(`/feeding/stop?deviceId=${DEVICE_ID}`);
       setFeedingInProgress(false);
     } catch {
       alert('Emergency stop sent, but response failed.');
@@ -167,13 +244,13 @@ const FeedingDashboard: React.FC = () => {
 
   const handleTare = async () => {
     try {
-      await api.post(`/feeding/tare?deviceId=${deviceId}`);
+      await api.post(`/feeding/tare?deviceId=${DEVICE_ID}`);
     } catch {
       alert('Failed to tare load cell.');
     }
   };
 
-  // -- Helpers --
+  // ── Helpers ──
   const formatWeight = (grams: number) => {
     if (grams >= 1000) return `${(grams / 1000).toFixed(2)} kg`;
     return `${grams.toFixed(1)} g`;
@@ -182,9 +259,18 @@ const FeedingDashboard: React.FC = () => {
   const formatTime = (iso: string | null) => {
     if (!iso) return 'N/A';
     try {
-      const d = new Date(iso);
-      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+      return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
     } catch { return iso; }
+  };
+
+  const formatUptime = (ms: number) => {
+    if (ms <= 0) return 'N/A';
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s % 60}s`;
+    return `${s}s`;
   };
 
   const getSignalStrength = (rssi: number | null) => {
@@ -195,12 +281,21 @@ const FeedingDashboard: React.FC = () => {
     return { label: 'Weak', color: 'text-red-500', bars: 1 };
   };
 
+  const getMqttStatusDisplay = () => {
+    switch (mqttStatus) {
+      case 'connected': return { text: 'MQTT Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
+      case 'connecting': return { text: 'Connecting...', color: 'bg-yellow-400/30 text-yellow-100', dot: 'bg-yellow-400 animate-pulse' };
+      case 'error': return { text: 'MQTT Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
+      default: return { text: 'Disconnected', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
+    }
+  };
+
   const hopperPct = Math.min(Math.max(device.hopperPercentage, 0), 100);
   const hopperKg = device.hopperLevel / 1000;
   const capacityKg = device.hopperCapacity / 1000;
   const signal = getSignalStrength(device.rssi);
+  const mqttStatusDisplay = getMqttStatusDisplay();
 
-  // Colors for feeding history bars
   const barColors = ['#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#ef4444'];
 
   return (
@@ -219,20 +314,29 @@ const FeedingDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3 self-end sm:self-auto">
+            {/* MQTT Connection Badge */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${mqttStatusDisplay.color}`}>
+              <span className={`w-2 h-2 rounded-full ${mqttStatusDisplay.dot}`} />
+              {mqttStatusDisplay.text}
+            </div>
+            {/* Device Status Badge */}
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${
               isOnline ? 'bg-green-400/30 text-green-100' : 'bg-red-400/30 text-red-100'
             }`}>
               <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
               {isOnline ? 'Device Online' : 'Device Offline'}
             </div>
-            <span className="text-emerald-200 text-xs hidden sm:inline">
-              Updated {lastFetchTime.toLocaleTimeString()}
-            </span>
+            {/* Message rate indicator */}
+            {mqttStatus === 'connected' && (
+              <span className="text-emerald-200 text-xs hidden sm:inline">
+                {messageRate > 0 ? `${messageRate} msg/s` : 'Waiting...'}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ── LIVE STATUS CARDS (4 columns on desktop, 2 on mobile) ── */}
+      {/* ── LIVE STATUS CARDS ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Motor Status */}
         <div className={`rounded-2xl p-4 sm:p-5 border shadow-sm transition-all ${
@@ -249,10 +353,10 @@ const FeedingDashboard: React.FC = () => {
             </div>
           </div>
           <p className={`text-lg sm:text-2xl font-bold ${device.feedingActive ? 'text-blue-700' : 'text-gray-800'}`}>
-            {device.motorStatus}
+            {isOnline ? device.motorStatus : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            {device.plateSpeed > 0 ? `${device.plateSpeed.toFixed(0)} RPM` : 'Idle'}
+            {isOnline && device.plateSpeed > 0 ? `${device.plateSpeed.toFixed(0)} RPM` : isOnline ? 'Idle' : '--'}
           </p>
         </div>
 
@@ -268,7 +372,7 @@ const FeedingDashboard: React.FC = () => {
             {isOnline ? formatWeight(device.currentWeight) : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Target: {device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'None'}
+            Target: {isOnline && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'None'}
           </p>
         </div>
 
@@ -296,8 +400,8 @@ const FeedingDashboard: React.FC = () => {
               <i className="fas fa-signal"></i>
             </div>
           </div>
-          <p className={`text-lg sm:text-2xl font-bold ${signal.color}`}>
-            {isOnline ? `${device.rssi} dBm` : '--'}
+          <p className={`text-lg sm:text-2xl font-bold ${isOnline ? signal.color : 'text-gray-400'}`}>
+            {isOnline && device.rssi !== null ? `${device.rssi} dBm` : '--'}
           </p>
           <div className="flex items-center gap-1 mt-1">
             {[1, 2, 3, 4].map(i => (
@@ -305,7 +409,7 @@ const FeedingDashboard: React.FC = () => {
                 i <= signal.bars ? 'bg-current' : 'bg-gray-200'
               }`} style={{ height: `${6 + i * 3}px` }} />
             ))}
-            <span className="text-xs text-gray-500 ml-1">{signal.label}</span>
+            <span className="text-xs text-gray-500 ml-1">{isOnline ? signal.label : 'N/A'}</span>
           </div>
         </div>
       </div>
@@ -313,7 +417,7 @@ const FeedingDashboard: React.FC = () => {
       {/* ── HOPPER GAUGE + LAST FEEDING ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
 
-        {/* Hopper Level - Visual Gauge */}
+        {/* Hopper Level */}
         <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2">
@@ -321,6 +425,7 @@ const FeedingDashboard: React.FC = () => {
               Hopper Feed Level
             </h3>
             <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
+              !isOnline ? 'bg-gray-100 text-gray-500' :
               hopperPct > 50 ? 'bg-green-100 text-green-700' :
               hopperPct > 20 ? 'bg-yellow-100 text-yellow-700' :
               'bg-red-100 text-red-700'
@@ -329,33 +434,30 @@ const FeedingDashboard: React.FC = () => {
             </span>
           </div>
 
-          {/* Tank Visualization */}
           <div className="flex items-end gap-6">
             <div className="relative w-28 sm:w-36 h-44 sm:h-52 mx-auto">
-              {/* Tank outline */}
               <div className="absolute inset-0 rounded-b-2xl rounded-t-lg border-2 border-gray-300 bg-gray-50 overflow-hidden">
-                {/* Fill level */}
                 <div
-                  className={`absolute bottom-0 left-0 right-0 transition-all duration-1000 rounded-b-xl ${
+                  className={`absolute bottom-0 left-0 right-0 transition-all duration-700 rounded-b-xl ${
+                    !isOnline ? 'bg-gray-200' :
                     hopperPct > 50 ? 'bg-gradient-to-t from-teal-500 to-teal-300' :
                     hopperPct > 20 ? 'bg-gradient-to-t from-yellow-500 to-yellow-300' :
                     'bg-gradient-to-t from-red-500 to-red-300'
                   }`}
                   style={{ height: `${isOnline ? hopperPct : 0}%` }}
                 >
-                  {/* Wave effect */}
-                  <div className="absolute top-0 left-0 right-0 h-3 opacity-30">
-                    <div className="w-full h-full bg-white rounded-full animate-pulse" />
-                  </div>
+                  {isOnline && (
+                    <div className="absolute top-0 left-0 right-0 h-3 opacity-30">
+                      <div className="w-full h-full bg-white rounded-full animate-pulse" />
+                    </div>
+                  )}
                 </div>
-                {/* Measurement lines */}
                 {[25, 50, 75].map(line => (
                   <div key={line} className="absolute left-0 right-0 border-t border-dashed border-gray-300 flex items-center" style={{ bottom: `${line}%` }}>
                     <span className="text-[9px] text-gray-400 ml-1">{line}%</span>
                   </div>
                 ))}
               </div>
-              {/* Top funnel */}
               <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-16 sm:w-20 h-4 bg-gray-400 rounded-t-lg" />
             </div>
             <div className="flex-1 space-y-3">
@@ -369,7 +471,8 @@ const FeedingDashboard: React.FC = () => {
               </div>
               <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all duration-1000 ${
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    !isOnline ? 'bg-gray-300' :
                     hopperPct > 50 ? 'bg-teal-500' : hopperPct > 20 ? 'bg-yellow-500' : 'bg-red-500'
                   }`}
                   style={{ width: `${isOnline ? hopperPct : 0}%` }}
@@ -394,45 +497,35 @@ const FeedingDashboard: React.FC = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
-                  <i className="fas fa-clock"></i>
-                </div>
+                <div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><i className="fas fa-clock"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Time</span>
               </div>
               <span className="font-semibold text-sm text-gray-800">{formatTime(device.lastFeedingTime)}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
-                  <i className="fas fa-bullseye"></i>
-                </div>
+                <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><i className="fas fa-bullseye"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Target Weight</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{isOnline && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-teal-100 text-teal-600 flex items-center justify-center">
-                  <i className="fas fa-weight"></i>
-                </div>
+                <div className="w-9 h-9 rounded-lg bg-teal-100 text-teal-600 flex items-center justify-center"><i className="fas fa-weight"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Total Dispensed</span>
               </div>
               <span className="font-semibold text-sm text-gray-800">{isOnline ? formatWeight(device.totalGramsFed) : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center">
-                  <i className="fas fa-hashtag"></i>
-                </div>
+                <div className="w-9 h-9 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center"><i className="fas fa-hashtag"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Feed Sessions</span>
               </div>
               <span className="font-semibold text-sm text-gray-800">{isOnline ? device.feedCount : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-cyan-100 text-cyan-600 flex items-center justify-center">
-                  <i className="fas fa-calendar-check"></i>
-                </div>
+                <div className="w-9 h-9 rounded-lg bg-cyan-100 text-cyan-600 flex items-center justify-center"><i className="fas fa-calendar-check"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Schedules Active</span>
               </div>
               <span className="font-semibold text-sm text-gray-800">{device.scheduleCount}</span>
@@ -489,7 +582,7 @@ const FeedingDashboard: React.FC = () => {
             </div>
             <div>
               <span className="text-blue-800 font-semibold text-sm">Feeding in progress...</span>
-              <p className="text-blue-600 text-xs">Motor: {device.motorStatus} | Speed: {device.plateSpeed.toFixed(0)} RPM</p>
+              <p className="text-blue-600 text-xs">Motor: {device.motorStatus} | ESC: {device.escPercent}% | Weight: {formatWeight(device.currentWeight)}</p>
             </div>
           </div>
         )}
@@ -528,7 +621,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-chart-line text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for live data...</p>
-                <p className="text-xs">Chart populates when device is online</p>
+                <p className="text-xs">{mqttStatus === 'connected' ? 'MQTT connected, waiting for ESP32...' : 'Connecting to MQTT...'}</p>
               </div>
             </div>
           )}
@@ -564,7 +657,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-box text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for hopper data...</p>
-                <p className="text-xs">Chart populates when device is online</p>
+                <p className="text-xs">{mqttStatus === 'connected' ? 'MQTT connected, waiting for ESP32...' : 'Connecting to MQTT...'}</p>
               </div>
             </div>
           )}
@@ -585,7 +678,7 @@ const FeedingDashboard: React.FC = () => {
               <YAxis tick={{ fontSize: 10 }} unit="kg" />
               <Tooltip
                 contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '12px' }}
-                  formatter={(value?: number | string) => [`${Number(value ?? 0).toFixed(2)} kg`, 'Feed Amount']}
+                formatter={(value?: number | string) => [`${Number(value ?? 0).toFixed(2)} kg`, 'Feed Amount']}
               />
               <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
                 {feedEvents.map((_entry, index) => (
@@ -599,27 +692,31 @@ const FeedingDashboard: React.FC = () => {
 
       {/* ── DEVICE INFO FOOTER ── */}
       <div className="bg-gradient-to-r from-gray-50 to-slate-50 rounded-2xl p-4 sm:p-5 border border-gray-200">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
           <div>
             <span className="text-gray-500 block mb-1">Device ID</span>
-            <span className="font-mono font-semibold text-gray-700">{deviceId}</span>
+            <span className="font-mono font-semibold text-gray-700">{DEVICE_ID}</span>
           </div>
           <div>
             <span className="text-gray-500 block mb-1">IP Address</span>
             <span className="font-mono font-semibold text-gray-700">{device.ipAddress || 'N/A'}</span>
           </div>
           <div>
-            <span className="text-gray-500 block mb-1">Last Seen</span>
-            <span className="font-semibold text-gray-700">{formatTime(device.lastSeen)}</span>
+            <span className="text-gray-500 block mb-1">Uptime</span>
+            <span className="font-semibold text-gray-700">{isOnline ? formatUptime(device.uptimeMs) : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500 block mb-1">Last Message</span>
+            <span className="font-semibold text-gray-700">{lastMqttMsg ? lastMqttMsg.toLocaleTimeString() : 'N/A'}</span>
           </div>
           <div>
             <span className="text-gray-500 block mb-1">Connection</span>
             <span className={`font-semibold ${
-              connectionStatus === 'connected' ? 'text-green-600' :
-              connectionStatus === 'checking' ? 'text-yellow-600' : 'text-red-600'
+              mqttStatus === 'connected' ? 'text-green-600' :
+              mqttStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
             }`}>
-              <i className={`fas fa-circle text-[8px] mr-1 ${connectionStatus === 'connected' ? 'text-green-500' : connectionStatus === 'checking' ? 'text-yellow-500' : 'text-red-500'}`}></i>
-              {connectionStatus === 'connected' ? 'MQTT Connected' : connectionStatus === 'checking' ? 'Checking...' : 'Disconnected'}
+              <i className={`fas fa-circle text-[8px] mr-1`}></i>
+              {mqttStatus === 'connected' ? 'MQTT WebSocket' : mqttStatus === 'connecting' ? 'Reconnecting...' : 'Disconnected'}
             </span>
           </div>
         </div>
