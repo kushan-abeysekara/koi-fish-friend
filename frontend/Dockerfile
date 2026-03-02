@@ -30,6 +30,9 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Add custom log format at http level
+RUN echo 'log_format detailed '\''$remote_addr:$remote_port -> $server_addr:$server_port [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"'\'';' > /etc/nginx/conf.d/00-log-format.conf
+
 # Expose port 80
 EXPOSE 80
 
