@@ -23,15 +23,19 @@ WORKDIR /app
 # Copy the built JAR from builder stage
 COPY --from=builder /app/target/*.jar app.jar
 
-# Expose port 8080
-EXPOSE 8080
+# Expose port 8081 (matches server.port in application.properties)
+EXPOSE 8081
 
 # Set Java options for container environment
 ENV JAVA_OPTS="-Xmx512m -Xms256m"
 
-# Health check
+# Health check (app runs on port 8081 per application.properties)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8081/actuator/health || exit 1
 
-# Run the application
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+# Run the application with startup banner
+ENTRYPOINT ["sh", "-c", "IP=$(hostname -i 2>/dev/null || echo '0.0.0.0'); \
+  echo '=========================================='; \
+  echo \" Backend running at http://${IP}:8081\"; \
+  echo '=========================================='; \
+  java $JAVA_OPTS -jar app.jar"]
