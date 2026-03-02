@@ -5,7 +5,6 @@ import DashboardHome from '../components/DashboardHome';
 import UpdateCredentials from '../components/UpdateCredentials';
 import Expenditures from '../components/Expenditures';
 import Inventory from '../components/Inventory';
-import DeviceManagement from '../components/DeviceManagement';
 import EnergyMonitor from '../components/EnergyMonitor';
 import FishCount from '../components/FishCount';
 import ProfitLoss from '../components/ProfitLoss';
@@ -109,7 +108,6 @@ const Dashboard: React.FC = () => {
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />
             <Route path="/budget-forecasting" element={<BudgetForecasting />} />
-            <Route path="/device-management" element={<DeviceManagement />} />
             <Route path="/energy-monitor" element={<EnergyMonitor />} />
             <Route path="/power-control" element={<PowerManagement />} />
             <Route path="/power-schedules" element={<PowerManagement />} />

@@ -405,14 +405,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
         </div>
 
         <NavItem
-          icon={<i className="fas fa-microchip"></i>}
-          label="Device Management"
-          path="/dashboard/device-management"
-          active={location.pathname === '/dashboard/device-management'}
-          onNavigate={onClose}
-        />
-
-        <NavItem
           icon={<i className="fas fa-user-edit"></i>}
           label="Update Credentials"
           path="/dashboard/credentials"

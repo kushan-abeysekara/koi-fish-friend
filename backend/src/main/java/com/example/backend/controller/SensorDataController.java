@@ -244,4 +244,94 @@ public class SensorDataController {
                     .body(new ApiResponse(false, "Error retrieving historical energy data: " + e.getMessage(), null));
         }
     }
+
+    @GetMapping("/device/{deviceId}/latest/energy")
+    public ResponseEntity<ApiResponse> getLatestEnergyDataByDevice(@PathVariable String deviceId) {
+        try {
+            System.out.println("⚡ Fetching latest energy data for device: " + deviceId);
+            SensorData data = dataRepository.findLatestByDeviceIdStringAndDeviceType(
+                    deviceId, SensorDevice.DeviceType.BUDGET_MANAGEMENT);
+            if (data == null) {
+                return ResponseEntity.ok(new ApiResponse(true,
+                        "No energy data found for this device yet", null));
+            }
+            System.out.println("✅ Returning energy data for device " + deviceId +
+                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() +
+                    " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");
+            return ResponseEntity.ok(new ApiResponse(true, "Latest energy data retrieved successfully", data));
+        } catch (Exception e) {
+            System.err.println("❌ Error retrieving latest energy data by device: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving energy data: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/device/{deviceId}/history/energy")
+    public ResponseEntity<ApiResponse> getHistoricalEnergyDataByDevice(
+            @PathVariable String deviceId,
+            @RequestParam(defaultValue = "24") int hours) {
+        try {
+            System.out.println("⚡ Fetching energy history for device " + deviceId + " (last " + hours + " hours)");
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+            List<SensorData> allData = dataRepository.findByDeviceIdStringAndTimestampAfter(deviceId, since);
+            List<SensorData> energyData = allData.stream()
+                    .filter(d -> d.getDevice() != null &&
+                            d.getDevice().getDeviceType() == SensorDevice.DeviceType.BUDGET_MANAGEMENT)
+                    .toList();
+            System.out.println("✅ Found " + energyData.size() + " energy data points for device " + deviceId);
+            return ResponseEntity
+                    .ok(new ApiResponse(true, "Historical energy data retrieved successfully", energyData));
+        } catch (Exception e) {
+            System.err.println("❌ Error retrieving historical energy data by device: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error retrieving energy history: " + e.getMessage(), null));
+        }
+    }
+
+    // ─── Single-device type endpoints (no device ID needed) ───────────────────
+
+    @GetMapping("/latest/energy")
+    public ResponseEntity<ApiResponse> getLatestEnergy() {
+        try {
+            SensorData data = dataRepository
+                    .findFirstByDevice_DeviceTypeOrderByTimestampDesc(SensorDevice.DeviceType.BUDGET_MANAGEMENT)
+                    .orElse(null);
+            if (data == null) {
+                return ResponseEntity.ok(new ApiResponse(true, "No energy device has sent data yet", null));
+            }
+            return ResponseEntity.ok(new ApiResponse(true, "Latest energy data retrieved", data));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/history/energy")
+    public ResponseEntity<ApiResponse> getEnergyHistory(@RequestParam(defaultValue = "24") int hours) {
+        try {
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+            List<SensorData> data = dataRepository.findByDeviceTypeAndTimestampAfter(
+                    SensorDevice.DeviceType.BUDGET_MANAGEMENT, since);
+            return ResponseEntity.ok(new ApiResponse(true, "Energy history retrieved", data));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error: " + e.getMessage(), null));
+        }
+    }
+
+    @GetMapping("/latest/water-quality")
+    public ResponseEntity<ApiResponse> getLatestWaterQuality() {
+        try {
+            SensorData data = dataRepository
+                    .findFirstByDevice_DeviceTypeOrderByTimestampDesc(SensorDevice.DeviceType.WATER_QUALITY)
+                    .orElse(null);
+            if (data == null) {
+                return ResponseEntity.ok(new ApiResponse(true, "No water quality device has sent data yet", null));
+            }
+            return ResponseEntity.ok(new ApiResponse(true, "Latest water quality data retrieved", data));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error: " + e.getMessage(), null));
+        }
+    }
 }

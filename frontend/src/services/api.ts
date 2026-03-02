@@ -575,6 +575,8 @@ export interface SensorDevice {
   energyWh: number;
   lastSeen: string;
   createdAt: string;
+  relayState?: string;   // "ON" | "OFF" — updated via MQTT status message
+  controlMode?: string;  // "manual" | "auto" | "schedule"
 }
 
 export const sensorDeviceApi = {
@@ -676,6 +678,37 @@ export const sensorDataApi = {
     const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/pond/${pondId}/history/energy`, {
       params: { hours }
     });
+    return response.data;
+  },
+
+  // Device-based energy methods (no pond assignment required)
+  getLatestEnergyByDevice: async (deviceId: string): Promise<ApiResponse<SensorData>> => {
+    const response = await api.get<ApiResponse<SensorData>>(`/sensor-data/device/${deviceId}/latest/energy`);
+    return response.data;
+  },
+
+  getHistoricalEnergyByDevice: async (deviceId: string, hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
+    const response = await api.get<ApiResponse<SensorData[]>>(`/sensor-data/device/${deviceId}/history/energy`, {
+      params: { hours }
+    });
+    return response.data;
+  },
+
+  // Single-device type methods (no device ID needed – only one device per type)
+  getLatestEnergy: async (): Promise<ApiResponse<SensorData>> => {
+    const response = await api.get<ApiResponse<SensorData>>('/sensor-data/latest/energy');
+    return response.data;
+  },
+
+  getEnergyHistory: async (hours: number = 24): Promise<ApiResponse<SensorData[]>> => {
+    const response = await api.get<ApiResponse<SensorData[]>>('/sensor-data/history/energy', {
+      params: { hours }
+    });
+    return response.data;
+  },
+
+  getLatestWaterQuality: async (): Promise<ApiResponse<SensorData>> => {
+    const response = await api.get<ApiResponse<SensorData>>('/sensor-data/latest/water-quality');
     return response.data;
   },
 

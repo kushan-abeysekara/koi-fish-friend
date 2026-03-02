@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { sensorDataApi, pondApi, sensorDeviceApi } from '../services/api';
-import type { Pond, SensorData } from '../services/api';
+import { sensorDataApi } from '../services/api';
+import type { SensorData } from '../services/api';
 import { Wifi, WifiOff } from 'lucide-react';
 
 interface WaterParameter {
@@ -34,21 +34,11 @@ const WaterQualityDashboard: React.FC = () => {
   const [deviceIP, setDeviceIP] = useState('192.168.8.102');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
-  const [selectedPond, setSelectedPond] = useState<number | null>(3);
-  const [ponds, setPonds] = useState<Pond[]>([{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }]);
   const [latestData, setLatestData] = useState<SensorData | null>(null);
   const [loading, setLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const WEBSOCKET_URL = 'ws://192.168.8.102:81';
-  const selectedPondRef = useRef<number | null>(3);
-  const pondsRef = useRef<Pond[]>([{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }]);
-  
-  // Keep refs updated
-  useEffect(() => {
-    selectedPondRef.current = selectedPond;
-    pondsRef.current = ponds;
-  }, [selectedPond, ponds]);
 
   // Function to save sensor data to database via REST API
   const saveSensorDataToDatabase = async (data: WebSocketData) => {
@@ -79,10 +69,6 @@ const WaterQualityDashboard: React.FC = () => {
     let connectionTimeout: NodeJS.Timeout | null = null;
     let connectionAttempts = 0;
     const MAX_ATTEMPTS = 100; // Keep tryingee
-    
-    // Force update refs on mount
-    selectedPondRef.current = 3;
-    pondsRef.current = [{ id: 3, name: 'Pond 3', capacity: 1000, currentFishCount: 0 }];
     
     console.log('🚀 [WATER QUALITY] Starting WebSocket connection manager...');
     console.log('   Target:', WEBSOCKET_URL);
@@ -165,39 +151,33 @@ const WaterQualityDashboard: React.FC = () => {
               setSignalStrength(data.rssi);
             }
             
-            // Only process data if it matches selected pond (use ref to get latest value)
-            const currentSelectedPond = selectedPondRef.current;
-            const currentPonds = pondsRef.current;
-            
-            if (currentSelectedPond && data.pondId === currentSelectedPond) {
-              // Convert WebSocket data to SensorData format
-              const sensorData: SensorData = {
-                id: Date.now(),
-                device: {
-                  id: 0,
-                  deviceId: data.deviceId,
-                  deviceType: 'WATER_QUALITY',
-                  pond: currentPonds.find(p => p.id === data.pondId) || null,
-                  status: 'online'
-                },
-                pond: currentPonds.find(p => p.id === data.pondId) || null,
-                phValue: data.phValue,
-                turbidity: data.turbidity,
-                co2Level: data.co2Level,
-                ammonia: data.ammonia,
-                waterQualityStatus: data.waterQualityStatus,
-                timestamp: new Date(data.timestamp || Date.now()).toISOString()
-              };
-              
-              setLatestData(sensorData);
-              setLastSync(new Date());
-              setMqttConnected(true); // Device is also using MQTT
-              
-              // Save to database via REST API (bypass MQTT)
-              saveSensorDataToDatabase(data).catch(error => {
-                console.error('Failed to save sensor data:', error);
-              });
-            }
+            // Convert WebSocket data to SensorData format — accept from the single WATER_QUALITY device
+            const sensorData: SensorData = {
+              id: Date.now(),
+              device: {
+                id: 0,
+                deviceId: data.deviceId,
+                deviceType: 'WATER_QUALITY',
+                pond: null,
+                status: 'online'
+              },
+              pond: null,
+              phValue: data.phValue,
+              turbidity: data.turbidity,
+              co2Level: data.co2Level,
+              ammonia: data.ammonia,
+              waterQualityStatus: data.waterQualityStatus,
+              timestamp: new Date(data.timestamp || Date.now()).toISOString()
+            };
+
+            setLatestData(sensorData);
+            setLastSync(new Date());
+            setMqttConnected(true); // Device is also using MQTT
+
+            // Save to database via REST API (bypass MQTT)
+            saveSensorDataToDatabase(data).catch(error => {
+              console.error('Failed to save sensor data:', error);
+            });
           } catch (error) {
             console.error('Error parsing WebSocket data:', error);
           }
@@ -295,19 +275,14 @@ const WaterQualityDashboard: React.FC = () => {
     };
   }, []); // Empty deps - connect once on mount
 
-  // REMOVED: Backend pond fetching - just use Pond 3 directly
-  // The pond is already set in useState, no need to fetch from backend
-
-  // Fetch sensor data for selected pond (backup/fallback to REST API)
+  // Fetch sensor data for WATER_QUALITY device (backup/fallback to REST API)
   useEffect(() => {
-    if (!selectedPond) return;
-
     const fetchData = async () => {
       try {
         // Only fetch if WebSocket is not connected (fallback mode)
         if (!wsConnected) {
           setLoading(true);
-          const response = await sensorDataApi.getLatestByPond(selectedPond);
+          const response = await sensorDataApi.getLatestWaterQuality();
         
         console.log('🔍 Water Quality API Response:', {
           success: response.success,
@@ -318,7 +293,6 @@ const WaterQualityDashboard: React.FC = () => {
         
         if (response.success && response.data) {
           console.log('✅ Received water quality data:', {
-            pondId: selectedPond,
             deviceId: response.data.device?.deviceId,
             deviceType: response.data.device?.deviceType,
             pH: response.data.phValue,
@@ -332,8 +306,6 @@ const WaterQualityDashboard: React.FC = () => {
           setLastSync(new Date());
         } else {
           console.warn('⚠️ No water quality data available:', response.message);
-          // Clear data if no sensor data available for this pond
-          setLatestData(null);
           if (!wsConnected) {
             setConnectionStatus('disconnected');
           }
@@ -362,7 +334,7 @@ const WaterQualityDashboard: React.FC = () => {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [selectedPond, wsConnected]);
+  }, [wsConnected]);
 
   // Check if we have real data
   const hasRealData = latestData && latestData.phValue !== undefined && latestData.phValue !== null;
@@ -533,14 +505,10 @@ const WaterQualityDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <select
-              value={3}
-              onChange={() => {}}
-              className="px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 cursor-not-allowed"
-              disabled={true}
-            >
-              <option value={3}>Pond 3</option>
-            </select>
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700 font-medium">
+              <span>📡</span>
+              <span>Water Quality Device</span>
+            </div>
             {getConnectionStatusBadge()}
           </div>
         </div>
@@ -579,16 +547,10 @@ const WaterQualityDashboard: React.FC = () => {
             <div>
               <h3 className="text-xl font-semibold text-gray-700 mb-2">No Sensor Data Available</h3>
               <p className="text-gray-500 mb-1">
-                {selectedPond 
-                  ? 'Water quality sensor is not connected or not sending data' 
-                  : ponds.length === 0
-                    ? 'No ponds have a water quality sensor assigned yet'
-                    : 'Please select a pond to view water quality data'}
+                Water quality sensor is not connected or not sending data
               </p>
               <p className="text-sm text-gray-400">
-                {ponds.length === 0 
-                  ? 'Assign a WATER_QUALITY device to a pond in Device Management'
-                  : 'Make sure the ESP32 device is powered on and connected to WiFi'}
+                Make sure the ESP32 device is powered on and connected to WiFi
               </p>
             </div>
             <div className="flex gap-3 mt-4">
