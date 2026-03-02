@@ -54,6 +54,21 @@ public class SensorDevice {
     @Column(name = "feeding_active")
     private Boolean feedingActive; // Whether feeding is in progress
 
+    @Column(name = "feed_count")
+    private Integer feedCount; // Total feeding sessions
+
+    @Column(name = "total_grams_fed")
+    private Double totalGramsFed; // Total grams dispensed
+
+    @Column(name = "current_weight")
+    private Double currentWeight; // Current weight on scale (grams)
+
+    @Column(name = "target_weight")
+    private Double targetWeight; // Target weight for current feeding
+
+    @Column(name = "last_feeding_time")
+    private LocalDateTime lastFeedingTime; // Timestamp of last feeding
+
     // Power management fields (for BUDGET_MANAGEMENT devices)
     @Column(name = "relay_state")
     private String relayState; // "ON" or "OFF"
@@ -231,5 +246,45 @@ public class SensorDevice {
 
     public void setScheduleCount(Integer scheduleCount) {
         this.scheduleCount = scheduleCount;
+    }
+
+    public Integer getFeedCount() {
+        return feedCount;
+    }
+
+    public void setFeedCount(Integer feedCount) {
+        this.feedCount = feedCount;
+    }
+
+    public Double getTotalGramsFed() {
+        return totalGramsFed;
+    }
+
+    public void setTotalGramsFed(Double totalGramsFed) {
+        this.totalGramsFed = totalGramsFed;
+    }
+
+    public Double getCurrentWeight() {
+        return currentWeight;
+    }
+
+    public void setCurrentWeight(Double currentWeight) {
+        this.currentWeight = currentWeight;
+    }
+
+    public Double getTargetWeight() {
+        return targetWeight;
+    }
+
+    public void setTargetWeight(Double targetWeight) {
+        this.targetWeight = targetWeight;
+    }
+
+    public LocalDateTime getLastFeedingTime() {
+        return lastFeedingTime;
+    }
+
+    public void setLastFeedingTime(LocalDateTime lastFeedingTime) {
+        this.lastFeedingTime = lastFeedingTime;
     }
 }

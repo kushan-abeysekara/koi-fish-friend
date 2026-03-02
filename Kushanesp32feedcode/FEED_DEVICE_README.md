@@ -172,9 +172,23 @@ Feeds: 12
 
 Open Arduino IDE and install these libraries via Library Manager (**Tools → Manage Libraries**):
 
-1. **Adafruit GFX Library** by Adafruit
-2. **Adafruit SSD1306** by Adafruit  
-3. **HX711 Arduino Library** by Bogdan Necula
+| # | Library | Author | Install Name | Purpose |
+|---|---------|--------|-------------|---------|
+| 1 | **Wire.h** | Arduino | Built-in (ESP32 core) | I2C communication for OLED & sensors |
+| 2 | **Adafruit_GFX.h** | Adafruit Industries | **Adafruit GFX Library** | Core graphics library (dependency for SSD1306) |
+| 3 | **Adafruit_SSD1306.h** | Adafruit Industries | **Adafruit SSD1306** | OLED display driver (0.96" 128x64) |
+| 4 | **HX711.h** | Bogdan Necula | **HX711 Arduino Library** | Load cell amplifier (24-bit ADC) |
+| 5 | **WiFi.h** | Espressif | Built-in (ESP32 core) | WiFi connectivity |
+| 6 | **PubSubClient.h** | Nick O'Leary | **PubSubClient** | MQTT client for broker communication |
+| 7 | **ArduinoJson.h** | Benoit Blanchon | **ArduinoJson** | JSON parsing & serialization |
+| 8 | **time.h** | C Standard Library | Built-in (ESP32 core) | NTP time sync for scheduling |
+
+**Libraries to install manually** (5 total — the rest are built-in):
+1. **Adafruit GFX Library** by *Adafruit*
+2. **Adafruit SSD1306** by *Adafruit*
+3. **HX711 Arduino Library** by *Bogdan Necula*
+4. **PubSubClient** by *Nick O'Leary*
+5. **ArduinoJson** by *Benoit Blanchon*
 
 ### Step 2: Hardware Connections
 

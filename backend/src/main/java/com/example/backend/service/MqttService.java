@@ -112,7 +112,26 @@ public class MqttService {
             device.setMotorStatus(json.get("motorStatus").asText());
         }
         if (json.has("feedingActive")) {
-            device.setFeedingActive(json.get("feedingActive").asBoolean());
+            boolean wasFeedingActive = Boolean.TRUE.equals(device.getFeedingActive());
+            boolean isNowActive = json.get("feedingActive").asBoolean();
+            device.setFeedingActive(isNowActive);
+            
+            // Detect feeding completion (was active, now stopped)
+            if (wasFeedingActive && !isNowActive) {
+                device.setLastFeedingTime(LocalDateTime.now());
+            }
+        }
+        if (json.has("feedCount")) {
+            device.setFeedCount(json.get("feedCount").asInt());
+        }
+        if (json.has("totalGrams")) {
+            device.setTotalGramsFed(json.get("totalGrams").asDouble());
+        }
+        if (json.has("weight")) {
+            device.setCurrentWeight(json.get("weight").asDouble());
+        }
+        if (json.has("targetWeight")) {
+            device.setTargetWeight(json.get("targetWeight").asDouble());
         }
 
         // Handle power management fields (for BUDGET_MANAGEMENT devices)
@@ -208,7 +227,24 @@ public class MqttService {
                 device.setMotorStatus(json.get("motorStatus").asText());
             }
             if (json.has("feedingActive")) {
-                device.setFeedingActive(json.get("feedingActive").asBoolean());
+                boolean wasFeedingActive = Boolean.TRUE.equals(device.getFeedingActive());
+                boolean isNowActive = json.get("feedingActive").asBoolean();
+                device.setFeedingActive(isNowActive);
+                if (wasFeedingActive && !isNowActive) {
+                    device.setLastFeedingTime(LocalDateTime.now());
+                }
+            }
+            if (json.has("feedCount")) {
+                device.setFeedCount(json.get("feedCount").asInt());
+            }
+            if (json.has("totalGrams")) {
+                device.setTotalGramsFed(json.get("totalGrams").asDouble());
+            }
+            if (json.has("weight")) {
+                device.setCurrentWeight(json.get("weight").asDouble());
+            }
+            if (json.has("targetWeight")) {
+                device.setTargetWeight(json.get("targetWeight").asDouble());
             }
 
             System.out.println("Feeding device data updated: " + deviceId +
@@ -336,10 +372,10 @@ public class MqttService {
         }
     }
 
-    // Check for offline devices every 2 seconds for real-time detection
-    @Scheduled(fixedRate = 2000)
+    // Check for offline devices every 15 seconds (reduced from 2s to avoid DB spam)
+    @Scheduled(fixedRate = 15000)
     public void checkOfflineDevices() {
-        LocalDateTime timeout = LocalDateTime.now().minusSeconds(10); // 10 second timeout (2x status interval)
+        LocalDateTime timeout = LocalDateTime.now().minusSeconds(30); // 30 second timeout
         List<SensorDevice> allDevices = deviceRepository.findAll();
 
         for (SensorDevice device : allDevices) {

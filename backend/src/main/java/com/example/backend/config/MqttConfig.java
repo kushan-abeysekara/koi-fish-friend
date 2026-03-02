@@ -31,9 +31,10 @@ public class MqttConfig {
         MqttConnectOptions options = new MqttConnectOptions();
         options.setServerURIs(new String[] { BROKER_URL });
         options.setAutomaticReconnect(true);
-        options.setCleanSession(true);
-        options.setConnectionTimeout(10);
-        options.setKeepAliveInterval(20);
+        options.setCleanSession(false); // Preserve subscriptions across reconnects
+        options.setConnectionTimeout(30);
+        options.setKeepAliveInterval(60); // Longer keep-alive to reduce disconnects
+        options.setMaxReconnectDelay(10000); // Max 10s between reconnect attempts
         // EMQX default credentials
         // options.setUserName("admin");
         // options.setPassword("public".toCharArray());
@@ -56,6 +57,7 @@ public class MqttConfig {
         adapter.setQos(1);
         adapter.setOutputChannel(mqttInputChannel());
         adapter.setAutoStartup(true);
+        adapter.setRecoveryInterval(5000); // Retry every 5s on connection loss
         return adapter;
     }
 
