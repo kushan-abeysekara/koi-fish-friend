@@ -187,4 +187,34 @@ public class FeedingController {
                     .body(new ApiResponse(false, "Failed to send schedules: " + e.getMessage(), null));
         }
     }
+
+    /**
+     * Diagnostic: control individual motors for testing
+     * Actions: diag_stepper_on, diag_stepper_off, diag_esc_on, diag_esc_off, diag_all_stop, diag_report
+     */
+    @PostMapping("/diagnostic")
+    public ResponseEntity<ApiResponse> diagnosticCommand(
+            @RequestParam(required = false, defaultValue = "feed_device_001") String deviceId,
+            @RequestParam String action,
+            @RequestParam(required = false) Integer stepperSpeed,
+            @RequestParam(required = false) Integer escPercent) {
+        try {
+            Map<String, Object> commandData = new HashMap<>();
+            commandData.put("action", action);
+            if (stepperSpeed != null) commandData.put("stepperSpeed", stepperSpeed);
+            if (escPercent != null) commandData.put("escPercent", escPercent);
+
+            mqttService.sendFeedingCommand(deviceId, "feeding", commandData);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("deviceId", deviceId);
+            result.put("action", action);
+            result.put("message", "Diagnostic command sent: " + action);
+
+            return ResponseEntity.ok(new ApiResponse(true, "Diagnostic command sent", result));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(new ApiResponse(false, "Failed to send diagnostic: " + e.getMessage(), null));
+        }
+    }
 }

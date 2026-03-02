@@ -1,502 +1,677 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 
-interface StatusIndicator {
-  id: string;
-  name: string;
-  status: 'OK' | 'Warning' | 'Critical';
-  value: string;
-  icon: string;
-  color: string;
+const DEVICE_ID = 'feed_device_001';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding';
+
+interface DeviceLive {
+  status: string;
+  feedingActive: boolean;
+  stepperActive: boolean;
+  motorStatus: string;
+  plateSpeed: number;
+  currentWeight: number;
+  hopperLevel: number;
+  hopperCapacity: number;
+  hopperPercentage: number;
+  currentESCPercent: number;
+  escPercent: number;
+  rssi: number | null;
+  ipAddress: string | null;
+  uptimeMs: number;
+  feedCount: number;
+  totalGramsFed: number;
 }
 
-interface DeviceStatus {
-  hopperLevel?: number;
-  hopperCapacity?: number;
-  hopperPercentage?: number;
-  plateSpeed?: number;
-  motorStatus?: string;
-  feedingActive?: boolean;
-  connected?: boolean;
+interface DiagLog {
+  time: string;
+  action: string;
+  result: 'success' | 'error';
+  detail: string;
 }
 
-interface SafetyEvent {
-  id: string;
-  dateTime: string;
-  pond: string;
-  eventType: 'Low Battery' | 'Hopper Empty' | 'Motor Jam' | 'Connection Lost' | 'System Normal';
-  severity: 'Info' | 'Warning' | 'Critical';
-  description: string;
-  resolved: boolean;
-}
+const INITIAL: DeviceLive = {
+  status: 'offline', feedingActive: false, stepperActive: false, motorStatus: 'STOPPED',
+  plateSpeed: 0, currentWeight: 0, hopperLevel: 0, hopperCapacity: 20000, hopperPercentage: 0,
+  currentESCPercent: 0, escPercent: 0, rssi: null, ipAddress: null, uptimeMs: 0,
+  feedCount: 0, totalGramsFed: 0,
+};
 
 const FeederHealthSafety: React.FC = () => {
-  const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
-  const [deviceId] = useState('feed_device_001');
-  const [, setDeviceStatus] = useState<DeviceStatus>({});
-  const [statusIndicators, setStatusIndicators] = useState<Record<string, StatusIndicator[]>>({});
+  const [device, setDevice] = useState<DeviceLive>(INITIAL);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [lastMsg, setLastMsg] = useState<Date | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const offlineRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch device status every 3 seconds for real-time updates
-  useEffect(() => {
-    const fetchDeviceStatus = async () => {
-      try {
-        const response = await api.get(`/sensors/device/${deviceId}`);
-        if (response.data.success && response.data.data) {
-          const device = response.data.data;
-          const isOnline = device.status === 'online';
-          
-          setDeviceStatus({
-            hopperLevel: device.hopperLevel || 0,
-            hopperCapacity: device.hopperCapacity || 20000,
-            hopperPercentage: device.hopperPercentage || 0,
-            plateSpeed: device.plateSpeed || 0,
-            motorStatus: device.motorStatus || 'STOPPED',
-            feedingActive: device.feedingActive || false,
-            connected: isOnline
-          });
+  // ── Stepper controls ──
+  const [stepperOn, setStepperOn] = useState(false);
+  const [stepperSpeed, setStepperSpeed] = useState(500);
 
-          // Update status indicators with real data
-          const hopperKg = (device.hopperLevel || 0) / 1000;
-          const hopperPercent = device.hopperPercentage || 0;
-          
-          const indicators: StatusIndicator[] = [
-            {
-              id: '1',
-              name: 'Hopper Feed Level',
-              status: isOnline ? (hopperPercent > 30 ? 'OK' : hopperPercent > 10 ? 'Warning' : 'Critical') : 'Critical',
-              value: isOnline ? `${hopperKg.toFixed(2)} kg (${hopperPercent.toFixed(1)}%)` : 'Offline',
-              icon: 'fa-box',
-              color: isOnline ? (hopperPercent > 30 ? 'green' : hopperPercent > 10 ? 'yellow' : 'red') : 'gray',
-            },
-            {
-              id: '2',
-              name: 'Connection',
-              status: isOnline ? 'OK' : 'Critical',
-              value: isOnline ? 'Online' : 'Offline',
-              icon: 'fa-wifi',
-              color: isOnline ? 'green' : 'red',
-            },
-            {
-              id: '3',
-              name: 'Plate Speed',
-              status: isOnline ? 'OK' : 'Critical',
-              value: isOnline ? `${(device.plateSpeed || 0).toFixed(0)} RPM` : 'Offline',
-              icon: 'fa-tachometer-alt',
-              color: isOnline ? 'green' : 'gray',
-            },
-            {
-              id: '4',
-              name: 'Motor Status (NEMA17)',
-              status: isOnline ? (device.motorStatus === 'RUNNING' ? 'OK' : 'OK') : 'Critical',
-              value: isOnline ? (device.motorStatus || 'STOPPED') : 'Offline',
-              icon: 'fa-cog',
-              color: isOnline ? (device.motorStatus === 'RUNNING' ? 'blue' : 'green') : 'gray',
-            },
-            {
-              id: '5',
-              name: 'Feeding Status',
-              status: isOnline ? (device.feedingActive ? 'OK' : 'OK') : 'Critical',
-              value: isOnline ? (device.feedingActive ? 'Active' : 'Idle') : 'Offline',
-              icon: 'fa-fish',
-              color: isOnline ? (device.feedingActive ? 'blue' : 'green') : 'gray',
-            },
-            {
-              id: '6',
-              name: 'Temperature',
-              status: 'OK',
-              value: '24°C',
-              icon: 'fa-thermometer-half',
-              color: 'green',
-            },
-          ];
+  // ── ESC controls ──
+  const [escOn, setEscOn] = useState(false);
+  const [escPercent, setEscPercent] = useState(25);
 
-          setStatusIndicators(prev => ({
-            ...prev,
-            [selectedPond]: indicators
-          }));
-        } else {
-          // Handle case when device data is not available
-          const offlineIndicators: StatusIndicator[] = [
-            { id: '1', name: 'Hopper Feed Level', status: 'Critical', value: 'Offline', icon: 'fa-box', color: 'gray' },
-            { id: '2', name: 'Connection', status: 'Critical', value: 'Offline', icon: 'fa-wifi', color: 'red' },
-            { id: '3', name: 'Plate Speed', status: 'Critical', value: 'Offline', icon: 'fa-tachometer-alt', color: 'gray' },
-            { id: '4', name: 'Motor Status (NEMA17)', status: 'Critical', value: 'Offline', icon: 'fa-cog', color: 'gray' },
-            { id: '5', name: 'Feeding Status', status: 'Critical', value: 'Offline', icon: 'fa-fish', color: 'gray' },
-            { id: '6', name: 'Temperature', status: 'OK', value: '24°C', icon: 'fa-thermometer-half', color: 'green' },
-          ];
-          setStatusIndicators(prev => ({ ...prev, [selectedPond]: offlineIndicators }));
-        }
-      } catch (error) {
-        console.error('Failed to fetch device status:', error);
-        // Set offline indicators on error
-        const offlineIndicators: StatusIndicator[] = [
-          { id: '1', name: 'Hopper Feed Level', status: 'Critical', value: 'Offline', icon: 'fa-box', color: 'gray' },
-          { id: '2', name: 'Connection', status: 'Critical', value: 'Offline', icon: 'fa-wifi', color: 'red' },
-          { id: '3', name: 'Plate Speed', status: 'Critical', value: 'Offline', icon: 'fa-tachometer-alt', color: 'gray' },
-          { id: '4', name: 'Motor Status (NEMA17)', status: 'Critical', value: 'Offline', icon: 'fa-cog', color: 'gray' },
-          { id: '5', name: 'Feeding Status', status: 'Critical', value: 'Offline', icon: 'fa-fish', color: 'gray' },
-          { id: '6', name: 'Temperature', status: 'OK', value: '24°C', icon: 'fa-thermometer-half', color: 'green' },
-        ];
-        setStatusIndicators(prev => ({ ...prev, [selectedPond]: offlineIndicators }));
+  // ── Calibration ──
+  const [calFactor, setCalFactor] = useState(-2520);
+  const [calStatus, setCalStatus] = useState('');
+
+  // ── Diagnostic log ──
+  const [diagLog, setDiagLog] = useState<DiagLog[]>([]);
+
+  const isOnline = device.status !== 'offline';
+
+  const addLog = useCallback((action: string, result: 'success' | 'error', detail: string) => {
+    const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    setDiagLog(prev => [{ time: t, action, result, detail }, ...prev].slice(0, 50));
+  }, []);
+
+  // ─── WebSocket connection ───
+  const handleWsMessage = useCallback((raw: string) => {
+    try {
+      const d = JSON.parse(raw);
+      setDevice({
+        status: d.status || 'online',
+        feedingActive: d.feedingActive || false,
+        stepperActive: d.stepperActive || false,
+        motorStatus: d.motorStatus || 'STOPPED',
+        plateSpeed: d.plateSpeed || 0,
+        currentWeight: d.weight || 0,
+        hopperLevel: d.hopperLevel || 0,
+        hopperCapacity: d.hopperCapacity || 20000,
+        hopperPercentage: d.hopperPercentage || 0,
+        currentESCPercent: d.escPercent || d.escPotPercent || 0,
+        escPercent: d.escPercent || 0,
+        rssi: d.rssi ?? null,
+        ipAddress: d.ipAddress || null,
+        uptimeMs: d.uptimeMs || 0,
+        feedCount: d.feedCount || 0,
+        totalGramsFed: d.totalGrams || 0,
+      });
+      setLastMsg(new Date());
+
+      // Track stepper / ESC state from device
+      if (d.stepperActive !== undefined) setStepperOn(d.stepperActive);
+      if (d.status?.startsWith('diag_stepper_on')) setStepperOn(true);
+      if (d.status?.startsWith('diag_stepper_off')) setStepperOn(false);
+      if (d.status?.startsWith('diag_esc_on')) setEscOn(true);
+      if (d.status?.startsWith('diag_esc_off')) setEscOn(false);
+      if (d.status?.startsWith('diag_all_stop')) { setStepperOn(false); setEscOn(false); }
+
+      // Log diag acknowledgements
+      const s = d.status || '';
+      if (s.startsWith('diag_') || s === 'tared' || s === 'calibrated') {
+        addLog(s, 'success', `Device confirmed: ${s}`);
       }
+
+      if (offlineRef.current) clearTimeout(offlineRef.current);
+      offlineRef.current = setTimeout(() => setDevice(prev => ({ ...prev, status: 'offline' })), 6000);
+    } catch { /* ignore */ }
+  }, [addLog]);
+
+  useEffect(() => {
+    let mounted = true;
+    const connect = () => {
+      if (!mounted) return;
+      setWsStatus('connecting');
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      ws.onopen = () => { if (mounted) setWsStatus('connected'); };
+      ws.onmessage = (e) => { if (mounted) handleWsMessage(e.data); };
+      ws.onerror = () => { if (mounted) setWsStatus('disconnected'); };
+      ws.onclose = () => {
+        if (!mounted) return;
+        setWsStatus('disconnected');
+        wsRef.current = null;
+        reconnectRef.current = setTimeout(connect, 3000);
+      };
     };
+    connect();
+    return () => {
+      mounted = false;
+      if (offlineRef.current) clearTimeout(offlineRef.current);
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      wsRef.current?.close();
+    };
+  }, [handleWsMessage]);
 
-    fetchDeviceStatus();
-    const interval = setInterval(fetchDeviceStatus, 3000); // Update every 3 seconds
-    return () => clearInterval(interval);
-  }, [deviceId, selectedPond]);
-
-  // Mock safety events history
-  const [safetyEvents] = useState<SafetyEvent[]>([
-    {
-      id: '1',
-      dateTime: '2025-12-25 14:30',
-      pond: 'Pond B',
-      eventType: 'Hopper Empty',
-      severity: 'Critical',
-      description: 'Hopper feed level below 5 kg threshold. Feeding paused automatically.',
-      resolved: false,
-    },
-    {
-      id: '2',
-      dateTime: '2025-12-25 13:45',
-      pond: 'Pond B',
-      eventType: 'Low Battery',
-      severity: 'Warning',
-      description: 'Battery level at 18%. Please recharge soon.',
-      resolved: false,
-    },
-    {
-      id: '3',
-      dateTime: '2025-12-24 16:20',
-      pond: 'Pond A',
-      eventType: 'Motor Jam',
-      severity: 'Critical',
-      description: 'Motor jam detected. Emergency stop activated.',
-      resolved: true,
-    },
-    {
-      id: '4',
-      dateTime: '2025-12-24 09:15',
-      pond: 'Pond B',
-      eventType: 'Connection Lost',
-      severity: 'Critical',
-      description: 'Lost connection to feeder for 5 minutes. Connection restored.',
-      resolved: true,
-    },
-    {
-      id: '5',
-      dateTime: '2025-12-23 18:30',
-      pond: 'Pond A',
-      eventType: 'System Normal',
-      severity: 'Info',
-      description: 'All systems operational. Daily health check passed.',
-      resolved: true,
-    },
-    {
-      id: '6',
-      dateTime: '2025-12-23 11:00',
-      pond: 'Pond A',
-      eventType: 'Low Battery',
-      severity: 'Warning',
-      description: 'Battery level at 22%. Charging recommended.',
-      resolved: true,
-    },
-  ]);
-
-  const currentIndicators = statusIndicators[selectedPond] || [];
-
-  const getStatusBgColor = (status: string) => {
-    switch (status) {
-      case 'OK':
-        return 'from-green-50 to-green-100 border-green-200';
-      case 'Warning':
-        return 'from-yellow-50 to-yellow-100 border-yellow-200';
-      case 'Critical':
-        return 'from-red-50 to-red-100 border-red-200';
-      default:
-        return 'from-gray-50 to-gray-100 border-gray-200';
+  // ── API helpers ──
+  const sendDiag = async (action: string, params: Record<string, string | number> = {}) => {
+    try {
+      const qs = new URLSearchParams({ deviceId: DEVICE_ID, action, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
+      await api.post(`/feeding/diagnostic?${qs.toString()}`);
+      addLog(action, 'success', `Sent ${action}`);
+    } catch (err) {
+      addLog(action, 'error', `Failed: ${err}`);
     }
   };
 
-  const getStatusIconColor = (color: string) => {
-    switch (color) {
-      case 'green':
-        return 'bg-green-500';
-      case 'yellow':
-        return 'bg-yellow-500';
-      case 'red':
-        return 'bg-red-500';
-      default:
-        return 'bg-gray-500';
+  const handleTare = async () => {
+    try {
+      await api.post(`/feeding/tare?deviceId=${DEVICE_ID}`);
+      setCalStatus('Tare command sent — waiting for confirmation...');
+      addLog('tare', 'success', 'Tare command sent');
+    } catch {
+      setCalStatus('Failed to send tare command');
+      addLog('tare', 'error', 'API call failed');
     }
   };
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'Info':
-        return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'Warning':
-        return 'bg-yellow-100 text-yellow-700 border-yellow-200';
-      case 'Critical':
-        return 'bg-red-100 text-red-700 border-red-200';
-      default:
-        return 'bg-gray-100 text-gray-700 border-gray-200';
+  const handleCalibrate = async () => {
+    try {
+      await api.post(`/feeding/calibrate?deviceId=${DEVICE_ID}&calibrationFactor=${calFactor}`);
+      setCalStatus(`Calibration factor ${calFactor} sent — waiting for confirmation...`);
+      addLog('calibrate', 'success', `Factor: ${calFactor}`);
+    } catch {
+      setCalStatus('Failed to send calibration');
+      addLog('calibrate', 'error', 'API call failed');
     }
   };
 
-  const activeAlerts = safetyEvents.filter((event) => !event.resolved && event.pond === selectedPond);
+  const handleDiagReport = () => sendDiag('diag_report');
+
+  // ── Helpers ──
+  const formatUptime = (ms: number) => {
+    if (ms <= 0) return 'N/A';
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m ${s % 60}s`;
+  };
+
+  const getSignal = (rssi: number | null) => {
+    if (rssi === null) return { label: 'N/A', bars: 0 };
+    if (rssi > -50) return { label: 'Excellent', bars: 4 };
+    if (rssi > -60) return { label: 'Good', bars: 3 };
+    if (rssi > -70) return { label: 'Fair', bars: 2 };
+    return { label: 'Weak', bars: 1 };
+  };
+
+  const signal = getSignal(device.rssi);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-gradient-to-br from-red-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
-            <span className="text-3xl">🛡️</span>
+    <div className="space-y-5 max-w-7xl mx-auto">
+
+      {/* ── HEADER ── */}
+      <div className="bg-gradient-to-r from-rose-600 via-pink-600 to-purple-600 rounded-2xl p-4 sm:p-6 text-white shadow-xl">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white/20 backdrop-blur rounded-xl flex items-center justify-center">
+              <span className="text-2xl sm:text-3xl">🔧</span>
+            </div>
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold">Device Diagnostics & Calibration</h2>
+              <p className="text-pink-100 text-xs sm:text-sm">Real-time motor testing &bull; Load cell calibration &bull; Pond A</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-2xl font-bold text-gray-800">Feeder Health & Safety</h2>
-            <p className="text-sm text-gray-500">Monitor feeder status and safety alerts</p>
+          <div className="flex items-center gap-3 self-end sm:self-auto">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${
+              wsStatus === 'connected' ? 'bg-green-400/30 text-green-100' : wsStatus === 'connecting' ? 'bg-yellow-400/30 text-yellow-100' : 'bg-red-400/30 text-red-100'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${wsStatus === 'connected' ? 'bg-green-400 animate-pulse' : wsStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'}`} />
+              {wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${
+              isOnline ? 'bg-green-400/30 text-green-100' : 'bg-red-400/30 text-red-100'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+              {isOnline ? 'Device Online' : 'Device Offline'}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Pond Selector */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <i className="fas fa-water text-cyan-500"></i>
-          Select Pond
+      {/* ── DEVICE STATUS OVERVIEW ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Connection */}
+        <div className={`rounded-2xl p-4 border shadow-sm ${isOnline ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase">Connection</span>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isOnline ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>
+              <i className="fas fa-wifi"></i>
+            </div>
+          </div>
+          <p className={`text-lg font-bold ${isOnline ? 'text-green-700' : 'text-red-700'}`}>
+            {isOnline ? 'Online' : 'Offline'}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">{device.ipAddress || 'N/A'}</p>
+        </div>
+
+        {/* Signal */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase">Signal</span>
+            <div className="w-8 h-8 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center">
+              <i className="fas fa-signal"></i>
+            </div>
+          </div>
+          <p className="text-lg font-bold text-gray-800">
+            {isOnline && device.rssi !== null ? `${device.rssi} dBm` : '--'}
+          </p>
+          <div className="flex items-center gap-1 mt-1">
+            {[1, 2, 3, 4].map(i => (
+              <div key={i} className={`w-1.5 rounded-full ${i <= signal.bars ? 'bg-violet-500' : 'bg-gray-200'}`} style={{ height: `${6 + i * 3}px` }} />
+            ))}
+            <span className="text-xs text-gray-500 ml-1">{signal.label}</span>
+          </div>
+        </div>
+
+        {/* Uptime */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase">Uptime</span>
+            <div className="w-8 h-8 rounded-lg bg-cyan-100 text-cyan-600 flex items-center justify-center">
+              <i className="fas fa-clock"></i>
+            </div>
+          </div>
+          <p className="text-lg font-bold text-gray-800">{isOnline ? formatUptime(device.uptimeMs) : '--'}</p>
+          <p className="text-xs text-gray-500 mt-1">Last msg: {lastMsg ? lastMsg.toLocaleTimeString() : 'N/A'}</p>
+        </div>
+
+        {/* Scale */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase">Scale</span>
+            <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
+              <i className="fas fa-weight-hanging"></i>
+            </div>
+          </div>
+          <p className="text-lg font-bold text-gray-800">
+            {isOnline ? `${device.currentWeight.toFixed(1)} g` : '--'}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">Hopper: {isOnline ? `${device.hopperPercentage.toFixed(1)}%` : '--'}</p>
+        </div>
+      </div>
+
+      {/* ── NEMA 17 STEPPER MOTOR DIAGNOSTICS ── */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+        <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-5">
+          <div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
+            <i className="fas fa-cog"></i>
+          </div>
+          NEMA 17 Stepper Motor
+          <span className={`ml-auto text-xs font-semibold px-3 py-1 rounded-full ${
+            stepperOn ? 'bg-blue-100 text-blue-700 animate-pulse' : 'bg-gray-100 text-gray-500'
+          }`}>
+            {stepperOn ? 'RUNNING' : 'STOPPED'}
+          </span>
         </h3>
-        <div className="flex gap-4">
-          <button
-            onClick={() => setSelectedPond('Pond A')}
-            className={`flex-1 py-4 px-6 rounded-xl font-semibold text-lg transition-all ${
-              selectedPond === 'Pond A'
-                ? 'bg-cyan-500 text-white shadow-lg scale-105'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            <i className="fas fa-water mr-2"></i>
-            Pond A
-          </button>
-          <button
-            onClick={() => setSelectedPond('Pond B')}
-            className={`flex-1 py-4 px-6 rounded-xl font-semibold text-lg transition-all ${
-              selectedPond === 'Pond B'
-                ? 'bg-cyan-500 text-white shadow-lg scale-105'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            <i className="fas fa-water mr-2"></i>
-            Pond B
-          </button>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Speed Control */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <label className="text-sm font-medium text-gray-700 block mb-2">
+              Step Delay (μs) — Lower = Faster
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={100}
+                max={2000}
+                step={50}
+                value={stepperSpeed}
+                onChange={(e) => setStepperSpeed(Number(e.target.value))}
+                className="flex-1 h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              />
+              <span className="text-sm font-mono font-bold text-blue-700 w-16 text-right">{stepperSpeed}μs</span>
+            </div>
+            <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
+              <span>Fast (100)</span>
+              <span>Slow (2000)</span>
+            </div>
+          </div>
+
+          {/* Motor Actions */}
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { sendDiag('diag_stepper_on', { stepperSpeed }); setStepperOn(true); }}
+                disabled={stepperOn}
+                className={`py-3 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
+                  !stepperOn
+                    ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white hover:shadow-lg active:scale-95'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                <i className="fas fa-play"></i> Start
+              </button>
+              <button
+                onClick={() => { sendDiag('diag_stepper_off'); setStepperOn(false); }}
+                className="py-3 rounded-xl font-semibold text-sm bg-gradient-to-br from-gray-500 to-gray-600 text-white hover:shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <i className="fas fa-stop"></i> Stop
+              </button>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+              <i className="fas fa-info-circle mr-1"></i>
+              Controls the NEMA 17 stepper motor (feed dispenser plate). Adjust delay to change rotation speed.
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Active Alerts */}
-      {activeAlerts.length > 0 && (
-        <div className="space-y-3">
-          {activeAlerts.map((alert) => (
-            <div
-              key={alert.id}
-              className={`rounded-lg p-4 border-l-4 ${
-                alert.severity === 'Critical'
-                  ? 'bg-red-50 border-red-500'
-                  : 'bg-yellow-50 border-yellow-500'
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <i
-                  className={`fas fa-exclamation-triangle text-2xl mt-1 ${
-                    alert.severity === 'Critical' ? 'text-red-600' : 'text-yellow-600'
-                  }`}
-                ></i>
-                <div className="flex-1">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className={`font-semibold mb-1 ${
-                        alert.severity === 'Critical' ? 'text-red-800' : 'text-yellow-800'
-                      }`}>
-                        {alert.eventType}
-                      </h3>
-                      <p className={`text-sm mb-2 ${
-                        alert.severity === 'Critical' ? 'text-red-700' : 'text-yellow-700'
-                      }`}>
-                        {alert.description}
-                      </p>
-                      <p className={`text-xs ${
-                        alert.severity === 'Critical' ? 'text-red-600' : 'text-yellow-600'
-                      }`}>
-                        <i className="fas fa-clock mr-1"></i>
-                        {alert.dateTime}
-                      </p>
-                    </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getSeverityColor(alert.severity)}`}>
-                      {alert.severity}
-                    </span>
-                  </div>
-                </div>
+      {/* ── ESC / BRUSHLESS MOTOR DIAGNOSTICS ── */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+        <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-5">
+          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
+            <i className="fas fa-fan"></i>
+          </div>
+          ESC Brushless Motor (Feed Spreader)
+          <span className={`ml-auto text-xs font-semibold px-3 py-1 rounded-full ${
+            escOn ? 'bg-emerald-100 text-emerald-700 animate-pulse' : 'bg-gray-100 text-gray-500'
+          }`}>
+            {escOn ? `RUNNING ${device.currentESCPercent || escPercent}%` : 'STOPPED'}
+          </span>
+        </h3>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* PWM Control */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <label className="text-sm font-medium text-gray-700 block mb-2">
+              ESC Power (PWM %)
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={escPercent}
+                onChange={(e) => setEscPercent(Number(e.target.value))}
+                className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+              />
+              <span className="text-sm font-mono font-bold text-emerald-700 w-12 text-right">{escPercent}%</span>
+            </div>
+            <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
+              <span>Off (0%)</span>
+              <span>Full (100%)</span>
+            </div>
+            {/* Live ESC value from device */}
+            {isOnline && device.currentESCPercent > 0 && (
+              <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-xs text-emerald-700">
+                <i className="fas fa-tachometer-alt mr-1"></i>
+                Device reporting: {device.currentESCPercent}% PWM
               </div>
+            )}
+          </div>
+
+          {/* ESC Actions */}
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { sendDiag('diag_esc_on', { escPercent }); setEscOn(true); }}
+                disabled={escOn}
+                className={`py-3 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
+                  !escOn
+                    ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white hover:shadow-lg active:scale-95'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                <i className="fas fa-play"></i> Start
+              </button>
+              <button
+                onClick={() => { sendDiag('diag_esc_off'); setEscOn(false); }}
+                className="py-3 rounded-xl font-semibold text-sm bg-gradient-to-br from-gray-500 to-gray-600 text-white hover:shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <i className="fas fa-stop"></i> Stop
+              </button>
+            </div>
+            {/* Update PWM live */}
+            {escOn && (
+              <button
+                onClick={() => sendDiag('diag_esc_on', { escPercent })}
+                className="py-2 rounded-xl font-semibold text-xs bg-gradient-to-br from-teal-500 to-cyan-600 text-white hover:shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <i className="fas fa-sync"></i> Update PWM to {escPercent}%
+              </button>
+            )}
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-700">
+              <i className="fas fa-info-circle mr-1"></i>
+              Controls the ESC brushless motor (feed spreader). Adjust PWM to change speed. Use low values (10-30%) for testing.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── LOAD CELL CALIBRATION ── */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+        <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-5">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
+            <i className="fas fa-balance-scale"></i>
+          </div>
+          Load Cell Calibration
+        </h3>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Tare (Zero) */}
+          <div className="bg-amber-50 rounded-xl p-5 border border-amber-200">
+            <h4 className="font-semibold text-amber-800 mb-2 flex items-center gap-2">
+              <i className="fas fa-bullseye"></i>
+              Set Zero Point (Tare)
+            </h4>
+            <p className="text-xs text-amber-700 mb-3">
+              Remove all weight from the scale, then press Tare to set the current reading as 0g.
+            </p>
+            <div className="mb-3 bg-white rounded-lg p-3 border border-amber-200 text-center">
+              <span className="text-xs text-gray-500 block">Current Reading</span>
+              <span className="text-2xl font-bold text-gray-800">
+                {isOnline ? `${device.currentWeight.toFixed(1)} g` : '-- g'}
+              </span>
+            </div>
+            <button
+              onClick={handleTare}
+              className="w-full py-3 rounded-xl font-semibold text-sm bg-gradient-to-br from-amber-500 to-orange-600 text-white hover:shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <i className="fas fa-crosshairs"></i> Tare (Set Zero)
+            </button>
+          </div>
+
+          {/* Calibration Factor */}
+          <div className="bg-purple-50 rounded-xl p-5 border border-purple-200">
+            <h4 className="font-semibold text-purple-800 mb-2 flex items-center gap-2">
+              <i className="fas fa-sliders-h"></i>
+              Calibration Factor
+            </h4>
+            <p className="text-xs text-purple-700 mb-3">
+              Adjust the calibration factor to match a known weight. Place a known weight on the scale, then adjust until the reading is accurate.
+            </p>
+            <div className="mb-3">
+              <label className="text-xs font-medium text-gray-600 block mb-1">Factor Value</label>
+              <input
+                type="number"
+                value={calFactor}
+                onChange={(e) => setCalFactor(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-400 focus:border-purple-400"
+                step={10}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {[-2520, -1260, -420].map(val => (
+                <button
+                  key={val}
+                  onClick={() => setCalFactor(val)}
+                  className={`py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    calFactor === val
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                  }`}
+                >
+                  {val}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleCalibrate}
+              className="w-full py-3 rounded-xl font-semibold text-sm bg-gradient-to-br from-purple-500 to-indigo-600 text-white hover:shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <i className="fas fa-paper-plane"></i> Apply Calibration
+            </button>
+          </div>
+
+          {/* Calibration Guide */}
+          <div className="bg-blue-50 rounded-xl p-5 border border-blue-200">
+            <h4 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
+              <i className="fas fa-book-open"></i>
+              Calibration Guide
+            </h4>
+            <ol className="space-y-2 text-xs text-blue-700">
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[10px] font-bold shrink-0">1</span>
+                Remove all weight from the load cell platform
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[10px] font-bold shrink-0">2</span>
+                Press <strong>Tare (Set Zero)</strong> to zero the scale
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[10px] font-bold shrink-0">3</span>
+                Place a known weight (e.g. 100g, 500g, 1kg)
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[10px] font-bold shrink-0">4</span>
+                Adjust the calibration factor until the reading matches
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[10px] font-bold shrink-0">5</span>
+                Press <strong>Apply Calibration</strong> to save
+              </li>
+            </ol>
+            {calStatus && (
+              <div className="mt-3 bg-white rounded-lg p-2 border border-blue-200 text-xs text-blue-700">
+                <i className="fas fa-info-circle mr-1"></i>
+                {calStatus}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── EMERGENCY STOP + DIAGNOSTIC REPORT ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <button
+          onClick={() => { sendDiag('diag_all_stop'); setStepperOn(false); setEscOn(false); }}
+          className="py-5 rounded-2xl font-bold text-lg bg-gradient-to-br from-red-500 to-rose-700 text-white hover:shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 ring-2 ring-red-300"
+        >
+          <i className="fas fa-exclamation-triangle text-2xl"></i>
+          EMERGENCY STOP ALL MOTORS
+        </button>
+        <button
+          onClick={handleDiagReport}
+          className="py-5 rounded-2xl font-bold text-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white hover:shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3"
+        >
+          <i className="fas fa-file-medical-alt text-2xl"></i>
+          Get Diagnostic Report
+        </button>
+      </div>
+
+      {/* ── SYSTEM HEALTH OVERVIEW ── */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+        <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
+          <i className="fas fa-heartbeat text-red-500"></i>
+          System Health Overview
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            { label: 'Hopper', value: isOnline ? `${device.hopperPercentage.toFixed(0)}%` : '--', ok: isOnline && device.hopperPercentage > 15, icon: 'fa-box' },
+            { label: 'Motor', value: isOnline ? device.motorStatus : '--', ok: isOnline, icon: 'fa-cog' },
+            { label: 'WiFi', value: isOnline ? 'Connected' : 'Offline', ok: isOnline, icon: 'fa-wifi' },
+            { label: 'Feeds', value: isOnline ? String(device.feedCount) : '--', ok: true, icon: 'fa-utensils' },
+            { label: 'Total Fed', value: isOnline ? `${(device.totalGramsFed / 1000).toFixed(1)}kg` : '--', ok: true, icon: 'fa-weight' },
+            { label: 'Scale', value: isOnline ? `${device.currentWeight.toFixed(0)}g` : '--', ok: isOnline, icon: 'fa-balance-scale' },
+          ].map((item, i) => (
+            <div key={i} className={`rounded-xl p-3 border text-center ${
+              !isOnline ? 'bg-gray-50 border-gray-200' : item.ok ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+            }`}>
+              <i className={`fas ${item.icon} text-lg mb-1 ${!isOnline ? 'text-gray-400' : item.ok ? 'text-green-500' : 'text-red-500'}`}></i>
+              <p className={`text-lg font-bold ${!isOnline ? 'text-gray-400' : item.ok ? 'text-green-700' : 'text-red-700'}`}>{item.value}</p>
+              <p className="text-[10px] text-gray-500 uppercase font-semibold">{item.label}</p>
             </div>
           ))}
         </div>
-      )}
-
-      {/* Status Indicators Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {currentIndicators.length === 0 ? (
-          <div className="col-span-full text-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto mb-4"></div>
-            <p className="text-gray-500">Loading device status...</p>
-          </div>
-        ) : (
-          currentIndicators.map((indicator) => (
-            <div
-              key={indicator.id}
-              className={`bg-gradient-to-br rounded-xl p-6 border ${getStatusBgColor(indicator.status)}`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-gray-800">{indicator.name}</h3>
-                <div className={`w-10 h-10 ${getStatusIconColor(indicator.color)} rounded-full flex items-center justify-center`}>
-                  <i className={`fas ${indicator.icon} text-white`}></i>
-                </div>
-              </div>
-              <p className="text-2xl font-bold text-gray-900 mb-2">{indicator.value}</p>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    indicator.status === 'OK'
-                      ? 'bg-green-500'
-                      : indicator.status === 'Warning'
-                      ? 'bg-yellow-500'
-                      : 'bg-red-500'
-                  } ${indicator.status !== 'OK' ? 'animate-pulse' : ''}`}
-                ></span>
-                <span
-                  className={`text-sm font-semibold ${
-                    indicator.status === 'OK'
-                      ? 'text-green-700'
-                      : indicator.status === 'Warning'
-                      ? 'text-yellow-700'
-                      : 'text-red-700'
-                  }`}
-                >
-                  {indicator.status}
-                </span>
-              </div>
-            </div>
-          ))
-        )}
       </div>
 
-      {/* Overall System Health */}
-      {currentIndicators.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <i className="fas fa-heartbeat text-red-500"></i>
-            Overall System Health
+      {/* ── DIAGNOSTIC LOG ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2">
+            <i className="fas fa-terminal text-gray-600"></i>
+            Diagnostic Log
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-green-700 font-medium mb-1">OK Status</p>
-                  <p className="text-3xl font-bold text-green-800">
-                    {currentIndicators.filter((i) => i.status === 'OK').length}
-                  </p>
-                </div>
-                <i className="fas fa-check-circle text-green-500 text-3xl"></i>
-              </div>
-            </div>
-
-            <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-yellow-700 font-medium mb-1">Warnings</p>
-                  <p className="text-3xl font-bold text-yellow-800">
-                    {currentIndicators.filter((i) => i.status === 'Warning').length}
-                  </p>
-                </div>
-                <i className="fas fa-exclamation-triangle text-yellow-500 text-3xl"></i>
-              </div>
-            </div>
-
-            <div className="bg-red-50 rounded-lg p-4 border border-red-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-red-700 font-medium mb-1">Critical</p>
-                  <p className="text-3xl font-bold text-red-800">
-                    {currentIndicators.filter((i) => i.status === 'Critical').length}
-                  </p>
-                </div>
-                <i className="fas fa-times-circle text-red-500 text-3xl"></i>
-              </div>
-            </div>
-          </div>
+          {diagLog.length > 0 && (
+            <button
+              onClick={() => setDiagLog([])}
+              className="text-xs text-gray-500 hover:text-red-500 transition-colors"
+            >
+              <i className="fas fa-trash mr-1"></i> Clear
+            </button>
+          )}
         </div>
-      )}
-
-      {/* Safety Events History */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-6 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-            <i className="fas fa-history text-gray-600"></i>
-            Safety Events History
-          </h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Date & Time</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Pond</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Event Type</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Severity</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Description</th>
-                <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {safetyEvents.map((event) => (
-                <tr key={event.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4">
-                    <span className="text-gray-600 flex items-center gap-2">
-                      <i className="fas fa-clock text-blue-500"></i>
-                      {event.dateTime}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-medium text-gray-800">{event.pond}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-semibold text-gray-800">{event.eventType}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-sm font-semibold border ${getSeverityColor(event.severity)}`}>
-                      {event.severity}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-gray-600 text-sm">{event.description}</span>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {event.resolved ? (
-                      <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-semibold">
-                        <i className="fas fa-check-circle mr-1"></i>
-                        Resolved
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-sm font-semibold">
-                        <i className="fas fa-exclamation-circle mr-1"></i>
-                        Active
-                      </span>
-                    )}
-                  </td>
+        <div className="max-h-64 overflow-y-auto">
+          {diagLog.length === 0 ? (
+            <div className="text-center py-8 text-gray-400">
+              <i className="fas fa-clipboard-list text-3xl mb-2"></i>
+              <p className="text-sm">No diagnostic events yet. Run a test to see results here.</p>
+            </div>
+          ) : (
+            <table className="w-full">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Time</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Action</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Result</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Detail</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {diagLog.map((entry, i) => (
+                  <tr key={i} className="hover:bg-gray-50 text-sm">
+                    <td className="px-4 py-2 font-mono text-xs text-gray-500">{entry.time}</td>
+                    <td className="px-4 py-2 font-semibold text-gray-800">{entry.action}</td>
+                    <td className="px-4 py-2">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                        entry.result === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      }`}>
+                        {entry.result}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-gray-600">{entry.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* ── DEVICE INFO FOOTER ── */}
+      <div className="bg-gradient-to-r from-gray-50 to-slate-50 rounded-2xl p-4 border border-gray-200">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
+          <div>
+            <span className="text-gray-500 block mb-1">Device ID</span>
+            <span className="font-mono font-semibold text-gray-700">{DEVICE_ID}</span>
+          </div>
+          <div>
+            <span className="text-gray-500 block mb-1">IP Address</span>
+            <span className="font-mono font-semibold text-gray-700">{device.ipAddress || 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500 block mb-1">Uptime</span>
+            <span className="font-semibold text-gray-700">{isOnline ? formatUptime(device.uptimeMs) : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500 block mb-1">Last Message</span>
+            <span className="font-semibold text-gray-700">{lastMsg ? lastMsg.toLocaleTimeString() : 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500 block mb-1">WebSocket</span>
+            <span className={`font-semibold ${wsStatus === 'connected' ? 'text-green-600' : 'text-red-600'}`}>
+              <i className="fas fa-circle text-[8px] mr-1"></i>
+              {wsStatus === 'connected' ? 'Live' : 'Offline'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

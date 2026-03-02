@@ -426,6 +426,49 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         publishStatus("calibrated");
       }
     }
+    // ─── Diagnostic commands for individual motor control ───
+    else if (action == "diag_stepper_on") {
+      int speed = data.containsKey("stepperSpeed") ? data["stepperSpeed"].as<int>() : 500;
+      stepperSpeed = speed;
+      setStepperEnabled(true);
+      digitalWrite(dirPin, HIGH);
+      stepperActive = true;
+      isHoming = false;
+      Serial.println("[DIAG] Stepper ON, speed=" + String(speed));
+      publishStatus("diag_stepper_on");
+    }
+    else if (action == "diag_stepper_off") {
+      stepperActive = false;
+      setStepperEnabled(false);
+      digitalWrite(resetSleepPin, LOW);
+      Serial.println("[DIAG] Stepper OFF");
+      publishStatus("diag_stepper_off");
+    }
+    else if (action == "diag_esc_on") {
+      int percent = data.containsKey("escPercent") ? data["escPercent"].as<int>() : 25;
+      setESCPercent(percent);
+      Serial.println("[DIAG] ESC ON, percent=" + String(percent));
+      publishStatus("diag_esc_on");
+    }
+    else if (action == "diag_esc_off") {
+      setESCPercent(0);
+      Serial.println("[DIAG] ESC OFF");
+      publishStatus("diag_esc_off");
+    }
+    else if (action == "diag_all_stop") {
+      feedingActive = false;
+      stepperActive = false;
+      isHoming = false;
+      setESCPercent(0);
+      setStepperEnabled(false);
+      digitalWrite(resetSleepPin, LOW);
+      Serial.println("[DIAG] ALL MOTORS STOPPED");
+      publishStatus("diag_all_stop");
+    }
+    else if (action == "diag_report") {
+      // Send a detailed diagnostic report
+      publishStatus("diag_report");
+    }
   }
   
   // Handle schedule topic
