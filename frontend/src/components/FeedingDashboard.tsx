@@ -23,7 +23,7 @@ const FeedingDashboard: React.FC = () => {
   const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [deviceId] = useState('feed_device_001');
-  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
+  const [_deviceStatus, setDeviceStatus] = useState<DeviceStatus>({});
 
   // Fetch device status every 5 seconds
   useEffect(() => {
@@ -75,10 +75,10 @@ const FeedingDashboard: React.FC = () => {
             }
           }));
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.error('Failed to fetch device status:', error);
-        if (error.response) {
-          console.error('Error response:', error.response.status, error.response.data);
+        if ((error as any)?.response) {
+          console.error('Error response:', (error as any).response.status, (error as any).response.data);
         }
         // On error, show device as offline
         setFeederData(prev => ({

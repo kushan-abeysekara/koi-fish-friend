@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { taskApi, type Task, type ApiResponse } from '../services/api';
+import { taskApi, type Task } from '../services/api';
 
 interface LocalTask extends Omit<Task, 'dueDate' | 'createdDate' | 'completedDate' | 'snoozeUntil'> {
   dueDate: Date;
@@ -687,7 +687,7 @@ const TaskCalendar: React.FC = () => {
                 return <div key={`empty-${idx}`} className="aspect-square"></div>;
               }
               const dayTasks = getTasksForDate(day);
-              const hasHighPriority = dayTasks.some(t => t.priority === 'high');
+              const _hasHighPriority = dayTasks.some(t => t.priority === 'high');
               return (
                 <div
                   key={day.toISOString()}

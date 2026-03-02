@@ -22,20 +22,21 @@ interface WebSocketData {
   turbidity: number;
   co2Level: number;
   ammonia: number;
+  dissolvedOxygen?: number;
   waterQualityStatus: string;
   timestamp: number;
   rssi: number;
 }
 
 const WaterQualityDashboard: React.FC = () => {
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
+  const [, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
-  const [deviceIP, setDeviceIP] = useState('192.168.8.102');
+  const [, setDeviceIP] = useState('192.168.8.102');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
   const [latestData, setLatestData] = useState<SensorData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const WEBSOCKET_URL = 'ws://192.168.8.102:81';
@@ -49,7 +50,7 @@ const WaterQualityDashboard: React.FC = () => {
         pondId: data.pondId,
         phValue: data.phValue,
         turbidity: data.turbidity,
-        dissolvedOxygen: data.dissolvedOxygen,
+        dissolvedOxygen: data.dissolvedOxygen ?? 0,
         waterQualityStatus: data.waterQualityStatus
       });
       
@@ -68,7 +69,7 @@ const WaterQualityDashboard: React.FC = () => {
     let isSubscribed = true;
     let connectionTimeout: NodeJS.Timeout | null = null;
     let connectionAttempts = 0;
-    const MAX_ATTEMPTS = 100; // Keep tryingee
+    const _MAX_ATTEMPTS = 100; // Keep tryingee
     
     console.log('🚀 [WATER QUALITY] Starting WebSocket connection manager...');
     console.log('   Target:', WEBSOCKET_URL);

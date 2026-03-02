@@ -17,7 +17,7 @@ const FeedingSchedule: React.FC = () => {
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [deviceId] = useState('feed_device_001');
-  const [loading, setLoading] = useState(false);
+  const [_loading, _setLoading] = useState(false);
 
   // Load schedules from localStorage on mount
   useEffect(() => {
