@@ -422,6 +422,14 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
           onNavigate={onClose}
         />
 
+        <NavItem
+          icon={<i className="fas fa-server"></i>}
+          label="System Status"
+          path="/dashboard/system-status"
+          active={location.pathname === '/dashboard/system-status'}
+          onNavigate={onClose}
+        />
+
         <div className="pt-4 border-t border-slate-700 mt-4">
           <NavItem
             icon={<i className="fas fa-sign-out-alt"></i>}

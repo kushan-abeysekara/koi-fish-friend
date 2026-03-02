@@ -24,6 +24,7 @@ import FeedUsageLogs from '../components/FeedUsageLogs';
 import FeederHealthSafety from '../components/FeederHealthSafety';
 import BudgetForecasting from '../components/BudgetForecasting';
 import PowerManagement from '../components/PowerManagement';
+import SystemStatus from '../components/SystemStatus';
 
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
@@ -125,6 +126,7 @@ const Dashboard: React.FC = () => {
             />
             <Route path="/profile" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Profile - Coming Soon</h2></div>} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/system-status" element={<SystemStatus />} />
           </Routes>
         </div>
       </div>
