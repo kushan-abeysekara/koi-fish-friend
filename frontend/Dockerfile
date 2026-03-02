@@ -33,5 +33,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Expose port 80
 EXPOSE 80
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Start nginx with IP/port startup log
+CMD sh -c 'IP=$(hostname -i 2>/dev/null || echo "0.0.0.0"); \
+    echo "=========================================="; \
+    echo " Frontend running at http://${IP}:80"; \
+    echo "=========================================="; \
+    nginx -g "daemon off;"'
