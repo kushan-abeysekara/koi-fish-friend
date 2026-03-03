@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { sensorDataApi } from '../services/api';
 import type { SensorData } from '../services/api';
 import {
@@ -31,58 +31,95 @@ export default function EnergyMonitor() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'realtime' | 'analysis'>('realtime');
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchData = async () => {
+  // ── WebSocket: real-time live readings from MQTT data messages ───────────
+  useEffect(() => {
+    let isMounted = true;
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/power';
+
+    const connect = () => {
+      if (!isMounted) return;
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const d = JSON.parse(event.data);
+          // Only handle data messages (have voltage field), not status messages
+          if (!d.deviceId?.startsWith('BM_') || d.voltage === undefined) return;
+
+          const now = new Date();
+          setLastUpdateTime(now);
+          // Build a pseudo-SensorData from the MQTT payload
+          setLatestData(prev => ({
+            id: prev?.id ?? 0,
+            device: prev?.device ?? ({ deviceId: d.deviceId } as SensorData['device']),
+            pond: prev?.pond ?? null,
+            voltage: d.voltage ?? 0,
+            current: d.current ?? 0,
+            power: d.power ?? 0,
+            energyWh: d.energyWh ?? 0,
+            status: d.status ?? 'normal',
+            timestamp: now.toISOString(),
+          }));
+
+          // Offline watchdog: no message in 15 s → clear live data
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = setTimeout(() => {
+            setLatestData(null);
+            setLastUpdateTime(null);
+          }, 15000);
+        } catch { /* ignore parse errors */ }
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        wsRef.current = null;
+        reconnectTimerRef.current = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => { /* close will fire next */ };
+    };
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    };
+  }, []);
+
+  // ── REST: historical data only (no stale-latest-check needed) ───────────
+  const fetchHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [latestRes, historicalRes] = await Promise.all([
-        sensorDataApi.getLatestEnergy(),
-        sensorDataApi.getEnergyHistory(selectedHours)
-      ]);
-      if (latestRes.success && latestRes.data) {
-        // Check if data is fresh (< 15 seconds old) - only show real live data
-        const dataAge = Date.now() - new Date(latestRes.data.timestamp).getTime();
-        if (dataAge < 15000) {
-          // Data is fresh - device is online, show it
-          setLatestData(latestRes.data);
-          setLastUpdateTime(new Date(latestRes.data.timestamp));
-        } else {
-          // Data is stale - device is offline, clear it
-          console.log('Device offline - clearing stale data (age:', Math.round(dataAge / 1000), 'seconds)');
-          setLatestData(null);
-          setLastUpdateTime(null);
-        }
-      } else {
-        setLatestData(null);
-        setLastUpdateTime(null);
-      }
-      
-      // Only show historical data if device is currently online or data is recent
-      if (historicalRes.success && historicalRes.data && historicalRes.data.length > 0) {
-        // Filter out stale data from history (keep only data from when device was actually online)
-        const recentData = historicalRes.data.filter(d => {
-          const age = Date.now() - new Date(d.timestamp).getTime();
-          return age < (selectedHours * 3600 * 1000); // Only show data within selected range
-        });
-        setHistoricalData(recentData);
+      const historicalRes = await sensorDataApi.getEnergyHistory(selectedHours);
+      if (historicalRes.success && historicalRes.data) {
+        setHistoricalData(historicalRes.data);
       } else {
         setHistoricalData([]);
       }
     } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Failed to fetch data');
+      console.error('Error fetching history:', err);
+      setError('Failed to fetch historical data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedHours]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 30000); // refresh history every 30s
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedHours]);
+  }, [fetchHistory]);
 
   const calculateTotalCost = () => {
     if (!latestData) return 0;
@@ -100,13 +137,8 @@ export default function EnergyMonitor() {
   const formatTimestamp = (ts: string) => new Date(ts).toLocaleTimeString();
   const formatFullTimestamp = (ts: string) => new Date(ts).toLocaleString();
 
-  // Device is online only if its latest sensor record is < 15 s old.
-  // We compare against latestData.timestamp (the actual ESP32 publish time)
-  // NOT lastUpdateTime, which would be reset on every successful DB fetch
-  // even when the device is unplugged and returning the same stale row.
-  const isOnline =
-    latestData !== null &&
-    (Date.now() - new Date(latestData.timestamp).getTime()) < 15000;
+  // latestData is null when offline (cleared by the 15s WebSocket watchdog)
+  const isOnline = latestData !== null;
 
   const chartData = useMemo(() => {
     return [...historicalData].reverse().map(d => ({

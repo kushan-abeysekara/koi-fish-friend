@@ -26,15 +26,18 @@ export default function PowerManagement() {
   const [editingSchedule, setEditingSchedule] = useState<PowerSchedule | null>(null);
   const [commandInProgress, setCommandInProgress] = useState(false);
   const commandSentAt = useRef<number>(0);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [lastWsMessage, setLastWsMessage] = useState<Date | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirm, setConfirm] = useState<ConfirmDialog | null>(null);
 
-  // Check device online status from MQTT device status (published every 5s by ESP32)
-  // NOT from sensor data - device status is more reliable for control interface
-  const isOnline = device !== null && 
-    device.status === 'online' &&
-    device.lastSeen !== null &&
-    (Date.now() - new Date(device.lastSeen).getTime()) < 20000; // 20s grace period
+  // Online = received a live WebSocket message in the last 15 s AND device reported online
+  const isOnline = lastWsMessage !== null &&
+    device?.status === 'online' &&
+    (Date.now() - lastWsMessage.getTime()) < 15000;
 
   const [formData, setFormData] = useState({
     name: '',
@@ -56,41 +59,99 @@ export default function PowerManagement() {
     setConfirm({ message, onConfirm });
   };
 
-  // ── Data fetching ────────────────────────────────────────────
+  // ── WebSocket connection (same pattern as FeedingDashboard) ─
   useEffect(() => {
-    const fetchDevice = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const deviceRes = await sensorDeviceApi.getAll();
-        if (deviceRes.success && deviceRes.data) {
-          const bm = deviceRes.data.find(d => d.deviceType === 'BUDGET_MANAGEMENT');
-          setDevice(prev => {
-            if (!bm) return null;
-            const updated = bm as DeviceState;
-            // Hold optimistic state for 10s after a command — gives ESP32 time to
-            // respond via MQTT and the backend to persist the confirmed state.
-            const holdOptimistic = Date.now() - commandSentAt.current < 10000;
-            return {
-              ...updated,
-              relayState: holdOptimistic
-                ? (prev?.relayState ?? updated.relayState as DeviceState['relayState'])
-                : (updated.relayState as DeviceState['relayState'] ?? prev?.relayState),
-              controlMode: holdOptimistic
-                ? (prev?.controlMode ?? updated.controlMode as DeviceState['controlMode'])
-                : (updated.controlMode as DeviceState['controlMode'] ?? prev?.controlMode),
-            };
-          });
+    let isMounted = true;
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/power';
+
+    const connect = () => {
+      if (!isMounted) return;
+      setWsStatus('connecting');
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (!isMounted) return;
+        setWsStatus('connected');
+        console.log('[PWR-WS] Connected to', WS_URL);
+      };
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (!data.deviceId?.startsWith('BM_')) return;
+
+          const now = new Date();
+          setLastWsMessage(now);
+
+          // Status message — has relayState / controlMode / status
+          if (data.status !== undefined) {
+            setDevice(prev => {
+              const holdOptimistic = Date.now() - commandSentAt.current < 10000;
+              return {
+                ...(prev ?? {} as DeviceState),
+                deviceId: data.deviceId,
+                deviceType: 'BUDGET_MANAGEMENT' as DeviceState['deviceType'],
+                status: data.status,
+                ipAddress: data.ipAddress ?? prev?.ipAddress ?? null,
+                rssi: data.rssi ?? prev?.rssi ?? null,
+                energyWh: data.energyWh ?? prev?.energyWh ?? 0,
+                lastSeen: now.toISOString(),
+                pond: prev?.pond ?? null,
+                id: prev?.id ?? 0,
+                createdAt: prev?.createdAt ?? '',
+                relayState: holdOptimistic
+                  ? (prev?.relayState ?? data.relayState)
+                  : (data.relayState ?? prev?.relayState),
+                controlMode: holdOptimistic
+                  ? (prev?.controlMode ?? data.controlMode)
+                  : (data.controlMode ?? prev?.controlMode),
+                scheduleCount: data.scheduleCount ?? prev?.scheduleCount,
+              };
+            });
+          }
+
+          // Reset offline watchdog — 15 s without a message → device is offline
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = setTimeout(() => {
+            setDevice(prev => prev ? { ...prev, status: 'offline' } : null);
+            setLastWsMessage(null);
+          }, 15000);
+        } catch (err) {
+          console.error('[PWR-WS] Failed to parse message:', err);
         }
-      } catch {
-        setError('Failed to fetch device');
-      } finally {
-        setLoading(false);
-      }
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        setWsStatus('disconnected');
+        wsRef.current = null;
+        console.log('[PWR-WS] Disconnected, reconnecting in 3s...');
+        reconnectTimerRef.current = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => { if (isMounted) setWsStatus('disconnected'); };
     };
-    fetchDevice();
-    const iv = setInterval(fetchDevice, 5000);
-    return () => clearInterval(iv);
+
+    // Bootstrap: load initial device state from REST so we have deviceId for commands
+    setLoading(true);
+    sensorDeviceApi.getAll().then(res => {
+      if (res.success && res.data) {
+        const bm = res.data.find(d => d.deviceType === 'BUDGET_MANAGEMENT');
+        if (bm) setDevice(bm as DeviceState);
+      }
+    }).catch(() => setError('Failed to load device')).finally(() => setLoading(false));
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    };
   }, []);
 
   const fetchSchedules = useCallback(async () => {
@@ -349,24 +410,37 @@ export default function PowerManagement() {
 
             {/* Live device pill */}
             {device && (
-              <div className="flex items-center gap-3 bg-white/10 backdrop-blur rounded-2xl px-5 py-3 border border-white/10">
-                <div className="flex items-center gap-2">
-                  {isOnline
-                    ? <><span className="relative flex h-2.5 w-2.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span></span><span className="text-emerald-400 text-sm font-semibold">Online</span></>
-                    : <><WifiOff className="w-4 h-4 text-red-400" /><span className="text-red-400 text-sm font-semibold">Offline</span></>
-                  }
+              <div className="flex flex-col items-end gap-2">
+                {/* WebSocket connection badge */}
+                <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold
+                  ${ wsStatus === 'connected' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                   : wsStatus === 'connecting' ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                   : 'bg-red-500/20 text-red-300 border border-red-500/30'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    wsStatus === 'connected' ? 'bg-emerald-400 animate-pulse'
+                  : wsStatus === 'connecting' ? 'bg-yellow-400 animate-pulse'
+                  : 'bg-red-400'}`} />
+                  { wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Reconnecting...' }
                 </div>
-                <div className="w-px h-5 bg-white/20"></div>
-                <span className="font-mono text-sm text-slate-200">{device.deviceId}</span>
-                {device.ipAddress && (
-                  <>
-                    <div className="w-px h-5 bg-white/20"></div>
-                    <div className="flex items-center gap-1.5">
-                      <Wifi className="w-3.5 h-3.5 text-slate-400" />
-                      <span className="font-mono text-xs text-slate-300">{device.ipAddress}</span>
-                    </div>
-                  </>
-                )}
+                <div className="flex items-center gap-3 bg-white/10 backdrop-blur rounded-2xl px-5 py-3 border border-white/10">
+                  <div className="flex items-center gap-2">
+                    {isOnline
+                      ? <><span className="relative flex h-2.5 w-2.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span></span><span className="text-emerald-400 text-sm font-semibold">Online</span></>
+                      : <><WifiOff className="w-4 h-4 text-red-400" /><span className="text-red-400 text-sm font-semibold">Offline</span></>
+                    }
+                  </div>
+                  <div className="w-px h-5 bg-white/20"></div>
+                  <span className="font-mono text-sm text-slate-200">{device.deviceId}</span>
+                  {device.ipAddress && (
+                    <>
+                      <div className="w-px h-5 bg-white/20"></div>
+                      <div className="flex items-center gap-1.5">
+                        <Wifi className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="font-mono text-xs text-slate-300">{device.ipAddress}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>

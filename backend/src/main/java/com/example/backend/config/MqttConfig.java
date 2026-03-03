@@ -20,10 +20,10 @@ public class MqttConfig {
     // Connect to the same EMQX broker that ESP32 devices use
     private static final String BROKER_URL = "tcp://187.77.189.5:1883"; // Self-hosted EMQX on VPS
     private static final String CLIENT_ID = "spring-server";
-    private static final String[] TOPICS = { 
-        "koi/sensors/+/data", 
-        "koi/sensors/+/status",
-        "koi/devices/+/feeding/status"  // Subscribe to feeding device status
+    private static final String[] TOPICS = {
+            "koi/sensors/+/data",
+            "koi/sensors/+/status",
+            "koi/devices/+/feeding/status" // Subscribe to feeding device status
     };
 
     @Bean

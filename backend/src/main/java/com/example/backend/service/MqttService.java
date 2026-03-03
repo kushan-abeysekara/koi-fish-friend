@@ -41,6 +41,9 @@ public class MqttService {
     @Autowired
     private FeedingWebSocketHandler feedingWebSocketHandler;
 
+    @Autowired
+    private com.example.backend.websocket.PowerWebSocketHandler powerWebSocketHandler;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = true; // Assume connected (Spring Integration handles connection)
 
@@ -72,9 +75,16 @@ public class MqttService {
                 // Broadcast raw MQTT payload to WebSocket clients for real-time dashboard
                 if (deviceId.contains("feed_device")) {
                     feedingWebSocketHandler.broadcast(payload);
+                } else if (deviceId.startsWith("BM_")) {
+                    // Broadcast power management status to /ws/power
+                    powerWebSocketHandler.broadcast(payload);
                 }
             } else if (topic.contains("/data")) {
                 handleSensorData(deviceId, jsonNode);
+                // Broadcast energy sensor data to /ws/power for EnergyMonitor
+                if (deviceId.startsWith("BM_")) {
+                    powerWebSocketHandler.broadcast(payload);
+                }
             }
         } catch (Exception e) {
             System.err.println("Error processing MQTT message: " + e.getMessage());

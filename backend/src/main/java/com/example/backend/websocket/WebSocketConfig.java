@@ -18,9 +18,14 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Autowired
     private FeedingWebSocketHandler feedingWebSocketHandler;
 
+    @Autowired
+    private PowerWebSocketHandler powerWebSocketHandler;
+
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(feedingWebSocketHandler, "/ws/feeding")
+                .setAllowedOrigins("*");
+        registry.addHandler(powerWebSocketHandler, "/ws/power")
                 .setAllowedOrigins("*");
     }
 }
