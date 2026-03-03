@@ -32,17 +32,31 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Get username from sessionStorage
-    const storedUsername = sessionStorage.getItem('username');
+    // Get username from localStorage (persists across tabs/windows)
+    const storedUsername = localStorage.getItem('username');
     if (!storedUsername) {
       navigate('/login');
     } else {
       setCurrentUsername(storedUsername);
     }
+
+    // Listen for auth changes from other tabs (login/logout)
+    const onStorageChange = (e: StorageEvent) => {
+      if (e.key === 'username') {
+        if (!e.newValue) {
+          navigate('/login');
+        } else {
+          setCurrentUsername(e.newValue);
+        }
+      }
+    };
+    window.addEventListener('storage', onStorageChange);
+    return () => window.removeEventListener('storage', onStorageChange);
   }, [navigate]);
 
   const handleLogout = () => {
-    sessionStorage.removeItem('username');
+    localStorage.removeItem('username');
+    localStorage.removeItem('loginTime');
     navigate('/login');
   };
 

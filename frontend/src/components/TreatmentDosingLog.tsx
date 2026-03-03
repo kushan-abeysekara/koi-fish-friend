@@ -24,9 +24,9 @@ interface DosingLog {
 }
 
 const TreatmentDosingLog: React.FC = () => {
-  // Get current logged-in user from sessionStorage
+  // Get current logged-in user from localStorage
   const getCurrentUser = () => {
-    return sessionStorage.getItem('username') || 'Admin';
+    return localStorage.getItem('username') || 'Admin';
   };
 
   const [logs, setLogs] = useState<DosingLog[]>([]);
