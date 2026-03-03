@@ -39,7 +39,7 @@ export default function EnergyMonitor() {
   useEffect(() => {
     let isMounted = true;
     const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
-    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/power';
+    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding'; // shared WS channel — filter by BM_ prefix
 
     const connect = () => {
       if (!isMounted) return;

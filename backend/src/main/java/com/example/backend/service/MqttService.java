@@ -72,18 +72,18 @@ public class MqttService {
 
             if (topic.contains("/status")) {
                 handleStatusUpdate(deviceId, jsonNode);
-                // Broadcast raw MQTT payload to WebSocket clients for real-time dashboard
+                // Broadcast to the shared WebSocket channel — frontend filters by deviceId
+                // prefix
                 if (deviceId.contains("feed_device")) {
                     feedingWebSocketHandler.broadcast(payload);
                 } else if (deviceId.startsWith("BM_")) {
-                    // Broadcast power management status to /ws/power
-                    powerWebSocketHandler.broadcast(payload);
+                    feedingWebSocketHandler.broadcast(payload);
                 }
             } else if (topic.contains("/data")) {
                 handleSensorData(deviceId, jsonNode);
-                // Broadcast energy sensor data to /ws/power for EnergyMonitor
+                // Energy/sensor data from BM_ devices broadcasted for EnergyMonitor
                 if (deviceId.startsWith("BM_")) {
-                    powerWebSocketHandler.broadcast(payload);
+                    feedingWebSocketHandler.broadcast(payload);
                 }
             }
         } catch (Exception e) {
@@ -133,7 +133,7 @@ public class MqttService {
             boolean wasFeedingActive = Boolean.TRUE.equals(device.getFeedingActive());
             boolean isNowActive = json.get("feedingActive").asBoolean();
             device.setFeedingActive(isNowActive);
-            
+
             // Detect feeding completion (was active, now stopped)
             if (wasFeedingActive && !isNowActive) {
                 device.setLastFeedingTime(LocalDateTime.now());
