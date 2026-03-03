@@ -19,7 +19,8 @@ public class MqttConfig {
 
     // Connect to the same EMQX broker that ESP32 devices use
     private static final String BROKER_URL = "tcp://187.77.189.5:1883"; // Self-hosted EMQX on VPS
-    private static final String CLIENT_ID = "spring-server";
+    // Unique client IDs with timestamp suffix to avoid "client already connected" conflicts
+    private static final String CLIENT_ID = "spring-server-" + System.currentTimeMillis();
     private static final String[] TOPICS = {
             "koi/sensors/+/data",
             "koi/sensors/+/status",
@@ -32,10 +33,10 @@ public class MqttConfig {
         MqttConnectOptions options = new MqttConnectOptions();
         options.setServerURIs(new String[] { BROKER_URL });
         options.setAutomaticReconnect(true);
-        options.setCleanSession(false); // Preserve subscriptions across reconnects
+        options.setCleanSession(true);  // Clean session to avoid stale subscriptions
         options.setConnectionTimeout(30);
-        options.setKeepAliveInterval(60); // Longer keep-alive to reduce disconnects
-        options.setMaxReconnectDelay(10000); // Max 10s between reconnect attempts
+        options.setKeepAliveInterval(30);  // 30s keep-alive for stable connection
+        options.setMaxReconnectDelay(5000); // Max 5s between reconnect attempts
         // EMQX default credentials
         // options.setUserName("admin");
         // options.setPassword("public".toCharArray());

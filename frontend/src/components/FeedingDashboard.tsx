@@ -114,28 +114,32 @@ const FeedingDashboard: React.FC = () => {
   const handleWsMessage = useCallback((rawPayload: string) => {
     try {
       const d = JSON.parse(rawPayload);
+
+      // Filter: only process messages from OUR device
+      if (d.deviceId && d.deviceId !== DEVICE_ID) return;
+
       const now = new Date();
       const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
       const newDevice: DeviceData = {
         status: d.status || 'online',
         feedingActive: d.feedingActive || false,
-        hopperLevel: d.hopperLevel || 0,
-        hopperCapacity: d.hopperCapacity || 20000,
-        hopperPercentage: d.hopperPercentage || 0,
-        currentWeight: d.weight || 0,
-        targetWeight: d.targetWeight || 0,
-        feedCount: d.feedCount || 0,
-        totalGramsFed: d.totalGrams || 0,
+        hopperLevel: d.hopperLevel ?? 0,
+        hopperCapacity: d.hopperCapacity ?? 20000,
+        hopperPercentage: d.hopperPercentage ?? 0,
+        currentWeight: d.weight ?? 0,
+        targetWeight: d.targetWeight ?? 0,
+        feedCount: d.feedCount ?? 0,
+        totalGramsFed: d.totalGrams ?? 0,
         motorStatus: d.motorStatus || 'STOPPED',
-        plateSpeed: d.plateSpeed || 0,
+        plateSpeed: d.plateSpeed ?? 0,
         lastFeedingTime: d.status === 'feeding_stopped' ? now.toISOString() : null,
         lastSeen: now.toISOString(),
         rssi: d.rssi ?? null,
         ipAddress: d.ipAddress || null,
-        scheduleCount: d.scheduleCount || 0,
-        escPercent: d.escPercent || 0,
-        uptimeMs: d.uptimeMs || 0,
+        scheduleCount: d.scheduleCount ?? 0,
+        escPercent: d.escPercent ?? 0,
+        uptimeMs: d.uptimeMs ?? 0,
       };
 
       setDevice(newDevice);
@@ -150,29 +154,29 @@ const FeedingDashboard: React.FC = () => {
 
       // Weight history (keep last 60 data points = ~2 min at 2s interval)
       setWeightHistory(prev => {
-        const next = [...prev, { time: timeStr, weight: d.weight || 0, hopper: (d.hopperLevel || 0) / 1000 }];
+        const next = [...prev, { time: timeStr, weight: d.weight ?? 0, hopper: (d.hopperLevel ?? 0) / 1000 }];
         return next.slice(-60);
       });
 
       // Feed events tracking
-      const newFeedCount = d.feedCount || 0;
+      const newFeedCount = d.feedCount ?? 0;
       if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
         setFeedEvents(prev => {
           const next = [...prev, {
             time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-            amount: (d.totalGrams || 0) / 1000,
+            amount: (d.totalGrams ?? 0) / 1000,
           }];
           return next.slice(-10);
         });
       }
       prevFeedCount.current = newFeedCount;
 
-      // Reset offline timer — if no message in 10s, mark offline but keep cached values
+      // Reset offline timer — if no message in 30s, mark offline but keep cached values
       if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
       offlineTimerRef.current = setTimeout(() => {
         setDevice(prev => ({ ...prev, status: 'offline' }));
         setIsStale(true); // Mark as stale but keep values visible
-      }, 10000);
+      }, 30000);
     } catch (err) {
       console.error('Failed to parse WebSocket message:', err);
     }
@@ -239,22 +243,59 @@ const FeedingDashboard: React.FC = () => {
     };
   }, [handleWsMessage]);
 
-  // ─── Fetch initial data from REST (one-time bootstrap) ───
-  useEffect(() => {
-    const fetchInitial = async () => {
-      try {
-        const response = await api.get(`/sensors/device/${DEVICE_ID}`);
-        if (response.data.success && response.data.data) {
-          const d = response.data.data;
-          if (d.lastFeedingTime) {
-            setDevice(prev => ({ ...prev, lastFeedingTime: d.lastFeedingTime }));
-          }
-          if (d.feedCount) prevFeedCount.current = d.feedCount;
-        }
-      } catch { /* ignore — MQTT is primary */ }
-    };
-    fetchInitial();
+  // ─── Fetch device data from REST API (bootstrap + polling fallback) ───
+  const fetchDeviceFromRest = useCallback(async () => {
+    try {
+      const response = await api.get(`/sensors/device/${DEVICE_ID}`);
+      if (response.data.success && response.data.data) {
+        const d = response.data.data;
+        setDevice(prev => {
+          const updated: DeviceData = {
+            status: d.status || prev.status || 'online',
+            feedingActive: d.feedingActive ?? prev.feedingActive,
+            hopperLevel: d.hopperLevel ?? prev.hopperLevel,
+            hopperCapacity: d.hopperCapacity ?? prev.hopperCapacity ?? 20000,
+            hopperPercentage: d.hopperPercentage ?? prev.hopperPercentage,
+            currentWeight: d.currentWeight ?? prev.currentWeight,
+            targetWeight: d.targetWeight ?? prev.targetWeight,
+            feedCount: d.feedCount ?? prev.feedCount,
+            totalGramsFed: d.totalGramsFed ?? prev.totalGramsFed,
+            motorStatus: d.motorStatus || prev.motorStatus || 'STOPPED',
+            plateSpeed: d.plateSpeed ?? prev.plateSpeed,
+            lastFeedingTime: d.lastFeedingTime || prev.lastFeedingTime,
+            lastSeen: d.lastSeen || prev.lastSeen || new Date().toISOString(),
+            rssi: d.rssi ?? prev.rssi,
+            ipAddress: d.ipAddress || prev.ipAddress,
+            scheduleCount: d.scheduleCount ?? prev.scheduleCount,
+            escPercent: d.escPercent ?? prev.escPercent,
+            uptimeMs: d.uptimeMs ?? prev.uptimeMs,
+          };
+          cacheDevice(updated);
+          return updated;
+        });
+        setIsStale(true); // REST data is slightly stale vs live WS
+        if (d.feedCount) prevFeedCount.current = d.feedCount;
+      }
+    } catch { /* REST fallback — ignore errors silently */ }
   }, []);
+
+  // Initial fetch on mount
+  useEffect(() => {
+    fetchDeviceFromRest();
+  }, [fetchDeviceFromRest]);
+
+  // REST polling fallback — poll every 5s when WebSocket not receiving messages
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      // Only poll if WebSocket hasn't delivered a message in the last 8 seconds
+      const now = Date.now();
+      const lastMsg = lastMqttMsg ? lastMqttMsg.getTime() : 0;
+      if (now - lastMsg > 8000) {
+        fetchDeviceFromRest();
+      }
+    }, 5000);
+    return () => clearInterval(pollInterval);
+  }, [fetchDeviceFromRest, lastMqttMsg]);
 
   // ─── Load historical data from Supabase + real-time subscription ───
   useEffect(() => {
