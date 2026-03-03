@@ -50,7 +50,7 @@ const UpdateCredentials: React.FC<UpdateCredentialsProps> = ({
         
         // Update username if changed
         if (newUsername) {
-          sessionStorage.setItem('username', newUsername);
+          localStorage.setItem('username', newUsername);
           onUsernameUpdate(newUsername);
         }
         

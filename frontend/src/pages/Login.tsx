@@ -24,8 +24,9 @@ const Login: React.FC = () => {
       const response: LoginResponse = await login(username, password);
 
       if (response.success) {
-        // Store username in sessionStorage for credential updates
-        sessionStorage.setItem('username', username);
+        // Store username in localStorage (persists across tabs/windows/devices)
+        localStorage.setItem('username', username);
+        localStorage.setItem('loginTime', new Date().toISOString());
         navigate('/dashboard');
       } else {
         setError(response.message);

@@ -132,7 +132,7 @@ const int stepsPerRevolution = 200; // NEMA 17 typical (1.8° per step)
 // Feeding State Variables
 bool feedingActive = false;
 bool stepperActive = false;
-int stepperSpeed = 500; // Delay in microseconds
+int stepperSpeed = 900; // Delay in microseconds
 int currentESCPercent = 0;
 int targetESCPercent = 25;
 const int ESC_MAX_PERCENT = 34;       // ⚠ SAFETY: Never exceed 34% - damage risk!

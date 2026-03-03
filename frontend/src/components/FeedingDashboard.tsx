@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
+import { supabase, fetchFeedingHistory, fetchFeedingEvents, type FeedingHistoryRow } from '../services/supabase';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Cell
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, BarChart, Bar, Cell, LineChart, Line
 } from 'recharts';
 
 // Build WebSocket URL from the REST API URL (same backend, /ws/feeding endpoint)
@@ -63,21 +64,51 @@ const INITIAL_DEVICE: DeviceData = {
   uptimeMs: 0,
 };
 
+// Cache key for persisting last known device data
+const DEVICE_CACHE_KEY = 'feedingDashboard_lastDevice';
+
+function loadCachedDevice(): DeviceData {
+  try {
+    const cached = localStorage.getItem(DEVICE_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached) as DeviceData;
+      // Mark as offline (stale data) but keep all values
+      return { ...parsed, status: 'offline' };
+    }
+  } catch { /* ignore */ }
+  return INITIAL_DEVICE;
+}
+
+function cacheDevice(d: DeviceData) {
+  try {
+    localStorage.setItem(DEVICE_CACHE_KEY, JSON.stringify(d));
+  } catch { /* ignore */ }
+}
+
 const FeedingDashboard: React.FC = () => {
-  const [device, setDevice] = useState<DeviceData>(INITIAL_DEVICE);
+  const [device, setDevice] = useState<DeviceData>(loadCachedDevice);
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [weightHistory, setWeightHistory] = useState<WeightHistoryPoint[]>([]);
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
+  // Supabase historical data
+  const [historyData, setHistoryData] = useState<FeedingHistoryRow[]>([]);
+  const [historyEvents, setHistoryEvents] = useState<FeedingHistoryRow[]>([]);
+  const [historyRange, setHistoryRange] = useState<number>(24); // hours
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
   const [lastMqttMsg, setLastMqttMsg] = useState<Date | null>(null);
   const [messageRate, setMessageRate] = useState(0);
+  const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
   const msgCountRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelayRef = useRef(1000); // Exponential backoff starting at 1s
 
   const isOnline = device.status !== 'offline';
+  // Show values if online OR if we have cached stale data
+  const hasData = isOnline || isStale;
 
   // ─── Parse incoming WebSocket message (relayed from backend MQTT) ───
   const handleWsMessage = useCallback((rawPayload: string) => {
@@ -86,7 +117,7 @@ const FeedingDashboard: React.FC = () => {
       const now = new Date();
       const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-      setDevice({
+      const newDevice: DeviceData = {
         status: d.status || 'online',
         feedingActive: d.feedingActive || false,
         hopperLevel: d.hopperLevel || 0,
@@ -105,7 +136,11 @@ const FeedingDashboard: React.FC = () => {
         scheduleCount: d.scheduleCount || 0,
         escPercent: d.escPercent || 0,
         uptimeMs: d.uptimeMs || 0,
-      });
+      };
+
+      setDevice(newDevice);
+      cacheDevice(newDevice); // Persist to localStorage for weak-connection recovery
+      setIsStale(false);      // Data is fresh
 
       if (d.feedingActive) setFeedingInProgress(true);
       else setFeedingInProgress(false);
@@ -132,11 +167,12 @@ const FeedingDashboard: React.FC = () => {
       }
       prevFeedCount.current = newFeedCount;
 
-      // Reset offline timer — if no message in 6s, mark offline
+      // Reset offline timer — if no message in 10s, mark offline but keep cached values
       if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
       offlineTimerRef.current = setTimeout(() => {
         setDevice(prev => ({ ...prev, status: 'offline' }));
-      }, 6000);
+        setIsStale(true); // Mark as stale but keep values visible
+      }, 10000);
     } catch (err) {
       console.error('Failed to parse WebSocket message:', err);
     }
@@ -158,6 +194,7 @@ const FeedingDashboard: React.FC = () => {
         if (!isMounted) return;
         console.log('[WS] Connected to backend WebSocket');
         setMqttStatus('connected');
+        reconnectDelayRef.current = 1000; // Reset backoff on successful connection
       };
 
       ws.onmessage = (event) => {
@@ -172,11 +209,13 @@ const FeedingDashboard: React.FC = () => {
 
       ws.onclose = () => {
         if (!isMounted) return;
-        console.log('[WS] Disconnected, reconnecting in 3s...');
+        const delay = reconnectDelayRef.current;
+        console.log(`[WS] Disconnected, reconnecting in ${delay / 1000}s...`);
         setMqttStatus('disconnected');
         wsRef.current = null;
-        // Auto-reconnect after 3 seconds
-        reconnectTimerRef.current = setTimeout(connect, 3000);
+        // Exponential backoff: 1s → 2s → 4s → 8s → max 15s
+        reconnectTimerRef.current = setTimeout(connect, delay);
+        reconnectDelayRef.current = Math.min(delay * 2, 15000);
       };
     };
 
@@ -216,6 +255,62 @@ const FeedingDashboard: React.FC = () => {
     };
     fetchInitial();
   }, []);
+
+  // ─── Load historical data from Supabase + real-time subscription ───
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadHistory = async () => {
+      setHistoryLoading(true);
+      try {
+        const [history, events] = await Promise.all([
+          fetchFeedingHistory(DEVICE_ID, historyRange),
+          fetchFeedingEvents(DEVICE_ID, Math.max(historyRange, 72)),
+        ]);
+        if (isMounted) {
+          setHistoryData(history);
+          setHistoryEvents(events);
+        }
+      } catch (err) {
+        console.error('[Supabase] Failed to load history:', err);
+      } finally {
+        if (isMounted) setHistoryLoading(false);
+      }
+    };
+    loadHistory();
+
+    // Subscribe to real-time inserts on feeding_history
+    const channel = supabase
+      .channel('feeding_history_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'feeding_history',
+          filter: `device_id=eq.${DEVICE_ID}`,
+        },
+        (payload) => {
+          if (!isMounted) return;
+          const newRow = payload.new as FeedingHistoryRow;
+          setHistoryData(prev => {
+            const next = [...prev, newRow];
+            // Keep max 2000 rows in memory
+            return next.length > 2000 ? next.slice(-2000) : next;
+          });
+          // If it's a feeding event, add to events list
+          if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
+            setHistoryEvents(prev => [...prev, newRow].slice(-100));
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, [historyRange]);
 
   // ── Action Handlers ──
   const handleStartFeeding = async () => {
@@ -331,6 +426,12 @@ const FeedingDashboard: React.FC = () => {
               <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
               {isOnline ? 'Device Online' : 'Device Offline'}
             </div>
+            {/* Stale data indicator */}
+            {!isOnline && isStale && device.lastSeen && (
+              <span className="text-yellow-200 text-xs hidden sm:inline">
+                <i className="fas fa-clock mr-1"></i>Last: {new Date(device.lastSeen).toLocaleTimeString()}
+              </span>
+            )}
             {/* Message rate indicator */}
             {mqttStatus === 'connected' && (
               <span className="text-emerald-200 text-xs hidden sm:inline">
@@ -340,6 +441,22 @@ const FeedingDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* ── STALE DATA BANNER (shows when connection lost but cached data exists) ── */}
+      {!isOnline && isStale && device.lastSeen && (
+        <div className="bg-amber-50 rounded-xl p-3 sm:p-4 border border-amber-200 flex items-center gap-3">
+          <div className="w-9 h-9 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
+            <i className="fas fa-wifi text-amber-500"></i>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-amber-800">Connection Lost — Showing Last Known Data</p>
+            <p className="text-xs text-amber-600">
+              Last update: {new Date(device.lastSeen).toLocaleString()} &bull; Reconnecting automatically...
+            </p>
+          </div>
+          <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin shrink-0" />
+        </div>
+      )}
 
       {/* ── LIVE STATUS CARDS ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -358,10 +475,10 @@ const FeedingDashboard: React.FC = () => {
             </div>
           </div>
           <p className={`text-lg sm:text-2xl font-bold ${device.feedingActive ? 'text-blue-700' : 'text-gray-800'}`}>
-            {isOnline ? device.motorStatus : '--'}
+            {hasData ? device.motorStatus : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            {isOnline && device.plateSpeed > 0 ? `${device.plateSpeed.toFixed(0)} RPM` : isOnline ? 'Idle' : '--'}
+            {hasData && device.plateSpeed > 0 ? `${device.plateSpeed.toFixed(0)} RPM` : hasData ? 'Idle' : '--'}
           </p>
         </div>
 
@@ -374,10 +491,10 @@ const FeedingDashboard: React.FC = () => {
             </div>
           </div>
           <p className="text-lg sm:text-2xl font-bold text-gray-800">
-            {isOnline ? formatWeight(device.currentWeight) : '--'}
+            {hasData ? formatWeight(device.currentWeight) : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Target: {isOnline && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'None'}
+            Target: {hasData && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'None'}
           </p>
         </div>
 
@@ -390,10 +507,10 @@ const FeedingDashboard: React.FC = () => {
             </div>
           </div>
           <p className="text-lg sm:text-2xl font-bold text-gray-800">
-            {isOnline ? device.feedCount : '--'}
+            {hasData ? device.feedCount : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Total: {isOnline ? formatWeight(device.totalGramsFed) : '--'}
+            Total: {hasData ? formatWeight(device.totalGramsFed) : '--'}
           </p>
         </div>
 
@@ -414,7 +531,7 @@ const FeedingDashboard: React.FC = () => {
                 i <= signal.bars ? 'bg-current' : 'bg-gray-200'
               }`} style={{ height: `${6 + i * 3}px` }} />
             ))}
-            <span className="text-xs text-gray-500 ml-1">{isOnline ? signal.label : 'N/A'}</span>
+            <span className="text-xs text-gray-500 ml-1">{hasData ? signal.label : 'N/A'}</span>
           </div>
         </div>
       </div>
@@ -430,12 +547,13 @@ const FeedingDashboard: React.FC = () => {
               Hopper Feed Level
             </h3>
             <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
-              !isOnline ? 'bg-gray-100 text-gray-500' :
+              !hasData ? 'bg-gray-100 text-gray-500' :
+              !isOnline ? 'bg-yellow-100 text-yellow-700' :
               hopperPct > 50 ? 'bg-green-100 text-green-700' :
               hopperPct > 20 ? 'bg-yellow-100 text-yellow-700' :
               'bg-red-100 text-red-700'
             }`}>
-              {isOnline ? `${hopperPct.toFixed(1)}%` : 'Offline'}
+              {hasData ? (isOnline ? `${hopperPct.toFixed(1)}%` : `${hopperPct.toFixed(1)}% (stale)`) : 'Offline'}
             </span>
           </div>
 
@@ -444,14 +562,15 @@ const FeedingDashboard: React.FC = () => {
               <div className="absolute inset-0 rounded-b-2xl rounded-t-lg border-2 border-gray-300 bg-gray-50 overflow-hidden">
                 <div
                   className={`absolute bottom-0 left-0 right-0 transition-all duration-700 rounded-b-xl ${
-                    !isOnline ? 'bg-gray-200' :
+                    !hasData ? 'bg-gray-200' :
+                    !isOnline ? 'bg-gradient-to-t from-yellow-400 to-yellow-200 opacity-60' :
                     hopperPct > 50 ? 'bg-gradient-to-t from-teal-500 to-teal-300' :
                     hopperPct > 20 ? 'bg-gradient-to-t from-yellow-500 to-yellow-300' :
                     'bg-gradient-to-t from-red-500 to-red-300'
                   }`}
-                  style={{ height: `${isOnline ? hopperPct : 0}%` }}
+                  style={{ height: `${hasData ? hopperPct : 0}%` }}
                 >
-                  {isOnline && (
+                  {hasData && (
                     <div className="absolute top-0 left-0 right-0 h-3 opacity-30">
                       <div className="w-full h-full bg-white rounded-full animate-pulse" />
                     </div>
@@ -468,7 +587,7 @@ const FeedingDashboard: React.FC = () => {
             <div className="flex-1 space-y-3">
               <div>
                 <p className="text-xs text-gray-500 mb-1">Current Level</p>
-                <p className="text-2xl sm:text-3xl font-bold text-gray-800">{isOnline ? `${hopperKg.toFixed(2)}` : '--'} <span className="text-base font-normal text-gray-500">kg</span></p>
+                <p className="text-2xl sm:text-3xl font-bold text-gray-800">{hasData ? `${hopperKg.toFixed(2)}` : '--'} <span className="text-base font-normal text-gray-500">kg</span></p>
               </div>
               <div>
                 <p className="text-xs text-gray-500 mb-1">Capacity</p>
@@ -477,10 +596,11 @@ const FeedingDashboard: React.FC = () => {
               <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-700 ${
-                    !isOnline ? 'bg-gray-300' :
+                    !hasData ? 'bg-gray-300' :
+                    !isOnline ? 'bg-yellow-400' :
                     hopperPct > 50 ? 'bg-teal-500' : hopperPct > 20 ? 'bg-yellow-500' : 'bg-red-500'
                   }`}
-                  style={{ width: `${isOnline ? hopperPct : 0}%` }}
+                  style={{ width: `${hasData ? hopperPct : 0}%` }}
                 />
               </div>
               {hopperPct < 15 && isOnline && (
@@ -512,21 +632,21 @@ const FeedingDashboard: React.FC = () => {
                 <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><i className="fas fa-bullseye"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Target Weight</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{isOnline && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{hasData && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-teal-100 text-teal-600 flex items-center justify-center"><i className="fas fa-weight"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Total Dispensed</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{isOnline ? formatWeight(device.totalGramsFed) : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{hasData ? formatWeight(device.totalGramsFed) : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center"><i className="fas fa-hashtag"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Feed Sessions</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{isOnline ? device.feedCount : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{hasData ? device.feedCount : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
@@ -674,7 +794,7 @@ const FeedingDashboard: React.FC = () => {
         <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
           <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
             <i className="fas fa-history text-violet-500"></i>
-            Feeding History
+            Feeding History (Session)
           </h3>
           <ResponsiveContainer width="100%" height={180}>
             <BarChart data={feedEvents}>
@@ -695,6 +815,164 @@ const FeedingDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* ══════════════════════════════════════════════════════════════════
+          ── HISTORICAL DATA FROM SUPABASE (Server-Side Storage) ──
+          ══════════════════════════════════════════════════════════════════ */}
+      <div className="bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 rounded-2xl p-4 sm:p-6 text-white shadow-xl">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
+              <i className="fas fa-database text-2xl"></i>
+            </div>
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold">Historical Data</h2>
+              <p className="text-purple-200 text-xs sm:text-sm">
+                Stored by server (always running) &bull; {historyData.length} records
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {[1, 6, 24, 72, 168].map(h => (
+              <button
+                key={h}
+                onClick={() => setHistoryRange(h)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  historyRange === h
+                    ? 'bg-white text-purple-700 shadow-md'
+                    : 'bg-white/20 text-white hover:bg-white/30'
+                }`}
+              >
+                {h === 1 ? '1H' : h === 6 ? '6H' : h === 24 ? '24H' : h === 72 ? '3D' : '7D'}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Historical Weight & Hopper Chart */}
+      {historyLoading ? (
+        <div className="bg-white rounded-2xl p-8 border border-gray-100 shadow-sm flex items-center justify-center">
+          <div className="text-center text-gray-400">
+            <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-sm">Loading historical data from Supabase...</p>
+          </div>
+        </div>
+      ) : historyData.length > 0 ? (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+            {/* Historical Weight Chart */}
+            <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
+                <i className="fas fa-weight text-purple-500"></i>
+                Weight History (Supabase)
+              </h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart data={historyData.map(row => ({
+                  time: new Date(row.recorded_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+                  weight: row.current_weight,
+                  hopper: row.hopper_level / 1000,
+                }))}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="time" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10 }} unit="g" />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} unit="kg" />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '12px' }}
+                  />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="weight" name="Scale (g)" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="hopper" name="Hopper (kg)" stroke="#10b981" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Historical Hopper % Chart */}
+            <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
+                <i className="fas fa-box text-indigo-500"></i>
+                Hopper Level % (Supabase)
+              </h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={historyData.map(row => ({
+                  time: new Date(row.recorded_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+                  percentage: row.hopper_percentage,
+                }))}>
+                  <defs>
+                    <linearGradient id="hopperHistGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="time" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10 }} unit="%" domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '12px' }}
+                    formatter={(value?: number | string) => [`${Number(value ?? 0).toFixed(1)}%`, 'Hopper Level']}
+                  />
+                  <Area type="monotone" dataKey="percentage" stroke="#6366f1" strokeWidth={2} fill="url(#hopperHistGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Historical Feed Events Table */}
+          {historyEvents.length > 0 && (
+            <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
+                <i className="fas fa-list-alt text-violet-500"></i>
+                Feeding Events Log (Supabase)
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">Time</th>
+                      <th className="py-2 px-3 text-left text-xs font-semibold text-gray-500">Event</th>
+                      <th className="py-2 px-3 text-right text-xs font-semibold text-gray-500">Weight</th>
+                      <th className="py-2 px-3 text-right text-xs font-semibold text-gray-500">Total Fed</th>
+                      <th className="py-2 px-3 text-right text-xs font-semibold text-gray-500">Hopper</th>
+                      <th className="py-2 px-3 text-right text-xs font-semibold text-gray-500">Feed #</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyEvents.slice().reverse().slice(0, 20).map((evt, i) => (
+                      <tr key={evt.id || i} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="py-2 px-3 text-xs text-gray-600">
+                          {new Date(evt.recorded_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            evt.status === 'feeding_started'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-red-100 text-red-700'
+                          }`}>
+                            <i className={`fas ${evt.status === 'feeding_started' ? 'fa-play' : 'fa-stop'} text-[9px]`}></i>
+                            {evt.status === 'feeding_started' ? 'Started' : 'Stopped'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right text-xs font-mono text-gray-700">{evt.current_weight.toFixed(1)}g</td>
+                        <td className="py-2 px-3 text-right text-xs font-mono text-gray-700">{(evt.total_grams_fed / 1000).toFixed(2)}kg</td>
+                        <td className="py-2 px-3 text-right text-xs font-mono text-gray-700">{evt.hopper_percentage.toFixed(1)}%</td>
+                        <td className="py-2 px-3 text-right text-xs font-mono text-gray-700">#{evt.feed_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="bg-white rounded-2xl p-8 border border-gray-100 shadow-sm flex items-center justify-center">
+          <div className="text-center text-gray-400">
+            <i className="fas fa-database text-4xl mb-3"></i>
+            <p className="text-sm font-semibold">No Historical Data Yet</p>
+            <p className="text-xs mt-1">The server stores feeding data to Supabase automatically.<br/>Data will appear here once the device sends its first messages.</p>
+          </div>
+        </div>
+      )}
+
       {/* ── DEVICE INFO FOOTER ── */}
       <div className="bg-gradient-to-r from-gray-50 to-slate-50 rounded-2xl p-4 sm:p-5 border border-gray-200">
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
@@ -708,7 +986,7 @@ const FeedingDashboard: React.FC = () => {
           </div>
           <div>
             <span className="text-gray-500 block mb-1">Uptime</span>
-            <span className="font-semibold text-gray-700">{isOnline ? formatUptime(device.uptimeMs) : 'N/A'}</span>
+            <span className="font-semibold text-gray-700">{hasData ? formatUptime(device.uptimeMs) : 'N/A'}</span>
           </div>
           <div>
             <span className="text-gray-500 block mb-1">Last Message</span>
