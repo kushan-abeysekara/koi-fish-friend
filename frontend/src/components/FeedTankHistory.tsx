@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { FC } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -34,7 +35,7 @@ const COLORS = {
 };
 
 /* ─────────────────── Component ─────────────────── */
-const FeedTankHistory: React.FC = () => {
+const FeedTankHistory: FC = () => {
   const [historyData, setHistoryData] = useState<FeedingHistoryRow[]>([]);
   const [feedingEvents, setFeedingEvents] = useState<FeedingHistoryRow[]>([]);
   const [range, setRange] = useState(24);
@@ -64,23 +65,29 @@ const FeedTankHistory: React.FC = () => {
 
   /* ── Realtime subscription ── */
   useEffect(() => {
-    const channel = supabase
-      .channel('tank_history_rt')
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'feeding_history',
-        filter: `device_id=eq.${DEVICE_ID}`,
-      }, (payload) => {
-        const row = payload.new as FeedingHistoryRow;
-        setHistoryData(prev => [...prev, row].slice(-5000));
-        if (row.status === 'feeding_started' || row.status === 'feeding_stopped') {
-          setFeedingEvents(prev => [...prev, row].slice(-500));
-        }
-      })
-      .subscribe();
+    if (!supabase) return;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      channel = supabase
+        .channel('tank_history_rt')
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'feeding_history',
+          filter: `device_id=eq.${DEVICE_ID}`,
+        }, (payload) => {
+          const row = payload.new as FeedingHistoryRow;
+          setHistoryData(prev => [...prev, row].slice(-5000));
+          if (row.status === 'feeding_started' || row.status === 'feeding_stopped') {
+            setFeedingEvents(prev => [...prev, row].slice(-500));
+          }
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn('[Supabase] Realtime subscription failed:', err);
+    }
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { if (channel && supabase) supabase.removeChannel(channel); };
   }, []);
 
   /* ── Prepare chart data ── */
@@ -689,7 +696,7 @@ const FeedTankHistory: React.FC = () => {
 };
 
 /* ── Stat Card Component ── */
-const StatCard: React.FC<{
+const StatCard: FC<{
   icon: string;
   iconBg: string;
   iconColor: string;

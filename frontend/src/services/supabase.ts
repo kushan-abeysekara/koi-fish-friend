@@ -1,17 +1,21 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 // Self-hosted Supabase instance
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'http://superbase.koifishfriend.online';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  realtime: {
-    params: {
-      eventsPerSecond: 2,
-    },
-  },
-});
+// Safe initialisation — never crash the app if Supabase is unavailable
+let _client: SupabaseClient | null = null;
+try {
+  _client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    realtime: { params: { eventsPerSecond: 2 } },
+  });
+} catch (err) {
+  console.warn('[Supabase] Failed to initialise client:', err);
+}
+
+export const supabase: SupabaseClient | null = _client;
 
 // ─── Types ───
 
@@ -40,54 +44,63 @@ export interface FeedingHistoryRow {
 
 /**
  * Fetch feeding history for a device within a time range.
- * Default: last 24 hours, max 2000 rows.
+ * Returns [] if Supabase is unavailable or the table doesn't exist yet.
  */
 export async function fetchFeedingHistory(
   deviceId: string,
   hoursBack: number = 24,
   limit: number = 2000,
 ): Promise<FeedingHistoryRow[]> {
-  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+  if (!supabase) return [];
+  try {
+    const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('feeding_history')
+      .select('*')
+      .eq('device_id', deviceId)
+      .gte('recorded_at', since)
+      .order('recorded_at', { ascending: true })
+      .limit(limit);
 
-  const { data, error } = await supabase
-    .from('feeding_history')
-    .select('*')
-    .eq('device_id', deviceId)
-    .gte('recorded_at', since)
-    .order('recorded_at', { ascending: true })
-    .limit(limit);
-
-  if (error) {
-    console.error('[Supabase] Error fetching feeding history:', error.message);
+    if (error) {
+      console.error('[Supabase] Error fetching feeding history:', error.message);
+      return [];
+    }
+    return data ?? [];
+  } catch (err) {
+    console.error('[Supabase] fetchFeedingHistory exception:', err);
     return [];
   }
-
-  return data ?? [];
 }
 
 /**
  * Fetch only feeding events (start/stop) for a device.
+ * Returns [] if Supabase is unavailable or the table doesn't exist yet.
  */
 export async function fetchFeedingEvents(
   deviceId: string,
   hoursBack: number = 72,
   limit: number = 100,
 ): Promise<FeedingHistoryRow[]> {
-  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+  if (!supabase) return [];
+  try {
+    const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('feeding_history')
+      .select('*')
+      .eq('device_id', deviceId)
+      .in('status', ['feeding_started', 'feeding_stopped'])
+      .gte('recorded_at', since)
+      .order('recorded_at', { ascending: true })
+      .limit(limit);
 
-  const { data, error } = await supabase
-    .from('feeding_history')
-    .select('*')
-    .eq('device_id', deviceId)
-    .in('status', ['feeding_started', 'feeding_stopped'])
-    .gte('recorded_at', since)
-    .order('recorded_at', { ascending: true })
-    .limit(limit);
-
-  if (error) {
-    console.error('[Supabase] Error fetching feeding events:', error.message);
+    if (error) {
+      console.error('[Supabase] Error fetching feeding events:', error.message);
+      return [];
+    }
+    return data ?? [];
+  } catch (err) {
+    console.error('[Supabase] fetchFeedingEvents exception:', err);
     return [];
   }
-
-  return data ?? [];
 }

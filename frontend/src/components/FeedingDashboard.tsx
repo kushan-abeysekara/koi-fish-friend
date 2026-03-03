@@ -280,35 +280,42 @@ const FeedingDashboard: React.FC = () => {
     loadHistory();
 
     // Subscribe to real-time inserts on feeding_history
-    const channel = supabase
-      .channel('feeding_history_realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'feeding_history',
-          filter: `device_id=eq.${DEVICE_ID}`,
-        },
-        (payload) => {
-          if (!isMounted) return;
-          const newRow = payload.new as FeedingHistoryRow;
-          setHistoryData(prev => {
-            const next = [...prev, newRow];
-            // Keep max 2000 rows in memory
-            return next.length > 2000 ? next.slice(-2000) : next;
-          });
-          // If it's a feeding event, add to events list
-          if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
-            setHistoryEvents(prev => [...prev, newRow].slice(-100));
-          }
-        },
-      )
-      .subscribe();
+    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    if (supabase) {
+      try {
+        channel = supabase
+          .channel('feeding_history_realtime')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'feeding_history',
+              filter: `device_id=eq.${DEVICE_ID}`,
+            },
+            (payload) => {
+              if (!isMounted) return;
+              const newRow = payload.new as FeedingHistoryRow;
+              setHistoryData(prev => {
+                const next = [...prev, newRow];
+                // Keep max 2000 rows in memory
+                return next.length > 2000 ? next.slice(-2000) : next;
+              });
+              // If it's a feeding event, add to events list
+              if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
+                setHistoryEvents(prev => [...prev, newRow].slice(-100));
+              }
+            },
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('[Supabase] Realtime subscription failed:', err);
+      }
+    }
 
     return () => {
       isMounted = false;
-      supabase.removeChannel(channel);
+      if (channel && supabase) supabase.removeChannel(channel);
     };
   }, [historyRange]);
 
