@@ -1090,13 +1090,16 @@ void runESCFeedingPhase() {
         setESCPercent(newPercent);
       }
     } else {
-      // Ramp complete — hold at max and let auto-stop handle shutdown
-      setESCPercent(min(targetESCPercent, ESC_MAX_PERCENT));
-      Serial.print("ESC ramp complete — holding at ");
-      Serial.print(currentESCPercent);
-      Serial.println("% until weight drops");
-      escPhase = ESC_PHASE_IDLE;  // Phase machine done, auto-stop takes over
-      publishStatus("esc_ramp_complete");
+      // ── 10 seconds complete (4s vibration + 6s ramp) — STOP ESC ──
+      Serial.println("✓ ESC 10-second sequence complete — STOPPING ESC");
+      setESCPercent(0);
+      escPhase = ESC_PHASE_IDLE;
+      feedingActive = false;
+      escAutoStopEnabled = false;
+      escStopTimerStarted = false;
+      
+      Serial.println("Feeding cycle complete!");
+      publishStatus("esc_sequence_complete");
     }
   }
 }
