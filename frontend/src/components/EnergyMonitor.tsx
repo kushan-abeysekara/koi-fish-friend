@@ -41,17 +41,31 @@ export default function EnergyMonitor() {
         sensorDataApi.getEnergyHistory(selectedHours)
       ]);
       if (latestRes.success && latestRes.data) {
-        setLatestData(latestRes.data);
-        // Use the sensor record's own timestamp — not Date.now() — so that
-        // isOnline reflects when the device ACTUALLY last published, not when
-        // we last queried the database (the DB returns the same stale record
-        // indefinitely after the device goes offline).
-        setLastUpdateTime(new Date(latestRes.data.timestamp));
+        // Check if data is fresh (< 15 seconds old) - only show real live data
+        const dataAge = Date.now() - new Date(latestRes.data.timestamp).getTime();
+        if (dataAge < 15000) {
+          // Data is fresh - device is online, show it
+          setLatestData(latestRes.data);
+          setLastUpdateTime(new Date(latestRes.data.timestamp));
+        } else {
+          // Data is stale - device is offline, clear it
+          console.log('Device offline - clearing stale data (age:', Math.round(dataAge / 1000), 'seconds)');
+          setLatestData(null);
+          setLastUpdateTime(null);
+        }
       } else {
         setLatestData(null);
+        setLastUpdateTime(null);
       }
-      if (historicalRes.success && historicalRes.data) {
-        setHistoricalData(historicalRes.data);
+      
+      // Only show historical data if device is currently online or data is recent
+      if (historicalRes.success && historicalRes.data && historicalRes.data.length > 0) {
+        // Filter out stale data from history (keep only data from when device was actually online)
+        const recentData = historicalRes.data.filter(d => {
+          const age = Date.now() - new Date(d.timestamp).getTime();
+          return age < (selectedHours * 3600 * 1000); // Only show data within selected range
+        });
+        setHistoricalData(recentData);
       } else {
         setHistoricalData([]);
       }
