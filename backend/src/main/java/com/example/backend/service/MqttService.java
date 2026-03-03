@@ -44,6 +44,9 @@ public class MqttService {
     @Autowired
     private com.example.backend.websocket.PowerWebSocketHandler powerWebSocketHandler;
 
+    @Autowired
+    private SupabaseService supabaseService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = true; // Assume connected (Spring Integration handles connection)
 
@@ -75,6 +78,10 @@ public class MqttService {
                 // Broadcast raw MQTT payload to WebSocket clients for real-time dashboard
                 if (deviceId.contains("feed_device")) {
                     feedingWebSocketHandler.broadcast(payload);
+                    // Store feeding data to Supabase for historical records (server-side, always running)
+                    supabaseService.storeFeedingData(deviceId, jsonNode);
+                    // Detect feeding state transitions for event logging
+                    detectFeedingEvent(deviceId, jsonNode);
                 } else if (deviceId.startsWith("BM_")) {
                     // Broadcast power management status to /ws/power
                     powerWebSocketHandler.broadcast(payload);
@@ -199,6 +206,22 @@ public class MqttService {
             System.out.println("Device status updated: " + deviceId + " (Pond: " +
                     (device.getPond() != null ? device.getPond().getId() : "None") + ")");
         }
+    }
+
+    private boolean lastFeedingActiveState = false;
+
+    /**
+     * Detect feeding start/stop transitions and log events to Supabase (not throttled).
+     */
+    private void detectFeedingEvent(String deviceId, JsonNode json) {
+        if (!json.has("feedingActive")) return;
+        boolean isActive = json.get("feedingActive").asBoolean();
+        if (isActive && !lastFeedingActiveState) {
+            supabaseService.storeFeedingEvent(deviceId, "feeding_started", json);
+        } else if (!isActive && lastFeedingActiveState) {
+            supabaseService.storeFeedingEvent(deviceId, "feeding_stopped", json);
+        }
+        lastFeedingActiveState = isActive;
     }
 
     private void handleSensorData(String deviceId, JsonNode json) {
