@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useCallback, useRef } from 'react';
-import { powerScheduleApi, sensorDeviceApi, sensorDataApi } from '../services/api';
+import { powerScheduleApi, sensorDeviceApi } from '../services/api';
 import type { PowerSchedule, SensorDevice } from '../services/api';
 import {
   Edit2, Trash2, Plus, Calendar, Clock, Power, RefreshCw, Check, X,
@@ -26,12 +26,15 @@ export default function PowerManagement() {
   const [editingSchedule, setEditingSchedule] = useState<PowerSchedule | null>(null);
   const [commandInProgress, setCommandInProgress] = useState(false);
   const commandSentAt = useRef<number>(0);
-  const [latestSensorTimestamp, setLatestSensorTimestamp] = useState<Date | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirm, setConfirm] = useState<ConfirmDialog | null>(null);
 
-  const isOnline = latestSensorTimestamp !== null &&
-    (Date.now() - latestSensorTimestamp.getTime()) < 15000;
+  // Check device online status from MQTT device status (published every 5s by ESP32)
+  // NOT from sensor data - device status is more reliable for control interface
+  const isOnline = device !== null && 
+    device.status === 'online' &&
+    device.lastSeen !== null &&
+    (Date.now() - new Date(device.lastSeen).getTime()) < 20000; // 20s grace period
 
   const [formData, setFormData] = useState({
     name: '',
@@ -59,10 +62,7 @@ export default function PowerManagement() {
       setLoading(true);
       setError(null);
       try {
-        const [deviceRes, latestRes] = await Promise.all([
-          sensorDeviceApi.getAll(),
-          sensorDataApi.getLatestEnergy(),
-        ]);
+        const deviceRes = await sensorDeviceApi.getAll();
         if (deviceRes.success && deviceRes.data) {
           const bm = deviceRes.data.find(d => d.deviceType === 'BUDGET_MANAGEMENT');
           setDevice(prev => {
@@ -81,9 +81,6 @@ export default function PowerManagement() {
                 : (updated.controlMode as DeviceState['controlMode'] ?? prev?.controlMode),
             };
           });
-        }
-        if (latestRes.success && latestRes.data) {
-          setLatestSensorTimestamp(new Date(latestRes.data.timestamp));
         }
       } catch {
         setError('Failed to fetch device');
