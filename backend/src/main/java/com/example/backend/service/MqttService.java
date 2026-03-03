@@ -3,9 +3,11 @@ package com.example.backend.service;
 import com.example.backend.entity.Pond;
 import com.example.backend.entity.SensorDevice;
 import com.example.backend.entity.SensorData;
+import com.example.backend.entity.FeedingHistory;
 import com.example.backend.repository.PondRepository;
 import com.example.backend.repository.SensorDeviceRepository;
 import com.example.backend.repository.SensorDataRepository;
+import com.example.backend.repository.FeedingHistoryRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +24,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class MqttService {
@@ -47,8 +50,15 @@ public class MqttService {
     @Autowired
     private SupabaseService supabaseService;
 
+    @Autowired
+    private FeedingHistoryRepository feedingHistoryRepository;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = true; // Assume connected (Spring Integration handles connection)
+
+    // Throttle MySQL history writes: 1 insert per 10 seconds for periodic status
+    private final AtomicLong lastHistoryInsertTime = new AtomicLong(0);
+    private static final long HISTORY_THROTTLE_MS = 10_000;
 
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
@@ -81,6 +91,8 @@ public class MqttService {
                     feedingWebSocketHandler.broadcast(payload);
                     // Store feeding data to Supabase for historical records (server-side, always running)
                     supabaseService.storeFeedingData(deviceId, jsonNode);
+                    // Store feeding data to MySQL (primary storage, auto-created table)
+                    storeFeedingHistoryToMySQL(deviceId, jsonNode);
                     // Detect feeding state transitions for event logging
                     detectFeedingEvent(deviceId, jsonNode);
                 } else if (deviceId.startsWith("BM_")) {
@@ -211,15 +223,91 @@ public class MqttService {
     private boolean lastFeedingActiveState = false;
 
     /**
-     * Detect feeding start/stop transitions and log events to Supabase (not throttled).
+     * Store feeding status to MySQL feeding_history table (throttled: 1 per 10s).
+     * Table is auto-created by JPA/Hibernate.
+     */
+    private void storeFeedingHistoryToMySQL(String deviceId, JsonNode json) {
+        try {
+            // Throttle: skip if less than 10s since last insert
+            long now = System.currentTimeMillis();
+            long last = lastHistoryInsertTime.get();
+            if (now - last < HISTORY_THROTTLE_MS) return;
+            if (!lastHistoryInsertTime.compareAndSet(last, now)) return;
+
+            FeedingHistory h = buildFeedingHistory(deviceId, json, "online");
+            feedingHistoryRepository.save(h);
+            System.out.println("[MySQL] ✅ Feeding history stored for " + deviceId);
+        } catch (Exception e) {
+            System.err.println("[MySQL] ❌ Error storing feeding history: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Store a feeding event (start/stop) to MySQL — always stored, not throttled.
+     */
+    private void storeFeedingEventToMySQL(String deviceId, String eventType, JsonNode json) {
+        try {
+            FeedingHistory h = buildFeedingHistory(deviceId, json, eventType);
+            feedingHistoryRepository.save(h);
+            System.out.println("[MySQL] ✅ Feeding EVENT stored: " + eventType + " for " + deviceId);
+        } catch (Exception e) {
+            System.err.println("[MySQL] ❌ Error storing feeding event: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Build a FeedingHistory entity from MQTT JSON payload.
+     */
+    private FeedingHistory buildFeedingHistory(String deviceId, JsonNode json, String status) {
+        FeedingHistory h = new FeedingHistory();
+        h.setDeviceId(deviceId);
+        h.setRecordedAt(LocalDateTime.now());
+        h.setStatus(status);
+
+        if (json.has("feedingActive") && !json.get("feedingActive").isNull())
+            h.setFeedingActive(json.get("feedingActive").asBoolean());
+        if (json.has("hopperLevel") && !json.get("hopperLevel").isNull())
+            h.setHopperLevel(json.get("hopperLevel").asDouble());
+        if (json.has("hopperCapacity") && !json.get("hopperCapacity").isNull())
+            h.setHopperCapacity(json.get("hopperCapacity").asDouble());
+        if (json.has("hopperPercentage") && !json.get("hopperPercentage").isNull())
+            h.setHopperPercentage(json.get("hopperPercentage").asDouble());
+        if (json.has("weight") && !json.get("weight").isNull())
+            h.setCurrentWeight(json.get("weight").asDouble());
+        if (json.has("targetWeight") && !json.get("targetWeight").isNull())
+            h.setTargetWeight(json.get("targetWeight").asDouble());
+        if (json.has("feedCount") && !json.get("feedCount").isNull())
+            h.setFeedCount(json.get("feedCount").asInt());
+        if (json.has("totalGrams") && !json.get("totalGrams").isNull())
+            h.setTotalGramsFed(json.get("totalGrams").asDouble());
+        if (json.has("motorStatus") && !json.get("motorStatus").isNull())
+            h.setMotorStatus(json.get("motorStatus").asText());
+        if (json.has("plateSpeed") && !json.get("plateSpeed").isNull())
+            h.setPlateSpeed(json.get("plateSpeed").asDouble());
+        if (json.has("escPercent") && !json.get("escPercent").isNull())
+            h.setEscPercent(json.get("escPercent").asDouble());
+        if (json.has("rssi") && !json.get("rssi").isNull())
+            h.setRssi(json.get("rssi").asInt());
+        if (json.has("ipAddress") && !json.get("ipAddress").isNull())
+            h.setIpAddress(json.get("ipAddress").asText());
+        if (json.has("uptimeMs") && !json.get("uptimeMs").isNull())
+            h.setUptimeMs(json.get("uptimeMs").asLong());
+
+        return h;
+    }
+
+    /**
+     * Detect feeding start/stop transitions and log events to Supabase + MySQL (not throttled).
      */
     private void detectFeedingEvent(String deviceId, JsonNode json) {
         if (!json.has("feedingActive")) return;
         boolean isActive = json.get("feedingActive").asBoolean();
         if (isActive && !lastFeedingActiveState) {
             supabaseService.storeFeedingEvent(deviceId, "feeding_started", json);
+            storeFeedingEventToMySQL(deviceId, "feeding_started", json);
         } else if (!isActive && lastFeedingActiveState) {
             supabaseService.storeFeedingEvent(deviceId, "feeding_stopped", json);
+            storeFeedingEventToMySQL(deviceId, "feeding_stopped", json);
         }
         lastFeedingActiveState = isActive;
     }

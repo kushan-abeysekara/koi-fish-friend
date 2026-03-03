@@ -1,12 +1,16 @@
 package com.example.backend.controller;
 
 import com.example.backend.dto.ApiResponse;
+import com.example.backend.entity.FeedingHistory;
+import com.example.backend.repository.FeedingHistoryRepository;
 import com.example.backend.service.MqttService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -16,6 +20,9 @@ public class FeedingController {
 
     @Autowired
     private MqttService mqttService;
+
+    @Autowired
+    private FeedingHistoryRepository feedingHistoryRepository;
 
     /**
      * Start feeding operation with weight-based control
@@ -215,6 +222,87 @@ public class FeedingController {
         } catch (Exception e) {
             return ResponseEntity.badRequest()
                     .body(new ApiResponse(false, "Failed to send diagnostic: " + e.getMessage(), null));
+        }
+    }
+
+    // ─── History endpoints (reads from MySQL, auto-created by JPA) ───
+
+    /**
+     * Get feeding history for a device.
+     * Replaces direct Supabase queries from the browser.
+     */
+    @GetMapping("/history")
+    public ResponseEntity<List<FeedingHistory>> getFeedingHistory(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId,
+            @RequestParam(defaultValue = "24") int hours,
+            @RequestParam(defaultValue = "2000") int limit) {
+        try {
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+            List<FeedingHistory> rows = feedingHistoryRepository
+                    .findByDeviceIdAndRecordedAtAfterOrderByRecordedAtAsc(deviceId, since);
+
+            // Apply limit
+            if (rows.size() > limit) {
+                rows = rows.subList(rows.size() - limit, rows.size());
+            }
+
+            return ResponseEntity.ok(rows);
+        } catch (Exception e) {
+            System.err.println("[FeedingHistory] Error fetching history: " + e.getMessage());
+            return ResponseEntity.ok(List.of());
+        }
+    }
+
+    /**
+     * Get feeding events (start/stop transitions) for a device.
+     */
+    @GetMapping("/events")
+    public ResponseEntity<List<FeedingHistory>> getFeedingEvents(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId,
+            @RequestParam(defaultValue = "72") int hours,
+            @RequestParam(defaultValue = "100") int limit) {
+        try {
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+            List<FeedingHistory> events = feedingHistoryRepository
+                    .findEventsByDeviceId(deviceId, since);
+
+            if (events.size() > limit) {
+                events = events.subList(events.size() - limit, events.size());
+            }
+
+            return ResponseEntity.ok(events);
+        } catch (Exception e) {
+            System.err.println("[FeedingHistory] Error fetching events: " + e.getMessage());
+            return ResponseEntity.ok(List.of());
+        }
+    }
+
+    /**
+     * Get feeding stats summary for a device.
+     */
+    @GetMapping("/stats")
+    public ResponseEntity<Map<String, Object>> getFeedingStats(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId,
+            @RequestParam(defaultValue = "24") int hours) {
+        try {
+            LocalDateTime since = LocalDateTime.now().minusHours(hours);
+            long totalRecords = feedingHistoryRepository.countByDeviceIdAndRecordedAtAfter(deviceId, since);
+            List<FeedingHistory> events = feedingHistoryRepository.findEventsByDeviceId(deviceId, since);
+
+            long feedingSessions = events.stream()
+                    .filter(e -> "feeding_started".equals(e.getStatus()))
+                    .count();
+
+            Map<String, Object> stats = new HashMap<>();
+            stats.put("deviceId", deviceId);
+            stats.put("hoursBack", hours);
+            stats.put("totalRecords", totalRecords);
+            stats.put("feedingSessions", feedingSessions);
+            stats.put("totalEvents", events.size());
+
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
         }
     }
 }

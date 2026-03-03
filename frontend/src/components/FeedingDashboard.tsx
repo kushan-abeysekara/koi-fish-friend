@@ -90,7 +90,7 @@ const FeedingDashboard: React.FC = () => {
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [weightHistory, setWeightHistory] = useState<WeightHistoryPoint[]>([]);
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
-  // Supabase historical data
+  // Historical feeding data from server DB
   const [historyData, setHistoryData] = useState<FeedingHistoryRow[]>([]);
   const [historyEvents, setHistoryEvents] = useState<FeedingHistoryRow[]>([]);
   const [historyRange, setHistoryRange] = useState<number>(24); // hours
@@ -297,7 +297,7 @@ const FeedingDashboard: React.FC = () => {
     return () => clearInterval(pollInterval);
   }, [fetchDeviceFromRest, lastMqttMsg]);
 
-  // ─── Load historical data from Supabase + real-time subscription ───
+  // ─── Load historical data from Backend REST API (MySQL) + optional Supabase real-time ───
   useEffect(() => {
     let isMounted = true;
 
@@ -313,7 +313,7 @@ const FeedingDashboard: React.FC = () => {
           setHistoryEvents(events);
         }
       } catch (err) {
-        console.error('[Supabase] Failed to load history:', err);
+        console.error('[FeedingHistory] Failed to load history:', err);
       } finally {
         if (isMounted) setHistoryLoading(false);
       }
@@ -864,7 +864,7 @@ const FeedingDashboard: React.FC = () => {
       )}
 
       {/* ══════════════════════════════════════════════════════════════════
-          ── HISTORICAL DATA FROM SUPABASE (Server-Side Storage) ──
+          ── HISTORICAL DATA FROM SERVER DATABASE (MySQL) ──
           ══════════════════════════════════════════════════════════════════ */}
       <div className="bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 rounded-2xl p-4 sm:p-6 text-white shadow-xl">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -902,7 +902,7 @@ const FeedingDashboard: React.FC = () => {
         <div className="bg-white rounded-2xl p-8 border border-gray-100 shadow-sm flex items-center justify-center">
           <div className="text-center text-gray-400">
             <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-            <p className="text-sm">Loading historical data from Supabase...</p>
+            <p className="text-sm">Loading historical data from server...</p>
           </div>
         </div>
       ) : historyData.length > 0 ? (
@@ -912,7 +912,7 @@ const FeedingDashboard: React.FC = () => {
             <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
               <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
                 <i className="fas fa-weight text-purple-500"></i>
-                Weight History (Supabase)
+                Weight History (Server DB)
               </h3>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={historyData.map(row => ({
@@ -938,7 +938,7 @@ const FeedingDashboard: React.FC = () => {
             <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
               <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
                 <i className="fas fa-box text-indigo-500"></i>
-                Hopper Level % (Supabase)
+                Hopper Level % (Server DB)
               </h3>
               <ResponsiveContainer width="100%" height={250}>
                 <AreaChart data={historyData.map(row => ({
@@ -969,7 +969,7 @@ const FeedingDashboard: React.FC = () => {
             <div className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm">
               <h3 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2 mb-4">
                 <i className="fas fa-list-alt text-violet-500"></i>
-                Feeding Events Log (Supabase)
+                Feeding Events Log (Server DB)
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1016,7 +1016,7 @@ const FeedingDashboard: React.FC = () => {
           <div className="text-center text-gray-400">
             <i className="fas fa-database text-4xl mb-3"></i>
             <p className="text-sm font-semibold">No Historical Data Yet</p>
-            <p className="text-xs mt-1">The server stores feeding data to Supabase automatically.<br/>Data will appear here once the device sends its first messages.</p>
+            <p className="text-xs mt-1">The server stores feeding data to MySQL automatically.<br/>Data will appear here once the device sends its first messages.</p>
           </div>
         </div>
       )}
