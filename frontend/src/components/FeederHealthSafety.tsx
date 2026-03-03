@@ -53,6 +53,7 @@ const FeederHealthSafety: React.FC = () => {
   // ── ESC controls ──
   const [escOn, setEscOn] = useState(false);
   const [escPercent, setEscPercent] = useState(25);
+  const ESC_MAX = 34; // ⚠ Safety limit — 35%+ damages the device
 
   // ── Calibration ──
   const [calFactor, setCalFactor] = useState(-2520);
@@ -377,8 +378,8 @@ const FeederHealthSafety: React.FC = () => {
               <input
                 type="range"
                 min={0}
-                max={100}
-                step={5}
+                max={ESC_MAX}
+                step={1}
                 value={escPercent}
                 onChange={(e) => setEscPercent(Number(e.target.value))}
                 className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
@@ -387,7 +388,7 @@ const FeederHealthSafety: React.FC = () => {
             </div>
             <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
               <span>Off (0%)</span>
-              <span>Full (100%)</span>
+              <span>Max ({ESC_MAX}%)</span>
             </div>
             {/* Live ESC value from device */}
             {isOnline && device.currentESCPercent > 0 && (
@@ -430,7 +431,7 @@ const FeederHealthSafety: React.FC = () => {
             )}
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-700">
               <i className="fas fa-info-circle mr-1"></i>
-              Controls the ESC brushless motor (feed spreader). Adjust PWM to change speed. Use low values (10-30%) for testing.
+              Controls the ESC brushless motor (feed spreader). <strong>Max 34%</strong> — exceeding this can damage the device. Use low values (10-25%) for testing.
             </div>
           </div>
         </div>

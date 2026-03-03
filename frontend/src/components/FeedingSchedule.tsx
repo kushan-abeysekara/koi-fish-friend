@@ -241,6 +241,21 @@ const FeedingSchedule: React.FC = () => {
         </div>
       </div>
 
+      {/* ESC Safety Notice */}
+      <div className="bg-amber-50 rounded-xl p-4 border border-amber-200 flex items-start gap-3">
+        <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
+          <i className="fas fa-exclamation-triangle text-amber-600"></i>
+        </div>
+        <div>
+          <h4 className="font-semibold text-amber-800 text-sm">ESC Motor Safety — Max 34% Power</h4>
+          <p className="text-xs text-amber-700 mt-1">
+            The ESC brushless motor is capped at <strong>34% maximum speed</strong> — exceeding this can damage the device.
+            During scheduled feeding: NEMA17 dispenses until target weight is reached, then ESC runs for 10 seconds
+            (4s vibration anti-jam → 6s ramp from 25% to 34%) to distribute the feed.
+          </p>
+        </div>
+      </div>
+
       {/* Create/Edit Schedule Form */}
       {showCreateForm && (
         <div className="bg-white rounded-xl shadow-lg p-6 border-2 border-blue-200">
@@ -260,7 +275,6 @@ const FeedingSchedule: React.FC = () => {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="Pond A">Pond A</option>
-                <option value="Pond B">Pond B</option>
               </select>
             </div>
 

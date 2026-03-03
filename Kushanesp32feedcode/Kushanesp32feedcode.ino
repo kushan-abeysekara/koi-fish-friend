@@ -135,8 +135,23 @@ bool stepperActive = false;
 int stepperSpeed = 500; // Delay in microseconds
 int currentESCPercent = 0;
 int targetESCPercent = 25;
+const int ESC_MAX_PERCENT = 34;       // ⚠ SAFETY: Never exceed 34% - damage risk!
 unsigned long escRampStartTime = 0;
 unsigned long escRampDuration = 8000; // 8 seconds
+
+// ESC Feeding Phase State Machine (vibration → ramp → auto-stop)
+enum ESCPhase {
+  ESC_PHASE_IDLE,
+  ESC_PHASE_VIBRATION,   // First 4 seconds: rapid on/off pulses to shake stuck feed
+  ESC_PHASE_RAMP         // Next 6 seconds: smooth ramp 25% → 34%
+};
+ESCPhase escPhase = ESC_PHASE_IDLE;
+unsigned long escPhaseStartTime = 0;
+const unsigned long ESC_VIBRATION_DURATION = 4000;  // 4 seconds vibration
+const unsigned long ESC_RAMP_DURATION = 6000;       // 6 seconds ramp
+const int ESC_VIBRATION_POWER = 31;                 // 31% power pulses
+const unsigned long ESC_VIBRATION_ON_MS = 120;      // Pulse ON duration (ms)
+const unsigned long ESC_VIBRATION_OFF_MS = 80;      // Pulse OFF duration (ms)
 
 // ESC Auto-Stop Variables (for weight-based feeding)
 bool escAutoStopEnabled = false;      // Flag to enable ESC auto-stop after weight drops
@@ -189,6 +204,7 @@ void checkScheduledFeedings();
 void readESCSpeedFromPotentiometer();
 void startWeightBasedFeeding(float targetGrams);
 void checkWeightAndControl();
+void runESCFeedingPhase();
 
 // Convert microseconds to duty (ESC)
 uint32_t usToDuty(int us) {
@@ -197,9 +213,9 @@ uint32_t usToDuty(int us) {
   return (uint32_t)((uint64_t)us * maxDuty / periodUs);
 }
 
-// Set ESC throttle by percentage (0-100%)
+// Set ESC throttle by percentage (0-34% max for safety)
 void setESCPercent(int percent) {
-  percent = constrain(percent, 0, 100);
+  percent = constrain(percent, 0, ESC_MAX_PERCENT);  // ⚠ SAFETY CAP: max 34%
   int pulseUs = map(percent, 0, 100, minUs, maxUs);
   ledcWrite(escPin, usToDuty(pulseUs));
   currentESCPercent = percent;
@@ -380,7 +396,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         // Get parameters
         stepperSpeed = data.containsKey("stepperSpeed") ? data["stepperSpeed"].as<int>() : 500;
         int escStart = data.containsKey("escStartPercent") ? data["escStartPercent"].as<int>() : 10;
-        targetESCPercent = data.containsKey("escTargetPercent") ? data["escTargetPercent"].as<int>() : 35;
+        targetESCPercent = data.containsKey("escTargetPercent") ? data["escTargetPercent"].as<int>() : ESC_MAX_PERCENT;
+        if (targetESCPercent > ESC_MAX_PERCENT) targetESCPercent = ESC_MAX_PERCENT;  // Safety cap
         escRampDuration = data.containsKey("escRampTimeSeconds") ? data["escRampTimeSeconds"].as<int>() * 1000 : 8000;
         
         // Enable stepper motor
@@ -401,6 +418,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       feedingActive = false;
       stepperActive = false;
       isHoming = false;
+      weightBasedFeeding = false;
+      escPhase = ESC_PHASE_IDLE;
+      escAutoStopEnabled = false;
+      escStopTimerStarted = false;
       
       // Stop ESC immediately
       setESCPercent(0);
@@ -446,8 +467,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     }
     else if (action == "diag_esc_on") {
       int percent = data.containsKey("escPercent") ? data["escPercent"].as<int>() : 25;
+      if (percent > ESC_MAX_PERCENT) percent = ESC_MAX_PERCENT;  // Safety cap at 34%
       setESCPercent(percent);
-      Serial.println("[DIAG] ESC ON, percent=" + String(percent));
+      Serial.println("[DIAG] ESC ON, percent=" + String(percent) + " (max " + String(ESC_MAX_PERCENT) + "%)");
       publishStatus("diag_esc_on");
     }
     else if (action == "diag_esc_off") {
@@ -459,6 +481,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       feedingActive = false;
       stepperActive = false;
       isHoming = false;
+      weightBasedFeeding = false;
+      escPhase = ESC_PHASE_IDLE;
+      escAutoStopEnabled = false;
+      escStopTimerStarted = false;
       setESCPercent(0);
       setStepperEnabled(false);
       digitalWrite(resetSleepPin, LOW);
@@ -759,7 +785,12 @@ void loop() {
     checkWeightAndControl();
   }
   
-  // ===== Check ESC Auto-Stop (after NEMA17 finishes) =====
+  // ===== Run ESC Feeding Phase (vibration → ramp) =====
+  if (escPhase != ESC_PHASE_IDLE && feedingActive) {
+    runESCFeedingPhase();
+  }
+  
+  // ===== Check ESC Auto-Stop (after ESC phase completes) =====
   checkESCAutoStop();
   
   // ===== Check Scheduled Feedings =====
@@ -771,20 +802,21 @@ void loop() {
     runStepperContinuous();
     
     // ESC ramp control (ONLY run ESC when NOT in weight-based mode)
-    // In weight-based mode, ESC starts AFTER NEMA17 stops
+    // In weight-based mode, ESC uses the phase state machine (vibration→ramp)
     if (!weightBasedFeeding) {
       unsigned long elapsed = millis() - escRampStartTime;
       if (elapsed < escRampDuration) {
-        // Ramp from 10% to target% over escRampDuration
+        // Ramp from 10% to target% over escRampDuration (capped at 34%)
         int escStart = 10;
-        int escRange = targetESCPercent - escStart;
+        int target = min(targetESCPercent, ESC_MAX_PERCENT);
+        int escRange = target - escStart;
         int newPercent = escStart + (escRange * elapsed / escRampDuration);
         if (newPercent != currentESCPercent) {
           setESCPercent(newPercent);
         }
-      } else if (currentESCPercent != targetESCPercent) {
-        // Ensure we're at target percent
-        setESCPercent(targetESCPercent);
+      } else if (currentESCPercent != min(targetESCPercent, ESC_MAX_PERCENT)) {
+        // Ensure we're at target percent (capped)
+        setESCPercent(min(targetESCPercent, ESC_MAX_PERCENT));
       }
     }
   }
@@ -985,31 +1017,87 @@ void checkWeightAndControl() {
     setStepperEnabled(false);
     weightBasedFeeding = false;
     
-    Serial.println("Starting ESC motor for distribution...");
+    Serial.println("Starting ESC vibration anti-jam phase...");
     
-    // Now start ESC motor with speed from potentiometer or default
-    int escSpeed = escSpeedFromPot > 0 ? escSpeedFromPot : 35;
-    setESCPercent(escSpeed);
+    // Start ESC feeding phase: vibration (4s) → ramp (6s)
+    escPhase = ESC_PHASE_VIBRATION;
+    escPhaseStartTime = millis();
+    setESCPercent(0);  // Start with ESC off, vibration logic handles pulses
+    
+    // Set target for ramp phase (capped at 34%)
+    int escSpeed = escSpeedFromPot > 0 ? min(escSpeedFromPot, ESC_MAX_PERCENT) : ESC_MAX_PERCENT;
     targetESCPercent = escSpeed;
-    escRampStartTime = millis();
     
-    // Enable ESC auto-stop monitoring
+    // Enable ESC auto-stop monitoring (will kick in after ramp phase)
     escAutoStopEnabled = true;
     escStopTimerStarted = false;
     
     // Update statistics
     totalGramsFed += currentWeight;
     
-    // feedingActive stays TRUE so ESC keeps running
-    // ESC will be controlled by normal feeding logic in loop()
+    // feedingActive stays TRUE so ESC phase runs
+    publishStatus("nema17_stopped_vibration_started");
     
-    // Publish status
-    publishStatus("nema17_stopped_esc_started");
-    
-    Serial.print("ESC running at ");
-    Serial.print(escSpeed);
-    Serial.println("% - Food distribution in progress");
+    Serial.println("Phase 1: Vibration anti-jam (4s) at 31% pulses");
+    Serial.println("Phase 2: Ramp 25% -> 34% (6s)");
     Serial.println("ESC will auto-stop 3 seconds after weight < 20g");
+  }
+}
+
+// ==================== NEW FUNCTION: ESC Feeding Phase State Machine ====================
+// Phase 1 (0-4s):  Vibration anti-jam — rapid ON/OFF pulses at 31% to shake stuck feed
+// Phase 2 (4-10s): Smooth ramp from 25% → 34% for distribution
+void runESCFeedingPhase() {
+  unsigned long elapsed = millis() - escPhaseStartTime;
+  
+  if (escPhase == ESC_PHASE_VIBRATION) {
+    // ── Phase 1: Vibration anti-jam (first 4 seconds) ──
+    if (elapsed < ESC_VIBRATION_DURATION) {
+      // Create rapid ON/OFF pulses to generate vibration without continuous rotation
+      unsigned long cycleTime = ESC_VIBRATION_ON_MS + ESC_VIBRATION_OFF_MS;  // ~200ms cycle
+      unsigned long cyclePos = elapsed % cycleTime;
+      
+      if (cyclePos < ESC_VIBRATION_ON_MS) {
+        // Pulse ON at 31% — enough to jolt but not spin continuously
+        if (currentESCPercent != ESC_VIBRATION_POWER) {
+          setESCPercent(ESC_VIBRATION_POWER);
+        }
+      } else {
+        // Pulse OFF — motor stops briefly, creating jerky vibration
+        if (currentESCPercent != 0) {
+          setESCPercent(0);
+        }
+      }
+    } else {
+      // Transition to ramp phase
+      Serial.println("Vibration phase complete → Starting ESC ramp phase");
+      escPhase = ESC_PHASE_RAMP;
+      escPhaseStartTime = millis();  // Reset timer for ramp phase
+      setESCPercent(25);  // Start ramp at 25%
+      publishStatus("esc_ramp_started");
+    }
+    
+  } else if (escPhase == ESC_PHASE_RAMP) {
+    // ── Phase 2: Smooth ramp 25% → 34% over 6 seconds ──
+    if (elapsed < ESC_RAMP_DURATION) {
+      int startPercent = 25;
+      int endPercent = min(targetESCPercent, ESC_MAX_PERCENT);  // Cap at 34%
+      int range = endPercent - startPercent;
+      int newPercent = startPercent + (int)((long)range * elapsed / ESC_RAMP_DURATION);
+      newPercent = constrain(newPercent, startPercent, endPercent);
+      
+      if (newPercent != currentESCPercent) {
+        setESCPercent(newPercent);
+      }
+    } else {
+      // Ramp complete — hold at max and let auto-stop handle shutdown
+      setESCPercent(min(targetESCPercent, ESC_MAX_PERCENT));
+      Serial.print("ESC ramp complete — holding at ");
+      Serial.print(currentESCPercent);
+      Serial.println("% until weight drops");
+      escPhase = ESC_PHASE_IDLE;  // Phase machine done, auto-stop takes over
+      publishStatus("esc_ramp_complete");
+    }
   }
 }
 
@@ -1017,6 +1105,9 @@ void checkWeightAndControl() {
 void checkESCAutoStop() {
   if (!escAutoStopEnabled) return;
   if (!feedingActive) return;
+  
+  // Don't auto-stop during vibration phase (weight hasn't dropped yet)
+  if (escPhase == ESC_PHASE_VIBRATION) return;
   
   // Check if weight has dropped below threshold
   if (currentWeight < weightThreshold) {
@@ -1033,11 +1124,12 @@ void checkESCAutoStop() {
         Serial.println("✓ ESC Auto-Stop: 3 seconds elapsed");
         Serial.println("Stopping ESC motor...");
         
-        // Stop ESC
+        // Stop ESC and reset phase
         setESCPercent(0);
         feedingActive = false;
         escAutoStopEnabled = false;
         escStopTimerStarted = false;
+        escPhase = ESC_PHASE_IDLE;
         
         Serial.println("Feeding cycle complete!");
         publishStatus("esc_auto_stopped");
