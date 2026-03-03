@@ -22,6 +22,7 @@ import FeedingSchedule from '../components/FeedingSchedule';
 import ManualFeeding from '../components/ManualFeeding';
 import FeedUsageLogs from '../components/FeedUsageLogs';
 import FeederHealthSafety from '../components/FeederHealthSafety';
+import FeedTankHistory from '../components/FeedTankHistory';
 import BudgetForecasting from '../components/BudgetForecasting';
 import PowerManagement from '../components/PowerManagement';
 import SystemStatus from '../components/SystemStatus';
@@ -119,6 +120,7 @@ const Dashboard: React.FC = () => {
             <Route path="/manual-feeding" element={<ManualFeeding />} />
             <Route path="/feed-usage-logs" element={<FeedUsageLogs />} />
             <Route path="/feeder-health-safety" element={<FeederHealthSafety />} />
+            <Route path="/feed-tank-history" element={<FeedTankHistory />} />
             <Route path="/expenditures" element={<Expenditures />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />

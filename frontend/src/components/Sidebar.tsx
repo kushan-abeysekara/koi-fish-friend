@@ -99,7 +99,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     location.pathname.includes('/feeding-schedule') || 
     location.pathname.includes('/manual-feeding') ||
     location.pathname.includes('/feed-usage-logs') ||
-    location.pathname.includes('/feeder-health-safety')
+    location.pathname.includes('/feeder-health-safety') ||
+    location.pathname.includes('/feed-tank-history')
   );
 
   const toggleBudgetMenu = () => {
@@ -266,7 +267,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
               location.pathname.includes('/feeding-schedule') ||
               location.pathname.includes('/manual-feeding') ||
               location.pathname.includes('/feed-usage-logs') ||
-              location.pathname.includes('/feeder-health-safety')
+              location.pathname.includes('/feeder-health-safety') ||
+              location.pathname.includes('/feed-tank-history')
                 ? 'bg-slate-700 text-white'
                 : 'text-gray-300 hover:bg-slate-700 hover:text-white'
             }`}
@@ -312,6 +314,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
                 label="Feeder Health & Safety"
                 path="/dashboard/feeder-health-safety"
                 active={location.pathname === '/dashboard/feeder-health-safety'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-chart-area"></i>}
+                label="Feed Tank History"
+                path="/dashboard/feed-tank-history"
+                active={location.pathname === '/dashboard/feed-tank-history'}
                 onNavigate={onClose}
               />
             </div>
