@@ -76,13 +76,36 @@ const FeedTankHistory: FC = () => {
           table: 'feeding_history',
           filter: `device_id=eq.${DEVICE_ID}`,
         }, (payload) => {
-          const row = payload.new as FeedingHistoryRow;
+          const r = payload.new as Record<string, unknown>;
+          // Normalise snake_case/camelCase from Supabase realtime payload
+          const row: FeedingHistoryRow = {
+            id: (r.id as number) ?? 0,
+            device_id: (r.device_id ?? r.deviceId ?? '') as string,
+            recorded_at: (r.recorded_at ?? r.recordedAt ?? '') as string,
+            status: (r.status ?? '') as string,
+            feeding_active: (r.feeding_active ?? r.feedingActive ?? false) as boolean,
+            hopper_level: (r.hopper_level ?? r.hopperLevel ?? 0) as number,
+            hopper_capacity: (r.hopper_capacity ?? r.hopperCapacity ?? 0) as number,
+            hopper_percentage: (r.hopper_percentage ?? r.hopperPercentage ?? 0) as number,
+            current_weight: (r.current_weight ?? r.currentWeight ?? 0) as number,
+            target_weight: (r.target_weight ?? r.targetWeight ?? 0) as number,
+            feed_count: (r.feed_count ?? r.feedCount ?? 0) as number,
+            total_grams_fed: (r.total_grams_fed ?? r.totalGramsFed ?? 0) as number,
+            motor_status: (r.motor_status ?? r.motorStatus ?? '') as string,
+            plate_speed: (r.plate_speed ?? r.plateSpeed ?? 0) as number,
+            esc_percent: (r.esc_percent ?? r.escPercent ?? 0) as number,
+            rssi: (r.rssi ?? null) as number | null,
+            ip_address: (r.ip_address ?? r.ipAddress ?? null) as string | null,
+            uptime_ms: (r.uptime_ms ?? r.uptimeMs ?? 0) as number,
+          };
           setHistoryData(prev => [...prev, row].slice(-5000));
           if (row.status === 'feeding_started' || row.status === 'feeding_stopped') {
             setFeedingEvents(prev => [...prev, row].slice(-500));
           }
         })
-        .subscribe();
+        .subscribe((status) => {
+          console.log('[Supabase RT] Tank history subscription:', status);
+        });
     } catch (err) {
       console.warn('[Supabase] Realtime subscription failed:', err);
     }

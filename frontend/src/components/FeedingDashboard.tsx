@@ -320,7 +320,9 @@ const FeedingDashboard: React.FC = () => {
     };
     loadHistory();
 
-    // Subscribe to real-time inserts on feeding_history
+    // Subscribe to real-time inserts on feeding_history (Supabase Realtime)
+    // This provides a SECONDARY live data channel for hopper level, weight, etc.
+    // Works independently of MQTT/WebSocket — data flows: ESP32 → MQTT → Backend → Supabase → Browser
     let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
     if (supabase) {
       try {
@@ -336,19 +338,74 @@ const FeedingDashboard: React.FC = () => {
             },
             (payload) => {
               if (!isMounted) return;
-              const newRow = payload.new as FeedingHistoryRow;
+              const r = payload.new as Record<string, unknown>;
+
+              // Normalise to FeedingHistoryRow (handles both snake_case and camelCase)
+              const newRow: FeedingHistoryRow = {
+                id: (r.id as number) ?? 0,
+                device_id: (r.device_id ?? r.deviceId ?? '') as string,
+                recorded_at: (r.recorded_at ?? r.recordedAt ?? '') as string,
+                status: (r.status ?? '') as string,
+                feeding_active: (r.feeding_active ?? r.feedingActive ?? false) as boolean,
+                hopper_level: (r.hopper_level ?? r.hopperLevel ?? 0) as number,
+                hopper_capacity: (r.hopper_capacity ?? r.hopperCapacity ?? 0) as number,
+                hopper_percentage: (r.hopper_percentage ?? r.hopperPercentage ?? 0) as number,
+                current_weight: (r.current_weight ?? r.currentWeight ?? 0) as number,
+                target_weight: (r.target_weight ?? r.targetWeight ?? 0) as number,
+                feed_count: (r.feed_count ?? r.feedCount ?? 0) as number,
+                total_grams_fed: (r.total_grams_fed ?? r.totalGramsFed ?? 0) as number,
+                motor_status: (r.motor_status ?? r.motorStatus ?? '') as string,
+                plate_speed: (r.plate_speed ?? r.plateSpeed ?? 0) as number,
+                esc_percent: (r.esc_percent ?? r.escPercent ?? 0) as number,
+                rssi: (r.rssi ?? null) as number | null,
+                ip_address: (r.ip_address ?? r.ipAddress ?? null) as string | null,
+                uptime_ms: (r.uptime_ms ?? r.uptimeMs ?? 0) as number,
+              };
+
+              // Append to history data
               setHistoryData(prev => {
                 const next = [...prev, newRow];
-                // Keep max 2000 rows in memory
                 return next.length > 2000 ? next.slice(-2000) : next;
               });
+
               // If it's a feeding event, add to events list
               if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
                 setHistoryEvents(prev => [...prev, newRow].slice(-100));
               }
+
+              // ─── ALSO update live device data from Supabase real-time ───
+              // This is the secondary channel: if WebSocket is down, hopper data
+              // still updates via Supabase Realtime (ESP32→MQTT→Backend→Supabase→Browser)
+              setDevice(prev => {
+                const updated: DeviceData = {
+                  ...prev,
+                  status: 'online',
+                  hopperLevel: newRow.hopper_level,
+                  hopperCapacity: newRow.hopper_capacity,
+                  hopperPercentage: newRow.hopper_percentage,
+                  currentWeight: newRow.current_weight,
+                  targetWeight: newRow.target_weight,
+                  feedCount: newRow.feed_count,
+                  totalGramsFed: newRow.total_grams_fed,
+                  motorStatus: newRow.motor_status || prev.motorStatus,
+                  plateSpeed: newRow.plate_speed,
+                  escPercent: newRow.esc_percent,
+                  rssi: newRow.rssi,
+                  ipAddress: newRow.ip_address,
+                  uptimeMs: newRow.uptime_ms,
+                  feedingActive: newRow.feeding_active,
+                  lastSeen: new Date().toISOString(),
+                };
+                cacheDevice(updated);
+                return updated;
+              });
+              setIsStale(false);
+              setLastMqttMsg(new Date()); // Treat Supabase RT as equivalent to WS msg for offline timer
             },
           )
-          .subscribe();
+          .subscribe((status) => {
+            console.log('[Supabase RT] Subscription status:', status);
+          });
       } catch (err) {
         console.warn('[Supabase] Realtime subscription failed:', err);
       }

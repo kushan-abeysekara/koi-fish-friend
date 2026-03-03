@@ -7,10 +7,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ExecutorService;
@@ -55,6 +59,7 @@ public class SupabaseService {
 
         httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
+                .sslContext(createTrustAllSSLContext())
                 .build();
 
         // Use a single-thread executor so inserts are sequential and non-blocking
@@ -219,5 +224,31 @@ public class SupabaseService {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    /**
+     * Create an SSLContext that trusts all certificates.
+     * Needed for self-hosted Supabase with self-signed/untrusted TLS certs.
+     */
+    private SSLContext createTrustAllSSLContext() {
+        try {
+            TrustManager[] trustAll = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, trustAll, new java.security.SecureRandom());
+            return sc;
+        } catch (Exception e) {
+            System.err.println("[Supabase] ⚠️ Failed to create trust-all SSL context: " + e.getMessage());
+            try {
+                return SSLContext.getDefault();
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        }
     }
 }
