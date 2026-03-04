@@ -339,9 +339,10 @@ public class FeedingController {
             Map<String, Object> result = supabaseService.createManualFeeding(deviceId, amount, unit, tankBefore);
 
             // Also send MQTT command to start feeding
-            String topic = "koi/pond/A/feed/command";
-            String payload = "{\"action\":\"start\",\"type\":\"manual\",\"targetWeight\":" + amount + "}";
-            mqttPublisher.publish(topic, payload);
+            Map<String, Object> commandData = new java.util.HashMap<>();
+            commandData.put("action", "start");
+            commandData.put("targetWeight", amount);
+            mqttService.sendFeedingCommand(deviceId, "feeding", commandData);
             System.out.println("[ManualFeed] ✅ Started: " + amount + unit + " from tank at " + tankBefore);
 
             Map<String, Object> response = new java.util.HashMap<>(result);
@@ -369,8 +370,9 @@ public class FeedingController {
             supabaseService.completeManualFeeding(feedingId, tankAfter, actualDispensed, durationMs);
 
             // Send stop command
-            String topic = "koi/pond/A/feed/command";
-            mqttPublisher.publish(topic, "{\"action\":\"stop\",\"type\":\"manual\"}");
+            Map<String, Object> commandData = new java.util.HashMap<>();
+            commandData.put("action", "stop");
+            mqttService.sendFeedingCommand("feed_device_001", "feeding", commandData);
 
             return ResponseEntity.ok(Map.of("status", "completed", "feedingId", feedingId));
         } catch (Exception e) {
@@ -392,8 +394,9 @@ public class FeedingController {
             supabaseService.cancelManualFeeding(feedingId, tankAfter);
 
             // Send stop command
-            String topic = "koi/pond/A/feed/command";
-            mqttPublisher.publish(topic, "{\"action\":\"stop\",\"type\":\"manual_cancel\"}");
+            Map<String, Object> commandData = new java.util.HashMap<>();
+            commandData.put("action", "stop");
+            mqttService.sendFeedingCommand("feed_device_001", "feeding", commandData);
 
             return ResponseEntity.ok(Map.of("status", "cancelled", "feedingId", feedingId));
         } catch (Exception e) {
