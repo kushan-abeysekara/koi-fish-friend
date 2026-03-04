@@ -4,6 +4,7 @@ import com.example.backend.dto.ApiResponse;
 import com.example.backend.entity.FeedingHistory;
 import com.example.backend.repository.FeedingHistoryRepository;
 import com.example.backend.service.MqttService;
+import com.example.backend.service.SupabaseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,9 @@ public class FeedingController {
 
     @Autowired
     private FeedingHistoryRepository feedingHistoryRepository;
+
+    @Autowired
+    private SupabaseService supabaseService;
 
     /**
      * Start feeding operation with weight-based control
@@ -225,84 +229,93 @@ public class FeedingController {
         }
     }
 
-    // ─── History endpoints (reads from MySQL, auto-created by JPA) ───
+    // ─── Supabase-backed endpoints (reads from Supabase via pg/query) ───
 
     /**
-     * Get feeding history for a device.
-     * Replaces direct Supabase queries from the browser.
+     * Get real-time device status from Supabase feeddb table.
+     * ESP32 writes directly to this table every 2 seconds.
+     */
+    @GetMapping("/device-status")
+    public ResponseEntity<Map<String, Object>> getDeviceStatusFromSupabase(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId) {
+        try {
+            Map<String, Object> status = supabaseService.getDeviceStatus(deviceId);
+            if (status.isEmpty()) {
+                status.put("status", "offline");
+                status.put("device_id", deviceId);
+            }
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of("status", "error", "message", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get weight history from Supabase weight_history table.
+     * Used for Live Weight Monitor and Hopper Level Trend charts.
      */
     @GetMapping("/history")
-    public ResponseEntity<List<FeedingHistory>> getFeedingHistory(
+    public ResponseEntity<List<Map<String, Object>>> getFeedingHistory(
             @RequestParam(defaultValue = "feed_device_001") String deviceId,
             @RequestParam(defaultValue = "24") int hours,
             @RequestParam(defaultValue = "2000") int limit) {
         try {
-            LocalDateTime since = LocalDateTime.now().minusHours(hours);
-            List<FeedingHistory> rows = feedingHistoryRepository
-                    .findByDeviceIdAndRecordedAtAfterOrderByRecordedAtAsc(deviceId, since);
-
-            // Apply limit
-            if (rows.size() > limit) {
-                rows = rows.subList(rows.size() - limit, rows.size());
-            }
-
+            List<Map<String, Object>> rows = supabaseService.getFeedingHistory(deviceId, hours, limit);
             return ResponseEntity.ok(rows);
         } catch (Exception e) {
-            System.err.println("[FeedingHistory] Error fetching history: " + e.getMessage());
+            System.err.println("[FeedingHistory] Error fetching from Supabase: " + e.getMessage());
             return ResponseEntity.ok(List.of());
         }
     }
 
     /**
-     * Get feeding events (start/stop transitions) for a device.
+     * Get feeding events (start/stop) from Supabase feeding_history table.
      */
     @GetMapping("/events")
-    public ResponseEntity<List<FeedingHistory>> getFeedingEvents(
+    public ResponseEntity<List<Map<String, Object>>> getFeedingEvents(
             @RequestParam(defaultValue = "feed_device_001") String deviceId,
             @RequestParam(defaultValue = "72") int hours,
             @RequestParam(defaultValue = "100") int limit) {
         try {
-            LocalDateTime since = LocalDateTime.now().minusHours(hours);
-            List<FeedingHistory> events = feedingHistoryRepository
-                    .findEventsByDeviceId(deviceId, since);
-
-            if (events.size() > limit) {
-                events = events.subList(events.size() - limit, events.size());
-            }
-
+            List<Map<String, Object>> events = supabaseService.getFeedingEvents(deviceId, hours, limit);
             return ResponseEntity.ok(events);
         } catch (Exception e) {
-            System.err.println("[FeedingHistory] Error fetching events: " + e.getMessage());
+            System.err.println("[FeedingHistory] Error fetching events from Supabase: " + e.getMessage());
             return ResponseEntity.ok(List.of());
         }
     }
 
     /**
-     * Get feeding stats summary for a device.
+     * Get feeding stats from Supabase.
      */
     @GetMapping("/stats")
     public ResponseEntity<Map<String, Object>> getFeedingStats(
             @RequestParam(defaultValue = "feed_device_001") String deviceId,
             @RequestParam(defaultValue = "24") int hours) {
         try {
-            LocalDateTime since = LocalDateTime.now().minusHours(hours);
-            long totalRecords = feedingHistoryRepository.countByDeviceIdAndRecordedAtAfter(deviceId, since);
-            List<FeedingHistory> events = feedingHistoryRepository.findEventsByDeviceId(deviceId, since);
-
-            long feedingSessions = events.stream()
-                    .filter(e -> "feeding_started".equals(e.getStatus()))
-                    .count();
-
-            Map<String, Object> stats = new HashMap<>();
+            Map<String, Object> stats = supabaseService.getFeedingStats(deviceId);
             stats.put("deviceId", deviceId);
             stats.put("hoursBack", hours);
-            stats.put("totalRecords", totalRecords);
-            stats.put("feedingSessions", feedingSessions);
-            stats.put("totalEvents", events.size());
-
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
             return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get weight history specifically for charts (Supabase weight_history table).
+     */
+    @GetMapping("/weight-history")
+    public ResponseEntity<List<Map<String, Object>>> getWeightHistory(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId,
+            @RequestParam(defaultValue = "24") int hours,
+            @RequestParam(defaultValue = "5000") int limit) {
+        try {
+            List<Map<String, Object>> rows = supabaseService.getWeightHistory(deviceId, hours, limit);
+            return ResponseEntity.ok(rows);
+        } catch (Exception e) {
+            System.err.println("[WeightHistory] Error fetching from Supabase: " + e.getMessage());
+            return ResponseEntity.ok(List.of());
         }
     }
 }

@@ -17,17 +17,30 @@ import java.net.http.HttpResponse;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Service that stores feeding device MQTT data into Supabase
- * for permanent historical storage.
+ * Service that reads/writes feeding device data from/to Supabase.
  *
- * The backend is always connected to MQTT (server-side),
- * so every status message is captured regardless of whether
- * any browser client is viewing the dashboard.
+ * Uses the pg/query endpoint for ALL operations because the self-hosted
+ * Supabase instance has a JWT secret mismatch that causes PostgREST
+ * (/rest/v1/) to return 401 for all keys.
+ *
+ * Tables:
+ *   - feeddb:           Real-time device status (ESP32 writes directly every 2s)
+ *   - feeding_history:  Feeding events (start/stop with tank diff)
+ *   - weight_history:   Continuous sensor readings for charts (every 10s)
+ *
+ * Architecture:
+ *   - ESP32 → Supabase directly (heavy continuous data)
+ *   - Backend → Supabase (backup writes + read API for frontend)
+ *   - MySQL: user details only
  */
 @Service
 public class SupabaseService {
@@ -42,7 +55,7 @@ public class SupabaseService {
     private boolean enabled;
 
     @Value("${supabase.throttle-ms:10000}")
-    private long throttleMs; // Minimum interval between inserts (default 10s)
+    private long throttleMs;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private HttpClient httpClient;
@@ -53,7 +66,7 @@ public class SupabaseService {
     public void init() {
         if (supabaseUrl == null || supabaseUrl.isBlank() || supabaseKey == null || supabaseKey.isBlank()) {
             enabled = false;
-            System.out.println("[Supabase] ⚠️ Supabase URL or key not configured. Historical storage disabled.");
+            System.out.println("[Supabase] ⚠️ URL or key not configured. Disabled.");
             return;
         }
 
@@ -62,7 +75,6 @@ public class SupabaseService {
                 .sslContext(createTrustAllSSLContext())
                 .build();
 
-        // Use a single-thread executor so inserts are sequential and non-blocking
         executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "supabase-writer");
             t.setDaemon(true);
@@ -70,137 +82,215 @@ public class SupabaseService {
         });
 
         System.out.println("[Supabase] ✅ Initialized - URL: " + supabaseUrl);
-        System.out.println("[Supabase] ✅ Throttle: " + throttleMs + "ms between inserts");
+        System.out.println("[Supabase] ✅ Using pg/query endpoint for all operations");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  pg/query SQL execution
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Execute a SQL query via the pg/query endpoint.
+     */
+    private String executePgQuery(String sql) throws Exception {
+        String url = supabaseUrl.replaceAll("/$", "") + "/pg/query";
+
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("query", sql);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json")
+                .header("apikey", supabaseKey)
+                .header("Authorization", "Bearer " + supabaseKey)
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+            return response.body();
+        } else {
+            throw new RuntimeException("pg/query HTTP " + response.statusCode() + ": " + response.body());
+        }
     }
 
     /**
-     * Store a feeding device status message to Supabase.
-     * Called from MqttService on every feeding device MQTT message.
-     * Throttled to avoid excessive writes (default: 1 insert per 10 seconds).
+     * Execute a SQL SELECT and return rows as list of maps.
+     */
+    public List<Map<String, Object>> queryRows(String sql) {
+        if (!enabled || httpClient == null) return new ArrayList<>();
+        try {
+            String body = executePgQuery(sql);
+            JsonNode arr = objectMapper.readTree(body);
+            List<Map<String, Object>> rows = new ArrayList<>();
+            if (arr.isArray()) {
+                for (JsonNode node : arr) {
+                    Map<String, Object> row = new HashMap<>();
+                    node.fields().forEachRemaining(e -> {
+                        if (e.getValue().isNumber()) row.put(e.getKey(), e.getValue().numberValue());
+                        else if (e.getValue().isBoolean()) row.put(e.getKey(), e.getValue().booleanValue());
+                        else if (e.getValue().isNull()) row.put(e.getKey(), null);
+                        else row.put(e.getKey(), e.getValue().asText());
+                    });
+                    rows.add(row);
+                }
+            }
+            return rows;
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Query error: " + e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  READ operations — Backend reads from Supabase for frontend
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Get real-time device status from feeddb table.
+     * ESP32 writes directly to this table every 2 seconds.
+     */
+    public Map<String, Object> getDeviceStatus(String deviceId) {
+        String sql = "SELECT * FROM feeddb WHERE device_id = '" + esc(deviceId) + "' LIMIT 1";
+        List<Map<String, Object>> rows = queryRows(sql);
+        return rows.isEmpty() ? new HashMap<>() : rows.get(0);
+    }
+
+    /**
+     * Get weight history from Supabase for charts/trends.
+     */
+    public List<Map<String, Object>> getWeightHistory(String deviceId, int hoursBack, int limit) {
+        String sql = "SELECT * FROM weight_history WHERE device_id = '" + esc(deviceId) + "' " +
+                "AND recorded_at > now() - interval '" + hoursBack + " hours' " +
+                "ORDER BY recorded_at ASC LIMIT " + limit;
+        return queryRows(sql);
+    }
+
+    /**
+     * Get feeding events (start/stop) from Supabase.
+     */
+    public List<Map<String, Object>> getFeedingEvents(String deviceId, int hoursBack, int limit) {
+        String sql = "SELECT * FROM feeding_history WHERE device_id = '" + esc(deviceId) + "' " +
+                "AND recorded_at > now() - interval '" + hoursBack + " hours' " +
+                "ORDER BY recorded_at ASC LIMIT " + limit;
+        return queryRows(sql);
+    }
+
+    /**
+     * Get all feeding_history rows (events + status snapshots) for chart data.
+     */
+    public List<Map<String, Object>> getFeedingHistory(String deviceId, int hoursBack, int limit) {
+        String sql = "SELECT * FROM weight_history WHERE device_id = '" + esc(deviceId) + "' " +
+                "AND recorded_at > now() - interval '" + hoursBack + " hours' " +
+                "ORDER BY recorded_at ASC LIMIT " + limit;
+        return queryRows(sql);
+    }
+
+    /**
+     * Get feeding stats from Supabase.
+     */
+    public Map<String, Object> getFeedingStats(String deviceId) {
+        String sql = "SELECT count(*) as total_events, " +
+                "count(CASE WHEN event_type = 'feeding_started' THEN 1 END) as start_count, " +
+                "count(CASE WHEN event_type = 'feeding_stopped' THEN 1 END) as stop_count, " +
+                "COALESCE(sum(total_feed), 0) as total_feed_dispensed, " +
+                "COALESCE(avg(total_feed), 0) as avg_feed_per_session, " +
+                "COALESCE(max(motor_max_speed), 0) as max_motor_speed " +
+                "FROM feeding_history WHERE device_id = '" + esc(deviceId) + "'";
+        List<Map<String, Object>> rows = queryRows(sql);
+        return rows.isEmpty() ? new HashMap<>() : rows.get(0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  WRITE operations — Backup path (ESP32 writes directly too)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Store feeding data to weight_history (throttled backup).
+     * ESP32 also writes directly every 10s — this is redundancy.
      */
     public void storeFeedingData(String deviceId, JsonNode mqttPayload) {
         if (!enabled || httpClient == null) return;
 
-        // Throttle: skip if less than throttleMs since last insert
         long now = System.currentTimeMillis();
         long last = lastInsertTime.get();
-        if (now - last < throttleMs) {
-            return; // Skip this message, too soon
-        }
-        if (!lastInsertTime.compareAndSet(last, now)) {
-            return; // Another thread won the CAS, skip
-        }
+        if (now - last < throttleMs) return;
+        if (!lastInsertTime.compareAndSet(last, now)) return;
 
-        // Build and submit async
         executor.submit(() -> {
             try {
-                ObjectNode row = objectMapper.createObjectNode();
-                row.put("device_id", deviceId);
-                row.put("recorded_at", Instant.now().toString());
+                double weight = getDoubleOrDefault(mqttPayload, "weight", 0);
+                double tankLevel = getDoubleOrDefault(mqttPayload, "hopperLevel", 0);
+                double tankPct = getDoubleOrDefault(mqttPayload, "hopperPercentage", 0);
+                double rpm = getDoubleOrDefault(mqttPayload, "plateSpeed", 0);
+                double escPct = getDoubleOrDefault(mqttPayload, "escPercent", 0);
+                String motorStatus = getTextOrDefault(mqttPayload, "motorStatus", "STOPPED");
+                boolean feedActive = getBoolOrDefault(mqttPayload, "feedingActive", false);
+                int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
 
-                // Map MQTT payload fields to table columns
-                row.put("status", getTextOrDefault(mqttPayload, "status", "online"));
-                row.put("feeding_active", getBoolOrDefault(mqttPayload, "feedingActive", false));
-                row.put("hopper_level", getDoubleOrDefault(mqttPayload, "hopperLevel", 0));
-                row.put("hopper_capacity", getDoubleOrDefault(mqttPayload, "hopperCapacity", 20000));
-                row.put("hopper_percentage", getDoubleOrDefault(mqttPayload, "hopperPercentage", 0));
-                row.put("current_weight", getDoubleOrDefault(mqttPayload, "weight", 0));
-                row.put("target_weight", getDoubleOrDefault(mqttPayload, "targetWeight", 0));
-                row.put("feed_count", getIntOrDefault(mqttPayload, "feedCount", 0));
-                row.put("total_grams_fed", getDoubleOrDefault(mqttPayload, "totalGrams", 0));
-                row.put("motor_status", getTextOrDefault(mqttPayload, "motorStatus", "STOPPED"));
-                row.put("plate_speed", getDoubleOrDefault(mqttPayload, "plateSpeed", 0));
-                row.put("esc_percent", getDoubleOrDefault(mqttPayload, "escPercent", 0));
-                row.put("uptime_ms", getLongOrDefault(mqttPayload, "uptimeMs", 0));
+                String sql = "INSERT INTO weight_history (device_id, weight, tank_level, tank_percentage, " +
+                        "motor_rpm, esc_percent, motor_status, feeding_active, rssi) VALUES ('" +
+                        esc(deviceId) + "', " + weight + ", " + tankLevel + ", " + tankPct + ", " +
+                        rpm + ", " + escPct + ", '" + esc(motorStatus) + "', " +
+                        feedActive + ", " + rssi + ")";
 
-                if (mqttPayload.has("rssi") && !mqttPayload.get("rssi").isNull()) {
-                    row.put("rssi", mqttPayload.get("rssi").asInt());
-                }
-                if (mqttPayload.has("ipAddress") && !mqttPayload.get("ipAddress").isNull()) {
-                    row.put("ip_address", mqttPayload.get("ipAddress").asText());
-                }
-
-                String body = objectMapper.writeValueAsString(row);
-
-                // POST to Supabase REST API
-                String url = supabaseUrl.replaceAll("/$", "") + "/rest/v1/feeding_history";
-
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .timeout(Duration.ofSeconds(10))
-                        .header("Content-Type", "application/json")
-                        .header("apikey", supabaseKey)
-                        .header("Authorization", "Bearer " + supabaseKey)
-                        .header("Prefer", "return=minimal")
-                        .POST(HttpRequest.BodyPublishers.ofString(body))
-                        .build();
-
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[Supabase] ✅ Feeding data stored for " + deviceId);
-                } else {
-                    System.err.println("[Supabase] ❌ Insert failed (HTTP " + response.statusCode() + "): " + response.body());
-                }
-
+                executePgQuery(sql);
+                System.out.println("[Supabase] ✅ Weight history stored for " + deviceId);
             } catch (Exception e) {
-                System.err.println("[Supabase] ❌ Error storing feeding data: " + e.getMessage());
+                System.err.println("[Supabase] ❌ Error storing data: " + e.getMessage());
             }
         });
     }
 
     /**
-     * Store a feeding event (feeding started/stopped) — always stored, not throttled.
+     * Store a feeding event (start/stop) — always stored, not throttled.
      */
     public void storeFeedingEvent(String deviceId, String eventType, JsonNode mqttPayload) {
         if (!enabled || httpClient == null) return;
 
         executor.submit(() -> {
             try {
-                ObjectNode row = objectMapper.createObjectNode();
-                row.put("device_id", deviceId);
-                row.put("recorded_at", Instant.now().toString());
-                row.put("status", eventType); // "feeding_started" or "feeding_stopped"
-                row.put("feeding_active", "feeding_started".equals(eventType));
-                row.put("hopper_level", getDoubleOrDefault(mqttPayload, "hopperLevel", 0));
-                row.put("hopper_capacity", getDoubleOrDefault(mqttPayload, "hopperCapacity", 20000));
-                row.put("hopper_percentage", getDoubleOrDefault(mqttPayload, "hopperPercentage", 0));
-                row.put("current_weight", getDoubleOrDefault(mqttPayload, "weight", 0));
-                row.put("target_weight", getDoubleOrDefault(mqttPayload, "targetWeight", 0));
-                row.put("feed_count", getIntOrDefault(mqttPayload, "feedCount", 0));
-                row.put("total_grams_fed", getDoubleOrDefault(mqttPayload, "totalGrams", 0));
-                row.put("motor_status", getTextOrDefault(mqttPayload, "motorStatus", "STOPPED"));
-                row.put("plate_speed", getDoubleOrDefault(mqttPayload, "plateSpeed", 0));
-                row.put("esc_percent", getDoubleOrDefault(mqttPayload, "escPercent", 0));
+                double tankLevel = getDoubleOrDefault(mqttPayload, "hopperLevel", 0);
+                double weight = getDoubleOrDefault(mqttPayload, "weight", 0);
+                double rpm = getDoubleOrDefault(mqttPayload, "plateSpeed", 0);
+                double escPct = getDoubleOrDefault(mqttPayload, "escPercent", 0);
+                int feedCount = getIntOrDefault(mqttPayload, "feedCount", 0);
+                double totalGrams = getDoubleOrDefault(mqttPayload, "totalGrams", 0);
+                double targetWt = getDoubleOrDefault(mqttPayload, "targetWeight", 0);
+                double tankCap = getDoubleOrDefault(mqttPayload, "hopperCapacity", 20000);
+                double tankPct = getDoubleOrDefault(mqttPayload, "hopperPercentage", 0);
+                String motorStatus = getTextOrDefault(mqttPayload, "motorStatus", "STOPPED");
+                int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
+                String ip = getTextOrDefault(mqttPayload, "ipAddress", "");
 
-                String body = objectMapper.writeValueAsString(row);
-                String url = supabaseUrl.replaceAll("/$", "") + "/rest/v1/feeding_history";
+                String sql = "INSERT INTO feeding_history (device_id, event_type, weight, tank_level, " +
+                        "tank_capacity, tank_percentage, motor_status, motor_rpm, esc_percent, " +
+                        "feeding_active, feed_count, total_grams_fed, target_weight, rssi, ip_address) " +
+                        "VALUES ('" + esc(deviceId) + "', '" + esc(eventType) + "', " +
+                        weight + ", " + tankLevel + ", " + tankCap + ", " + tankPct + ", '" +
+                        esc(motorStatus) + "', " + rpm + ", " + escPct + ", " +
+                        ("feeding_started".equals(eventType) ? "true" : "false") + ", " +
+                        feedCount + ", " + totalGrams + ", " + targetWt + ", " +
+                        rssi + ", '" + esc(ip) + "')";
 
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .timeout(Duration.ofSeconds(10))
-                        .header("Content-Type", "application/json")
-                        .header("apikey", supabaseKey)
-                        .header("Authorization", "Bearer " + supabaseKey)
-                        .header("Prefer", "return=minimal")
-                        .POST(HttpRequest.BodyPublishers.ofString(body))
-                        .build();
-
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    System.out.println("[Supabase] ✅ Feeding EVENT stored: " + eventType + " for " + deviceId);
-                } else {
-                    System.err.println("[Supabase] ❌ Event insert failed (HTTP " + response.statusCode() + "): " + response.body());
-                }
-
+                executePgQuery(sql);
+                System.out.println("[Supabase] ✅ Feeding EVENT stored: " + eventType + " for " + deviceId);
             } catch (Exception e) {
-                System.err.println("[Supabase] ❌ Error storing feeding event: " + e.getMessage());
+                System.err.println("[Supabase] ❌ Error storing event: " + e.getMessage());
             }
         });
     }
 
-    // ─── Helpers ───
+    // ═══════════════════════════════════════════════════════════════
+    //  Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    private String esc(String val) {
+        if (val == null) return "";
+        return val.replace("'", "''");
+    }
 
     private String getTextOrDefault(JsonNode node, String field, String defaultVal) {
         return node.has(field) && !node.get(field).isNull() ? node.get(field).asText() : defaultVal;
@@ -227,8 +317,7 @@ public class SupabaseService {
     }
 
     /**
-     * Create an SSLContext that trusts all certificates.
-     * Needed for self-hosted Supabase with self-signed/untrusted TLS certs.
+     * Trust-all SSL for self-hosted Supabase with self-signed/untrusted TLS certs.
      */
     private SSLContext createTrustAllSSLContext() {
         try {
@@ -243,12 +332,8 @@ public class SupabaseService {
             sc.init(null, trustAll, new java.security.SecureRandom());
             return sc;
         } catch (Exception e) {
-            System.err.println("[Supabase] ⚠️ Failed to create trust-all SSL context: " + e.getMessage());
-            try {
-                return SSLContext.getDefault();
-            } catch (Exception ex) {
-                throw new RuntimeException(ex);
-            }
+            System.err.println("[Supabase] ⚠️ Failed to create trust-all SSL: " + e.getMessage());
+            try { return SSLContext.getDefault(); } catch (Exception ex) { throw new RuntimeException(ex); }
         }
     }
 }

@@ -22,6 +22,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <time.h>
 
 // WiFi Credentials
@@ -40,6 +41,22 @@ String scheduleTopic = "koi/devices/" + String(device_id) + "/feeding/schedule";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+// ─── Supabase Direct HTTP Configuration ───
+// ESP32 sends sensor data directly to Supabase (faster than MQTT for heavy data)
+const char* supabase_url = "http://superbase.koifishfriend.online/pg/query";
+const char* supabase_rest_url = "http://superbase.koifishfriend.online/rest/v1";
+const char* supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY";
+const char* supabase_service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q";
+unsigned long lastSupabaseUpdate = 0;
+const unsigned long supabaseUpdateInterval = 2000;  // Update feeddb every 2 seconds
+unsigned long lastWeightHistoryInsert = 0;
+const unsigned long weightHistoryInterval = 10000;  // Insert weight_history every 10 seconds
+
+// Feeding event tracking for Supabase
+float tankLevelBeforeFeeding = 0.0;  // Tank level when feeding started
+unsigned long feedingStartTime = 0;   // millis() when feeding started
+float maxEscDuringFeeding = 0.0;      // Max ESC speed during feeding session
 
 // OLED Display Configuration
 #define SCREEN_WIDTH 128
@@ -205,6 +222,12 @@ void readESCSpeedFromPotentiometer();
 void startWeightBasedFeeding(float targetGrams);
 void checkWeightAndControl();
 void runESCFeedingPhase();
+
+// Supabase direct HTTP functions
+void updateSupabaseFeeddb();
+void insertWeightHistory();
+void logFeedingEventToSupabase(String eventType);
+void executeSupabaseQuery(String sql);
 
 // Convert microseconds to duty (ESC)
 uint32_t usToDuty(int us) {
@@ -411,6 +434,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         escRampStartTime = millis();
         
         publishStatus("feeding_started");
+        logFeedingEventToSupabase("feeding_started");  // Log to Supabase directly
       }
       
     } else if (action == "stop") {
@@ -431,6 +455,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       Serial.println("Motor sleep mode activated (Pin 12 LOW)");
       
       publishStatus("feeding_stopped");
+      logFeedingEventToSupabase("feeding_stopped");  // Log to Supabase directly
       
     } else if (action == "status") {
       publishStatus("status_report");
@@ -830,6 +855,12 @@ void loop() {
     lastMqttPublish = millis();
   }
   
+  // ===== Supabase Direct Data Push (replaces MQTT for heavy sensor data) =====
+  // feeddb: UPSERT every 2 seconds (real-time device status)
+  updateSupabaseFeeddb();
+  // weight_history: INSERT every 10 seconds (continuous readings for charts)
+  insertWeightHistory();
+  
   // ===== Update OLED Display =====
   if (millis() - lastDisplayUpdate > displayUpdateInterval) {
     updateDisplay();
@@ -990,6 +1021,7 @@ void startWeightBasedFeeding(float targetGrams) {
   Serial.println("ESC will start after target weight reached");
   
   publishStatus("weight_feeding_started");
+  logFeedingEventToSupabase("feeding_started");  // Log to Supabase directly
 }
 
 // ==================== NEW FUNCTION: Check Weight and Stop ====================
@@ -1100,6 +1132,7 @@ void runESCFeedingPhase() {
       
       Serial.println("Feeding cycle complete!");
       publishStatus("esc_sequence_complete");
+      logFeedingEventToSupabase("feeding_stopped");  // Log to Supabase directly
     }
   }
 }
@@ -1136,6 +1169,7 @@ void checkESCAutoStop() {
         
         Serial.println("Feeding cycle complete!");
         publishStatus("esc_auto_stopped");
+        logFeedingEventToSupabase("feeding_stopped");  // Log to Supabase directly
       }
     }
   } else {
@@ -1145,4 +1179,174 @@ void checkESCAutoStop() {
       Serial.println("Weight increased - ESC stop timer reset");
     }
   }
+}
+
+// ==================== SUPABASE DIRECT HTTP FUNCTIONS ====================
+// ESP32 sends sensor data directly to Supabase (bypasses MQTT for heavy data)
+// This is faster and more reliable for continuous sensor readings
+
+/**
+ * Execute a SQL query on Supabase via the pg/query endpoint.
+ * Uses service_role key for full write access.
+ */
+void executeSupabaseQuery(String sql) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  HTTPClient http;
+  http.begin(supabase_url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", supabase_service_key);
+  http.addHeader("Authorization", String("Bearer ") + supabase_service_key);
+  http.setTimeout(5000);
+  
+  // Build JSON body with the SQL query
+  StaticJsonDocument<1024> doc;
+  doc["query"] = sql;
+  String body;
+  serializeJson(doc, body);
+  
+  int httpCode = http.POST(body);
+  if (httpCode == 200) {
+    Serial.println("[Supabase] ✅ Query OK");
+  } else {
+    Serial.print("[Supabase] ❌ HTTP ");
+    Serial.print(httpCode);
+    Serial.print(": ");
+    Serial.println(http.getString().substring(0, 200));
+  }
+  http.end();
+}
+
+/**
+ * UPSERT current device status into Supabase 'feeddb' table.
+ * Called every 2 seconds — provides real-time device data to dashboard.
+ * This replaces MQTT as the primary data channel for sensor readings.
+ */
+void updateSupabaseFeeddb() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (millis() - lastSupabaseUpdate < supabaseUpdateInterval) return;
+  lastSupabaseUpdate = millis();
+  
+  float hopperPct = (totalTankWeight / maxTankCapacity) * 100.0;
+  float rpm = calculateStepperRPM(stepperSpeed);
+  String motorSt = stepperActive ? "RUNNING" : "STOPPED";
+  String devTime = getCurrentTime();
+  
+  // Build UPSERT SQL
+  String sql = "INSERT INTO feeddb (device_id, weight, tank_level, tank_capacity, tank_percentage, "
+               "motor_status, motor_rpm, esc_percent, feeding_active, feed_count, "
+               "total_grams_fed, target_weight, rssi, ip_address, uptime_ms, device_time, updated_at) "
+               "VALUES ('" + String(device_id) + "', " + 
+               String(currentWeight, 2) + ", " +
+               String(totalTankWeight, 2) + ", " +
+               String(maxTankCapacity, 0) + ", " +
+               String(hopperPct, 2) + ", '" +
+               motorSt + "', " +
+               String(rpm, 1) + ", " +
+               String(currentESCPercent) + ", " +
+               String(feedingActive ? "true" : "false") + ", " +
+               String(feedCount) + ", " +
+               String(totalGramsFed, 2) + ", " +
+               String(targetWeight, 2) + ", " +
+               String(WiFi.RSSI()) + ", '" +
+               WiFi.localIP().toString() + "', " +
+               String(millis()) + ", '" +
+               devTime + "', now()) "
+               "ON CONFLICT (device_id) DO UPDATE SET "
+               "weight = EXCLUDED.weight, tank_level = EXCLUDED.tank_level, "
+               "tank_capacity = EXCLUDED.tank_capacity, tank_percentage = EXCLUDED.tank_percentage, "
+               "motor_status = EXCLUDED.motor_status, motor_rpm = EXCLUDED.motor_rpm, "
+               "esc_percent = EXCLUDED.esc_percent, feeding_active = EXCLUDED.feeding_active, "
+               "feed_count = EXCLUDED.feed_count, total_grams_fed = EXCLUDED.total_grams_fed, "
+               "target_weight = EXCLUDED.target_weight, rssi = EXCLUDED.rssi, "
+               "ip_address = EXCLUDED.ip_address, uptime_ms = EXCLUDED.uptime_ms, "
+               "device_time = EXCLUDED.device_time, updated_at = now()";
+  
+  executeSupabaseQuery(sql);
+  
+  // Track max ESC during feeding
+  if (feedingActive && currentESCPercent > maxEscDuringFeeding) {
+    maxEscDuringFeeding = currentESCPercent;
+  }
+}
+
+/**
+ * INSERT a row into Supabase 'weight_history' table.
+ * Called every 10 seconds — continuous sensor readings for charts/trends.
+ */
+void insertWeightHistory() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (millis() - lastWeightHistoryInsert < weightHistoryInterval) return;
+  lastWeightHistoryInsert = millis();
+  
+  float hopperPct = (totalTankWeight / maxTankCapacity) * 100.0;
+  float rpm = calculateStepperRPM(stepperSpeed);
+  String motorSt = stepperActive ? "RUNNING" : "STOPPED";
+  
+  String sql = "INSERT INTO weight_history (device_id, weight, tank_level, tank_percentage, "
+               "motor_rpm, esc_percent, motor_status, feeding_active, rssi) VALUES ('" +
+               String(device_id) + "', " +
+               String(currentWeight, 2) + ", " +
+               String(totalTankWeight, 2) + ", " +
+               String(hopperPct, 2) + ", " +
+               String(rpm, 1) + ", " +
+               String(currentESCPercent) + ", '" +
+               motorSt + "', " +
+               String(feedingActive ? "true" : "false") + ", " +
+               String(WiFi.RSSI()) + ")";
+  
+  executeSupabaseQuery(sql);
+}
+
+/**
+ * Log a feeding event (start/stop) to Supabase 'feeding_history' table.
+ * Records tank level before/after, total feed dispensed, motor max speed, duration.
+ */
+void logFeedingEventToSupabase(String eventType) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  float totalFeed = 0.0;
+  unsigned long duration = 0;
+  float hopperPct = (totalTankWeight / maxTankCapacity) * 100.0;
+  float rpm = calculateStepperRPM(stepperSpeed);
+  String motorSt = stepperActive ? "RUNNING" : "STOPPED";
+  
+  if (eventType == "feeding_started") {
+    tankLevelBeforeFeeding = totalTankWeight;
+    feedingStartTime = millis();
+    maxEscDuringFeeding = currentESCPercent;
+  } else if (eventType == "feeding_stopped") {
+    totalFeed = tankLevelBeforeFeeding - totalTankWeight;
+    if (totalFeed < 0) totalFeed = 0;  // Sanity check
+    duration = millis() - feedingStartTime;
+  }
+  
+  String sql = "INSERT INTO feeding_history (device_id, event_type, tank_before, tank_after, "
+               "total_feed, motor_max_speed, weight, tank_level, tank_capacity, tank_percentage, "
+               "motor_status, motor_rpm, esc_percent, feeding_active, feed_count, "
+               "total_grams_fed, target_weight, rssi, ip_address, uptime_ms, duration_ms) VALUES ('" +
+               String(device_id) + "', '" + eventType + "', " +
+               String(tankLevelBeforeFeeding, 2) + ", " +
+               String(totalTankWeight, 2) + ", " +
+               String(totalFeed, 2) + ", " +
+               String(maxEscDuringFeeding, 1) + ", " +
+               String(currentWeight, 2) + ", " +
+               String(totalTankWeight, 2) + ", " +
+               String(maxTankCapacity, 0) + ", " +
+               String(hopperPct, 2) + ", '" +
+               motorSt + "', " +
+               String(rpm, 1) + ", " +
+               String(currentESCPercent) + ", " +
+               String(feedingActive ? "true" : "false") + ", " +
+               String(feedCount) + ", " +
+               String(totalGramsFed, 2) + ", " +
+               String(targetWeight, 2) + ", " +
+               String(WiFi.RSSI()) + ", '" +
+               WiFi.localIP().toString() + "', " +
+               String(millis()) + ", " +
+               String(duration) + ")";
+  
+  executeSupabaseQuery(sql);
+  Serial.print("[Supabase] Feeding event: ");
+  Serial.println(eventType);
 }

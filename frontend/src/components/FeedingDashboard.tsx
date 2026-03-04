@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
-import { supabase, fetchFeedingHistory, fetchFeedingEvents, type FeedingHistoryRow } from '../services/supabase';
+import { supabase, fetchFeedingHistory, fetchFeedingEvents, fetchDeviceStatus, type FeedingHistoryRow } from '../services/supabase';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, BarChart, Bar, Cell, LineChart, Line
@@ -285,12 +285,46 @@ const FeedingDashboard: React.FC = () => {
   }, [fetchDeviceFromRest]);
 
   // REST polling fallback — poll every 5s when WebSocket not receiving messages
+  // Also polls from Supabase feeddb table (ESP32 writes directly every 2s)
   useEffect(() => {
-    const pollInterval = setInterval(() => {
+    const pollInterval = setInterval(async () => {
       // Only poll if WebSocket hasn't delivered a message in the last 8 seconds
       const now = Date.now();
       const lastMsg = lastMqttMsg ? lastMqttMsg.getTime() : 0;
       if (now - lastMsg > 8000) {
+        // First try Supabase feeddb (ESP32 writes directly — most up-to-date)
+        try {
+          const fbData = await fetchDeviceStatus(DEVICE_ID);
+          if (fbData && fbData.device_id) {
+            setDevice(prev => {
+              const updated: DeviceData = {
+                ...prev,
+                status: 'online',
+                currentWeight: fbData.weight ?? prev.currentWeight,
+                hopperLevel: fbData.tank_level ?? prev.hopperLevel,
+                hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
+                hopperPercentage: fbData.tank_percentage ?? prev.hopperPercentage,
+                motorStatus: fbData.motor_status || prev.motorStatus,
+                plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
+                escPercent: fbData.esc_percent ?? prev.escPercent,
+                feedingActive: fbData.feeding_active ?? prev.feedingActive,
+                feedCount: fbData.feed_count ?? prev.feedCount,
+                totalGramsFed: fbData.total_grams_fed ?? prev.totalGramsFed,
+                targetWeight: fbData.target_weight ?? prev.targetWeight,
+                rssi: fbData.rssi ?? prev.rssi,
+                ipAddress: fbData.ip_address || prev.ipAddress,
+                uptimeMs: fbData.uptime_ms ?? prev.uptimeMs,
+                lastSeen: fbData.updated_at || prev.lastSeen,
+              };
+              cacheDevice(updated);
+              return updated;
+            });
+            setIsStale(false);
+            return; // Supabase feeddb was sufficient
+          }
+        } catch { /* Supabase feeddb unavailable, fall through to REST */ }
+
+        // Fallback: use backend REST API (which reads from MQTT cache)
         fetchDeviceFromRest();
       }
     }, 5000);
@@ -320,13 +354,73 @@ const FeedingDashboard: React.FC = () => {
     };
     loadHistory();
 
-    // Subscribe to real-time inserts on feeding_history (Supabase Realtime)
-    // This provides a SECONDARY live data channel for hopper level, weight, etc.
-    // Works independently of MQTT/WebSocket — data flows: ESP32 → MQTT → Backend → Supabase → Browser
-    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    // Subscribe to real-time changes on Supabase tables
+    // feeddb: ESP32 writes DIRECTLY every 2s (UPDATE events — primary live data)
+    // feeding_history: Feeding events (INSERT — start/stop transitions)
+    let feeddbChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    let historyChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
     if (supabase) {
       try {
-        channel = supabase
+        // ─── feeddb real-time: Live device status (ESP32 → Supabase → Browser) ───
+        feeddbChannel = supabase
+          .channel('feeddb_realtime')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',  // INSERT or UPDATE (ESP32 does UPSERT)
+              schema: 'public',
+              table: 'feeddb',
+              filter: `device_id=eq.${DEVICE_ID}`,
+            },
+            (payload) => {
+              if (!isMounted) return;
+              const r = payload.new as Record<string, unknown>;
+
+              // Update live device data from feeddb real-time
+              setDevice(prev => {
+                const updated: DeviceData = {
+                  ...prev,
+                  status: 'online',
+                  currentWeight: (r.weight as number) ?? prev.currentWeight,
+                  hopperLevel: (r.tank_level as number) ?? prev.hopperLevel,
+                  hopperCapacity: (r.tank_capacity as number) ?? prev.hopperCapacity ?? 20000,
+                  hopperPercentage: (r.tank_percentage as number) ?? prev.hopperPercentage,
+                  motorStatus: (r.motor_status as string) || prev.motorStatus,
+                  plateSpeed: (r.motor_rpm as number) ?? prev.plateSpeed,
+                  escPercent: (r.esc_percent as number) ?? prev.escPercent,
+                  feedingActive: (r.feeding_active as boolean) ?? prev.feedingActive,
+                  feedCount: (r.feed_count as number) ?? prev.feedCount,
+                  totalGramsFed: (r.total_grams_fed as number) ?? prev.totalGramsFed,
+                  targetWeight: (r.target_weight as number) ?? prev.targetWeight,
+                  rssi: (r.rssi as number) ?? prev.rssi,
+                  ipAddress: (r.ip_address as string) || prev.ipAddress,
+                  uptimeMs: (r.uptime_ms as number) ?? prev.uptimeMs,
+                  lastSeen: new Date().toISOString(),
+                };
+                cacheDevice(updated);
+                return updated;
+              });
+              setIsStale(false);
+              setLastMqttMsg(new Date());
+
+              // Also add to weight history chart
+              const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+              setWeightHistory(prev => {
+                const next = [...prev, {
+                  time: timeStr,
+                  weight: (r.weight as number) ?? 0,
+                  hopper: ((r.tank_level as number) ?? 0) / 1000,
+                }];
+                return next.slice(-60);
+              });
+            },
+          )
+          .subscribe((status) => {
+            console.log('[Supabase RT] feeddb subscription status:', status);
+          });
+
+        // ─── feeding_history real-time: Event tracking ───
+        historyChannel = supabase
           .channel('feeding_history_realtime')
           .on(
             'postgres_changes',
@@ -340,71 +434,35 @@ const FeedingDashboard: React.FC = () => {
               if (!isMounted) return;
               const r = payload.new as Record<string, unknown>;
 
-              // Normalise to FeedingHistoryRow (handles both snake_case and camelCase)
               const newRow: FeedingHistoryRow = {
                 id: (r.id as number) ?? 0,
-                device_id: (r.device_id ?? r.deviceId ?? '') as string,
-                recorded_at: (r.recorded_at ?? r.recordedAt ?? '') as string,
-                status: (r.status ?? '') as string,
-                feeding_active: (r.feeding_active ?? r.feedingActive ?? false) as boolean,
-                hopper_level: (r.hopper_level ?? r.hopperLevel ?? 0) as number,
-                hopper_capacity: (r.hopper_capacity ?? r.hopperCapacity ?? 0) as number,
-                hopper_percentage: (r.hopper_percentage ?? r.hopperPercentage ?? 0) as number,
-                current_weight: (r.current_weight ?? r.currentWeight ?? 0) as number,
-                target_weight: (r.target_weight ?? r.targetWeight ?? 0) as number,
-                feed_count: (r.feed_count ?? r.feedCount ?? 0) as number,
-                total_grams_fed: (r.total_grams_fed ?? r.totalGramsFed ?? 0) as number,
-                motor_status: (r.motor_status ?? r.motorStatus ?? '') as string,
-                plate_speed: (r.plate_speed ?? r.plateSpeed ?? 0) as number,
-                esc_percent: (r.esc_percent ?? r.escPercent ?? 0) as number,
+                device_id: (r.device_id ?? '') as string,
+                recorded_at: (r.recorded_at ?? '') as string,
+                status: (r.event_type ?? r.status ?? '') as string,
+                feeding_active: (r.feeding_active ?? false) as boolean,
+                hopper_level: (r.tank_level ?? 0) as number,
+                hopper_capacity: (r.tank_capacity ?? 20000) as number,
+                hopper_percentage: (r.tank_percentage ?? 0) as number,
+                current_weight: (r.weight ?? 0) as number,
+                target_weight: (r.target_weight ?? 0) as number,
+                feed_count: (r.feed_count ?? 0) as number,
+                total_grams_fed: (r.total_grams_fed ?? 0) as number,
+                motor_status: (r.motor_status ?? '') as string,
+                plate_speed: (r.motor_rpm ?? 0) as number,
+                esc_percent: (r.esc_percent ?? 0) as number,
                 rssi: (r.rssi ?? null) as number | null,
-                ip_address: (r.ip_address ?? r.ipAddress ?? null) as string | null,
-                uptime_ms: (r.uptime_ms ?? r.uptimeMs ?? 0) as number,
+                ip_address: (r.ip_address ?? null) as string | null,
+                uptime_ms: 0,
               };
-
-              // Append to history data
-              setHistoryData(prev => {
-                const next = [...prev, newRow];
-                return next.length > 2000 ? next.slice(-2000) : next;
-              });
 
               // If it's a feeding event, add to events list
               if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
                 setHistoryEvents(prev => [...prev, newRow].slice(-100));
               }
-
-              // ─── ALSO update live device data from Supabase real-time ───
-              // This is the secondary channel: if WebSocket is down, hopper data
-              // still updates via Supabase Realtime (ESP32→MQTT→Backend→Supabase→Browser)
-              setDevice(prev => {
-                const updated: DeviceData = {
-                  ...prev,
-                  status: 'online',
-                  hopperLevel: newRow.hopper_level,
-                  hopperCapacity: newRow.hopper_capacity,
-                  hopperPercentage: newRow.hopper_percentage,
-                  currentWeight: newRow.current_weight,
-                  targetWeight: newRow.target_weight,
-                  feedCount: newRow.feed_count,
-                  totalGramsFed: newRow.total_grams_fed,
-                  motorStatus: newRow.motor_status || prev.motorStatus,
-                  plateSpeed: newRow.plate_speed,
-                  escPercent: newRow.esc_percent,
-                  rssi: newRow.rssi,
-                  ipAddress: newRow.ip_address,
-                  uptimeMs: newRow.uptime_ms,
-                  feedingActive: newRow.feeding_active,
-                  lastSeen: new Date().toISOString(),
-                };
-                cacheDevice(updated);
-                return updated;
-              });
-              setIsStale(false);
-              setLastMqttMsg(new Date()); // Treat Supabase RT as equivalent to WS msg for offline timer
             },
           )
           .subscribe((status) => {
-            console.log('[Supabase RT] Subscription status:', status);
+            console.log('[Supabase RT] feeding_history subscription status:', status);
           });
       } catch (err) {
         console.warn('[Supabase] Realtime subscription failed:', err);
@@ -413,7 +471,8 @@ const FeedingDashboard: React.FC = () => {
 
     return () => {
       isMounted = false;
-      if (channel && supabase) supabase.removeChannel(channel);
+      if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
+      if (historyChannel && supabase) supabase.removeChannel(historyChannel);
     };
   }, [historyRange]);
 
