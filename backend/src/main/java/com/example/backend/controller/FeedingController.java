@@ -251,9 +251,9 @@ public class FeedingController {
             }
             SensorDevice dev = optDevice.get();
 
-            // Staleness check: if last_seen is > 15s ago, device is offline
+            // Staleness check: if last_seen is > 10s ago, device is offline
             boolean isOnline = dev.getLastSeen() != null &&
-                    dev.getLastSeen().isAfter(LocalDateTime.now().minusSeconds(15));
+                    dev.getLastSeen().isAfter(LocalDateTime.now().minusSeconds(10));
 
             // Map MySQL fields to the same JSON keys the frontend expects (feeddb schema)
             Map<String, Object> status = new HashMap<>();

@@ -64,20 +64,15 @@ const INITIAL_DEVICE: DeviceData = {
 // Cache key for persisting last known device data
 const DEVICE_CACHE_KEY = 'feedingDashboard_lastDevice';
 
-// ─── Smooth Value Filter (EMA + spike rejection) ───
-// Fast alpha (0.5) = responds within 2-3 polls.
-// Spikes > `maxDelta` are IGNORED (not followed) unless 3 consecutive → real change.
+// ─── Smooth Value Filter (fast EMA only, hard-clamps handle impossible values) ───
+// Alpha 0.8 = responds within 1-2 polls (~2-4s). No spike rejection — hard clamps are enough.
 class SmoothValue {
-  private value: number;
+  private value = 0;
   private alpha: number;
-  private maxDelta: number;
   private initialized = false;
-  private spikeCount = 0;
 
-  constructor(alpha = 0.5, maxDelta = Infinity) {
-    this.value = 0;
+  constructor(alpha = 0.8) {
     this.alpha = alpha;
-    this.maxDelta = maxDelta;
   }
 
   update(raw: number): number {
@@ -86,25 +81,12 @@ class SmoothValue {
       this.initialized = true;
       return raw;
     }
-    const delta = Math.abs(raw - this.value);
-    if (delta > this.maxDelta) {
-      // Possible sensor spike — ignore unless 3+ consecutive = real change
-      this.spikeCount++;
-      if (this.spikeCount >= 3) {
-        // Sustained new level — accept it
-        this.value = raw;
-        this.spikeCount = 0;
-      }
-      return this.value;
-    }
-    // Normal reading — apply EMA
-    this.spikeCount = 0;
     this.value = this.value + this.alpha * (raw - this.value);
     return this.value;
   }
 
   get() { return this.value; }
-  reset() { this.initialized = false; this.value = 0; this.spikeCount = 0; }
+  reset() { this.initialized = false; this.value = 0; }
 }
 
 function loadCachedDevice(): DeviceData {
@@ -140,10 +122,15 @@ const FeedingDashboard: React.FC = () => {
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
 
-  // ─── EMA smoothers (fast alpha=0.5, spike rejection ignores impossible jumps) ───
-  const smoothHopper = useRef(new SmoothValue(0.5, 3000));  // reject spikes > 3kg
-  const smoothWeight = useRef(new SmoothValue(0.5, 500));   // reject spikes > 500g
-  const smoothPct = useRef(new SmoothValue(0.5, 20));       // reject spikes > 20%
+  // Client-side staleness tracking: if updated_at stops changing, device is offline
+  const lastUpdatedAtRef = useRef<string>('');
+  const staleCountRef = useRef(0);
+  const STALE_THRESHOLD = 5; // 5 polls × 2s = 10s without new data → offline
+
+  // ─── EMA smoothers (alpha=0.8, no spike rejection — hard clamps handle impossible values) ───
+  const smoothHopper = useRef(new SmoothValue(0.8));
+  const smoothWeight = useRef(new SmoothValue(0.8));
+  const smoothPct = useRef(new SmoothValue(0.8));
 
   const isOnline = device.status !== 'offline';
   // Show values if online OR if we have cached stale data
@@ -160,8 +147,18 @@ const FeedingDashboard: React.FC = () => {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
         if (!isMounted) return;
         if (fbData && fbData.device_id) {
-          // Backend now returns status='offline' if last_seen > 15s ago
-          const deviceIsOnline = fbData.status === 'online';
+          // Client-side staleness: track if updated_at changes between polls
+          const currentUpdatedAt = fbData.updated_at || '';
+          if (currentUpdatedAt && currentUpdatedAt !== lastUpdatedAtRef.current) {
+            lastUpdatedAtRef.current = currentUpdatedAt;
+            staleCountRef.current = 0;
+          } else {
+            staleCountRef.current++;
+          }
+          // Device is online only if BOTH backend says online AND data is fresh
+          const backendSaysOnline = fbData.status === 'online';
+          const dataIsFresh = staleCountRef.current < STALE_THRESHOLD;
+          const deviceIsOnline = backendSaysOnline && dataIsFresh;
 
           const cap = fbData.tank_capacity ?? 20000;
           // Smooth + hard-clamp: hopper ≤ capacity, weight ≤ 20 kg, pct 0-100

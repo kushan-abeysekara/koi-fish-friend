@@ -8,23 +8,14 @@ import {
 } from '../services/supabase';
 import type { FeeddbRow, ManualFeedingRow } from '../services/supabase';
 
-/* ─── EMA Smoother (matches FeedingDashboard) ─── */
+/* ─── EMA Smoother (matches FeedingDashboard — fast alpha, no spike rejection) ─── */
 class SmoothValue {
   private value = 0;
   private alpha: number;
-  private maxDelta: number;
   private initialized = false;
-  private spikeCount = 0;
-  constructor(alpha = 0.5, maxDelta = Infinity) { this.alpha = alpha; this.maxDelta = maxDelta; }
+  constructor(alpha = 0.8) { this.alpha = alpha; }
   update(raw: number): number {
     if (!this.initialized || !isFinite(this.value)) { this.value = raw; this.initialized = true; return raw; }
-    const delta = Math.abs(raw - this.value);
-    if (delta > this.maxDelta) {
-      this.spikeCount++;
-      if (this.spikeCount >= 3) { this.value = raw; this.spikeCount = 0; }
-      return this.value;
-    }
-    this.spikeCount = 0;
     this.value += this.alpha * (raw - this.value);
     return this.value;
   }
@@ -123,9 +114,14 @@ const ManualFeeding: React.FC = () => {
 
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // EMA smoothers for stable display (tank_level in kg, capacity in kg)
-  const smoothLevel = useRef(new SmoothValue(0.5, 3));   // reject spikes > 3 kg
-  const smoothCap = useRef(new SmoothValue(0.5, 5));     // reject spikes > 5 kg
+  // Client-side staleness tracking: if updated_at stops changing, device is offline
+  const lastUpdatedAtRef = useRef<string>('');
+  const staleCountRef = useRef(0);
+  const STALE_THRESHOLD = 5; // 5 polls × 2s = 10s
+
+  // EMA smoothers (alpha=0.8, no spike rejection — hard clamps handle impossible values)
+  const smoothLevel = useRef(new SmoothValue(0.8));
+  const smoothCap = useRef(new SmoothValue(0.8));
 
   /* ── helpers ── */
   const amountInKg = useCallback(() => {
@@ -142,7 +138,18 @@ const ManualFeeding: React.FC = () => {
       // Hard-clamp: level ≤ capacity, both ≥ 0
       setTankLevel(Math.min(Math.max(smoothLevel.current.update(rawLevel), 0), rawCap));
       setTankCapacity(smoothCap.current.update(rawCap));
-      setDeviceOnline(row.status === 'online');
+
+      // Client-side staleness: track if updated_at changes between polls
+      const currentUpdatedAt = row.updated_at || '';
+      if (currentUpdatedAt && currentUpdatedAt !== lastUpdatedAtRef.current) {
+        lastUpdatedAtRef.current = currentUpdatedAt;
+        staleCountRef.current = 0;
+      } else {
+        staleCountRef.current++;
+      }
+      const backendSaysOnline = row.status === 'online';
+      const dataIsFresh = staleCountRef.current < STALE_THRESHOLD;
+      setDeviceOnline(backendSaysOnline && dataIsFresh);
       setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());
     }
   }, []);
