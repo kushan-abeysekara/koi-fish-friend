@@ -15,7 +15,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 let _client: SupabaseClient | null = null;
 try {
   _client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    realtime: { params: { eventsPerSecond: 2 } },
+    realtime: { params: { eventsPerSecond: 10 } },
   });
 } catch (err) {
   console.warn('[Supabase] Failed to initialise client:', err);
@@ -218,7 +218,7 @@ export async function fetchDeviceStatus(
   try {
     const res = await axios.get(`${API_URL}/api/feeding/device-status`, {
       params: { deviceId },
-      timeout: 5000,
+      timeout: 3000,
     });
     return res.data as FeeddbRow;
   } catch (err) {

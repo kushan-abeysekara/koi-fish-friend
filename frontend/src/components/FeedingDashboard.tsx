@@ -284,52 +284,62 @@ const FeedingDashboard: React.FC = () => {
     fetchDeviceFromRest();
   }, [fetchDeviceFromRest]);
 
-  // REST polling fallback — poll every 5s when WebSocket not receiving messages
-  // Also polls from Supabase feeddb table (ESP32 writes directly every 2s)
+  // ─── Fast polling: query Supabase feeddb every 2s (ESP32 writes every 2s) ───
+  // Always active — WebSocket and Supabase Realtime are bonus channels, not gates.
   useEffect(() => {
     const pollInterval = setInterval(async () => {
-      // Only poll if WebSocket hasn't delivered a message in the last 8 seconds
-      const now = Date.now();
-      const lastMsg = lastMqttMsg ? lastMqttMsg.getTime() : 0;
-      if (now - lastMsg > 8000) {
-        // First try Supabase feeddb (ESP32 writes directly — most up-to-date)
-        try {
-          const fbData = await fetchDeviceStatus(DEVICE_ID);
-          if (fbData && fbData.device_id) {
-            setDevice(prev => {
-              const updated: DeviceData = {
-                ...prev,
-                status: 'online',
-                currentWeight: fbData.weight ?? prev.currentWeight,
-                hopperLevel: fbData.tank_level ?? prev.hopperLevel,
-                hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
-                hopperPercentage: fbData.tank_percentage ?? prev.hopperPercentage,
-                motorStatus: fbData.motor_status || prev.motorStatus,
-                plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
-                escPercent: fbData.esc_percent ?? prev.escPercent,
-                feedingActive: fbData.feeding_active ?? prev.feedingActive,
-                feedCount: fbData.feed_count ?? prev.feedCount,
-                totalGramsFed: fbData.total_grams_fed ?? prev.totalGramsFed,
-                targetWeight: fbData.target_weight ?? prev.targetWeight,
-                rssi: fbData.rssi ?? prev.rssi,
-                ipAddress: fbData.ip_address || prev.ipAddress,
-                uptimeMs: fbData.uptime_ms ?? prev.uptimeMs,
-                lastSeen: fbData.updated_at || prev.lastSeen,
-              };
-              cacheDevice(updated);
-              return updated;
-            });
-            setIsStale(false);
-            return; // Supabase feeddb was sufficient
-          }
-        } catch { /* Supabase feeddb unavailable, fall through to REST */ }
+      // Primary: Supabase feeddb via backend pg/query (most up-to-date)
+      try {
+        const fbData = await fetchDeviceStatus(DEVICE_ID);
+        if (fbData && fbData.device_id) {
+          setDevice(prev => {
+            const updated: DeviceData = {
+              ...prev,
+              status: 'online',
+              currentWeight: fbData.weight ?? prev.currentWeight,
+              hopperLevel: fbData.tank_level ?? prev.hopperLevel,
+              hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
+              hopperPercentage: fbData.tank_percentage ?? prev.hopperPercentage,
+              motorStatus: fbData.motor_status || prev.motorStatus,
+              plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
+              escPercent: fbData.esc_percent ?? prev.escPercent,
+              feedingActive: fbData.feeding_active ?? prev.feedingActive,
+              feedCount: fbData.feed_count ?? prev.feedCount,
+              totalGramsFed: fbData.total_grams_fed ?? prev.totalGramsFed,
+              targetWeight: fbData.target_weight ?? prev.targetWeight,
+              rssi: fbData.rssi ?? prev.rssi,
+              ipAddress: fbData.ip_address || prev.ipAddress,
+              uptimeMs: fbData.uptime_ms ?? prev.uptimeMs,
+              lastSeen: fbData.updated_at || prev.lastSeen,
+            };
+            cacheDevice(updated);
+            return updated;
+          });
+          setIsStale(false);
+          setLastMqttMsg(new Date()); // keep offline-timer happy
 
-        // Fallback: use backend REST API (which reads from MQTT cache)
-        fetchDeviceFromRest();
-      }
-    }, 5000);
+          // Also feed live weight chart
+          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          setWeightHistory(prev => {
+            const last = prev[prev.length - 1];
+            // Skip duplicate if same second
+            if (last && last.time === timeStr) return prev;
+            const next = [...prev, {
+              time: timeStr,
+              weight: fbData.weight ?? 0,
+              hopper: (fbData.tank_level ?? 0) / 1000,
+            }];
+            return next.slice(-120);
+          });
+          return;
+        }
+      } catch { /* Supabase feeddb unavailable, fall through to REST */ }
+
+      // Fallback: use backend REST API (which reads from MQTT cache / MySQL)
+      fetchDeviceFromRest();
+    }, 2000);
     return () => clearInterval(pollInterval);
-  }, [fetchDeviceFromRest, lastMqttMsg]);
+  }, [fetchDeviceFromRest]);
 
   // ─── Load historical data from Backend REST API (MySQL) + optional Supabase real-time ───
   useEffect(() => {
