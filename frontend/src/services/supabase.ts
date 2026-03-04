@@ -219,3 +219,104 @@ export async function fetchWeightHistory(
     return [];
   }
 }
+
+// ─── Manual Feeding types & API calls ───
+
+export interface ManualFeedingRow {
+  id: number;
+  device_id: string;
+  requested_amount: number;
+  requested_unit: string;
+  tank_before: number;
+  tank_after: number | null;
+  actual_dispensed: number | null;
+  status: string;           // 'feeding' | 'completed' | 'cancelled'
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+/**
+ * Start a manual feeding — creates Supabase record and sends MQTT start.
+ */
+export async function startManualFeeding(
+  deviceId: string,
+  amount: number,
+  unit: string,
+  tankBefore: number,
+): Promise<{ id?: number; started_at?: string; error?: string }> {
+  try {
+    const res = await axios.post(`${API_URL}/api/feeding/manual-feeding/start`, {
+      deviceId,
+      amount,
+      unit,
+      tankBefore,
+    }, { timeout: 8000 });
+    return res.data;
+  } catch (err) {
+    console.error('[ManualFeed] Error starting:', err);
+    return { error: String(err) };
+  }
+}
+
+/**
+ * Complete a manual feeding.
+ */
+export async function completeManualFeeding(
+  feedingId: number,
+  tankAfter: number,
+  actualDispensed: number,
+  durationMs: number,
+): Promise<{ status?: string; error?: string }> {
+  try {
+    const res = await axios.post(`${API_URL}/api/feeding/manual-feeding/complete`, {
+      feedingId,
+      tankAfter,
+      actualDispensed,
+      durationMs,
+    }, { timeout: 8000 });
+    return res.data;
+  } catch (err) {
+    console.error('[ManualFeed] Error completing:', err);
+    return { error: String(err) };
+  }
+}
+
+/**
+ * Cancel a manual feeding.
+ */
+export async function cancelManualFeeding(
+  feedingId: number,
+  tankAfter: number,
+): Promise<{ status?: string; error?: string }> {
+  try {
+    const res = await axios.post(`${API_URL}/api/feeding/manual-feeding/cancel`, {
+      feedingId,
+      tankAfter,
+    }, { timeout: 8000 });
+    return res.data;
+  } catch (err) {
+    console.error('[ManualFeed] Error cancelling:', err);
+    return { error: String(err) };
+  }
+}
+
+/**
+ * Fetch manual feeding history from Supabase.
+ */
+export async function fetchManualFeedingHistory(
+  deviceId: string = 'feed_device_001',
+  limit: number = 20,
+): Promise<ManualFeedingRow[]> {
+  try {
+    const res = await axios.get(`${API_URL}/api/feeding/manual-feeding/history`, {
+      params: { deviceId, limit },
+      timeout: 8000,
+    });
+    return Array.isArray(res.data) ? res.data : [];
+  } catch (err) {
+    console.error('[ManualFeed] Error fetching history:', err);
+    return [];
+  }
+}

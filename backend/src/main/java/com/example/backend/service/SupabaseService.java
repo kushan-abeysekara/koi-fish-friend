@@ -284,6 +284,68 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    //  Manual Feeding operations (manual_feedings table)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Create a new manual feeding record — returns the new row ID.
+     */
+    public Map<String, Object> createManualFeeding(String deviceId, double amount, String unit, double tankBefore) {
+        String sql = "INSERT INTO manual_feedings (device_id, requested_amount, requested_unit, tank_before, status) " +
+                "VALUES ('" + esc(deviceId) + "', " + amount + ", '" + esc(unit) + "', " + tankBefore +
+                ", 'feeding') RETURNING id, started_at";
+        List<Map<String, Object>> rows = queryRows(sql);
+        return rows.isEmpty() ? new HashMap<>() : rows.get(0);
+    }
+
+    /**
+     * Complete a manual feeding record — update tank_after, actual_dispensed, status, duration.
+     */
+    public void completeManualFeeding(long feedingId, double tankAfter, double actualDispensed, long durationMs) {
+        String sql = "UPDATE manual_feedings SET " +
+                "tank_after = " + tankAfter + ", " +
+                "actual_dispensed = " + actualDispensed + ", " +
+                "status = 'completed', " +
+                "completed_at = now(), " +
+                "duration_ms = " + durationMs + " " +
+                "WHERE id = " + feedingId;
+        try {
+            executePgQuery(sql);
+            System.out.println("[Supabase] ✅ Manual feeding #" + feedingId + " completed");
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Error completing manual feeding: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Cancel a manual feeding.
+     */
+    public void cancelManualFeeding(long feedingId, double tankAfter) {
+        String sql = "UPDATE manual_feedings SET " +
+                "tank_after = " + tankAfter + ", " +
+                "actual_dispensed = GREATEST(0, tank_before - " + tankAfter + "), " +
+                "status = 'cancelled', " +
+                "completed_at = now(), " +
+                "duration_ms = EXTRACT(EPOCH FROM (now() - started_at))::bigint * 1000 " +
+                "WHERE id = " + feedingId;
+        try {
+            executePgQuery(sql);
+            System.out.println("[Supabase] ✅ Manual feeding #" + feedingId + " cancelled");
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Error cancelling manual feeding: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get recent manual feedings.
+     */
+    public List<Map<String, Object>> getManualFeedings(String deviceId, int limit) {
+        String sql = "SELECT * FROM manual_feedings WHERE device_id = '" + esc(deviceId) + "' " +
+                "ORDER BY created_at DESC LIMIT " + limit;
+        return queryRows(sql);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     //  Helpers
     // ═══════════════════════════════════════════════════════════════
 

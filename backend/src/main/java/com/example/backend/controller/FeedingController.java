@@ -318,4 +318,103 @@ public class FeedingController {
             return ResponseEntity.ok(List.of());
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Manual Feeding endpoints (Supabase manual_feedings table)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Start a manual feeding — records in Supabase and sends MQTT start command.
+     * Body: { "deviceId": "feed_device_001", "amount": 1.0, "unit": "kg", "tankBefore": 4.5 }
+     */
+    @PostMapping("/manual-feeding/start")
+    public ResponseEntity<Map<String, Object>> startManualFeeding(@RequestBody Map<String, Object> body) {
+        try {
+            String deviceId = (String) body.getOrDefault("deviceId", "feed_device_001");
+            double amount = ((Number) body.getOrDefault("amount", 0)).doubleValue();
+            String unit = (String) body.getOrDefault("unit", "kg");
+            double tankBefore = ((Number) body.getOrDefault("tankBefore", 0)).doubleValue();
+
+            // Insert record into Supabase
+            Map<String, Object> result = supabaseService.createManualFeeding(deviceId, amount, unit, tankBefore);
+
+            // Also send MQTT command to start feeding
+            String topic = "koi/pond/A/feed/command";
+            String payload = "{\"action\":\"start\",\"type\":\"manual\",\"targetWeight\":" + amount + "}";
+            mqttPublisher.publish(topic, payload);
+            System.out.println("[ManualFeed] ✅ Started: " + amount + unit + " from tank at " + tankBefore);
+
+            Map<String, Object> response = new java.util.HashMap<>(result);
+            response.put("status", "feeding");
+            response.put("mqttSent", true);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            System.err.println("[ManualFeed] ❌ Error starting: " + e.getMessage());
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Complete a manual feeding — updates Supabase record and sends MQTT stop.
+     * Body: { "feedingId": 1, "tankAfter": 3.5, "actualDispensed": 1.0, "durationMs": 45000 }
+     */
+    @PostMapping("/manual-feeding/complete")
+    public ResponseEntity<Map<String, Object>> completeManualFeeding(@RequestBody Map<String, Object> body) {
+        try {
+            long feedingId = ((Number) body.get("feedingId")).longValue();
+            double tankAfter = ((Number) body.getOrDefault("tankAfter", 0)).doubleValue();
+            double actualDispensed = ((Number) body.getOrDefault("actualDispensed", 0)).doubleValue();
+            long durationMs = ((Number) body.getOrDefault("durationMs", 0)).longValue();
+
+            supabaseService.completeManualFeeding(feedingId, tankAfter, actualDispensed, durationMs);
+
+            // Send stop command
+            String topic = "koi/pond/A/feed/command";
+            mqttPublisher.publish(topic, "{\"action\":\"stop\",\"type\":\"manual\"}");
+
+            return ResponseEntity.ok(Map.of("status", "completed", "feedingId", feedingId));
+        } catch (Exception e) {
+            System.err.println("[ManualFeed] ❌ Error completing: " + e.getMessage());
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Cancel a manual feeding.
+     * Body: { "feedingId": 1, "tankAfter": 4.2 }
+     */
+    @PostMapping("/manual-feeding/cancel")
+    public ResponseEntity<Map<String, Object>> cancelManualFeeding(@RequestBody Map<String, Object> body) {
+        try {
+            long feedingId = ((Number) body.get("feedingId")).longValue();
+            double tankAfter = ((Number) body.getOrDefault("tankAfter", 0)).doubleValue();
+
+            supabaseService.cancelManualFeeding(feedingId, tankAfter);
+
+            // Send stop command
+            String topic = "koi/pond/A/feed/command";
+            mqttPublisher.publish(topic, "{\"action\":\"stop\",\"type\":\"manual_cancel\"}");
+
+            return ResponseEntity.ok(Map.of("status", "cancelled", "feedingId", feedingId));
+        } catch (Exception e) {
+            System.err.println("[ManualFeed] ❌ Error cancelling: " + e.getMessage());
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Get recent manual feedings history.
+     */
+    @GetMapping("/manual-feeding/history")
+    public ResponseEntity<List<Map<String, Object>>> getManualFeedingHistory(
+            @RequestParam(defaultValue = "feed_device_001") String deviceId,
+            @RequestParam(defaultValue = "20") int limit) {
+        try {
+            List<Map<String, Object>> rows = supabaseService.getManualFeedings(deviceId, limit);
+            return ResponseEntity.ok(rows);
+        } catch (Exception e) {
+            System.err.println("[ManualFeed] Error fetching history: " + e.getMessage());
+            return ResponseEntity.ok(List.of());
+        }
+    }
 }

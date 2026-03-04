@@ -1,328 +1,483 @@
-import React, { useState } from 'react';
-import api from '../services/api';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  fetchDeviceStatus,
+  startManualFeeding,
+  completeManualFeeding,
+  cancelManualFeeding,
+  fetchManualFeedingHistory,
+  supabase,
+} from '../services/supabase';
+import type { FeeddbRow, ManualFeedingRow } from '../services/supabase';
 
-const ManualFeeding: React.FC = () => {
-  const [selectedPond, setSelectedPond] = useState<'Pond A' | 'Pond B'>('Pond A');
-  const [feedAmount, setFeedAmount] = useState<string>('5.0');
-  const [unit, setUnit] = useState<'kg' | 'g'>('kg');
-  const [isFeeding, setIsFeeding] = useState(false);
-  const [deviceId] = useState('feed_device_001');
-  const [feedingHistory, setFeedingHistory] = useState<
-    Array<{ time: string; pond: string; amount: string; unit: string }>
-  >([
-    { time: '2025-12-25 10:30 AM', pond: 'Pond A', amount: '3.5', unit: 'kg' },
-    { time: '2025-12-25 09:15 AM', pond: 'Pond B', amount: '2000', unit: 'g' },
-  ]);
-
-  const handleFeedNow = async () => {
-    if (!feedAmount || parseFloat(feedAmount) <= 0) {
-      alert('Please enter a valid feed amount');
-      return;
-    }
-
-    if (
-      confirm(
-        `Are you sure you want to manually feed ${feedAmount} ${unit} to ${selectedPond}?\n\nThis requires operator confirmation.`
-      )
-    ) {
-      setIsFeeding(true);
-
-      try {
-        // Send MQTT command to start feeding
-        const response = await api.post(`/feeding/start?deviceId=${deviceId}`);
-        console.log('Manual feeding started:', response.data);
-
-        const newEntry = {
-          time: new Date().toLocaleString('en-US', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
-          pond: selectedPond,
-          amount: feedAmount,
-          unit: unit,
-        };
-        setFeedingHistory([newEntry, ...feedingHistory]);
-        
-        alert(`Manual feeding started! ${feedAmount} ${unit} dispensing to ${selectedPond}.\n\nMotors are now running. Click "Stop Feeding" when done.`);
-        setFeedAmount('5.0');
-      } catch (error) {
-        console.error('Failed to start manual feeding:', error);
-        alert('Failed to start feeding. Please check backend connection and try again.');
-        setIsFeeding(false);
-      }
-    }
-  };
-
-  const handleStopFeeding = async () => {
-    try {
-      // Send MQTT command to stop feeding
-      const response = await api.post(`/feeding/stop?deviceId=${deviceId}`);
-      console.log('Feeding stopped:', response.data);
-      
-      setIsFeeding(false);
-      alert('Feeding stopped successfully! Motors are now in sleep mode.');
-    } catch (error) {
-      console.error('Failed to stop feeding:', error);
-      alert('Failed to stop feeding. Please check backend connection.');
-    }
-  };
+/* ───────── Animated Tank Gauge ───────── */
+const TankGauge: React.FC<{ level: number; capacity: number; isFeeding: boolean }> = ({
+  level,
+  capacity,
+  isFeeding,
+}) => {
+  const pct = capacity > 0 ? Math.min(100, Math.max(0, (level / capacity) * 100)) : 0;
+  const colour =
+    pct > 60 ? 'from-emerald-400 to-emerald-600' : pct > 30 ? 'from-amber-400 to-amber-600' : 'from-red-400 to-red-600';
+  const textColour = pct > 60 ? 'text-emerald-600' : pct > 30 ? 'text-amber-600' : 'text-red-600';
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl flex items-center justify-center shadow-lg">
-            <span className="text-3xl">🎯</span>
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-gray-800">Manual Feeding</h2>
-            <p className="text-sm text-gray-500">Trigger manual feeding outside scheduled times</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Warning Banner */}
-      <div className="bg-yellow-50 border-l-4 border-yellow-500 rounded-lg p-4">
-        <div className="flex items-start gap-3">
-          <i className="fas fa-exclamation-triangle text-yellow-600 text-2xl mt-1"></i>
-          <div>
-            <h3 className="font-semibold text-yellow-800 mb-1">Operator Confirmation Required</h3>
-            <p className="text-sm text-yellow-700">
-              Manual feeding requires operator confirmation. Please ensure you are present at the pond before
-              initiating manual feed. This will override any scheduled feeding.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Manual Feed Trigger Card */}
-      <div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100">
-        <h3 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-          <i className="fas fa-hand-pointer text-orange-500"></i>
-          Manual Feed Control
-        </h3>
-
-        <div className="space-y-6">
-          {/* Pond Selection */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <i className="fas fa-water mr-2 text-cyan-500"></i>
-              Select Pond
-            </label>
-            <div className="grid grid-cols-2 gap-4">
-              <button
-                onClick={() => setSelectedPond('Pond A')}
-                disabled={isFeeding}
-                className={`py-4 px-6 rounded-xl font-semibold text-lg transition-all ${
-                  selectedPond === 'Pond A'
-                    ? 'bg-cyan-500 text-white shadow-lg scale-105'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } ${isFeeding ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <i className="fas fa-water mr-2"></i>
-                Pond A
-              </button>
-              <button
-                onClick={() => setSelectedPond('Pond B')}
-                disabled={isFeeding}
-                className={`py-4 px-6 rounded-xl font-semibold text-lg transition-all ${
-                  selectedPond === 'Pond B'
-                    ? 'bg-cyan-500 text-white shadow-lg scale-105'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } ${isFeeding ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <i className="fas fa-water mr-2"></i>
-                Pond B
-              </button>
-            </div>
+    <div className="flex flex-col items-center gap-3">
+      {/* Tank shell */}
+      <div className="relative w-36 h-56 sm:w-44 sm:h-64 rounded-2xl border-4 border-gray-300 bg-gray-100 overflow-hidden shadow-inner">
+        {/* Water fill */}
+        <div
+          className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t ${colour} transition-all duration-700 ease-in-out`}
+          style={{ height: `${pct}%` }}
+        >
+          {/* Wave animation */}
+          <div className="absolute -top-2 left-0 right-0 h-4 overflow-hidden">
+            <div
+              className={`w-[200%] h-4 ${isFeeding ? 'animate-wave-fast' : 'animate-wave'}`}
+              style={{
+                background:
+                  'repeating-linear-gradient(90deg, transparent, transparent 25%, rgba(255,255,255,0.25) 25%, rgba(255,255,255,0.25) 50%)',
+              }}
+            />
           </div>
 
-          {/* Feed Amount Input */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <i className="fas fa-weight mr-2 text-purple-500"></i>
-              Feed Amount
-            </label>
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  value={feedAmount}
-                  onChange={(e) => setFeedAmount(e.target.value)}
-                  disabled={isFeeding}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-lg font-semibold disabled:bg-gray-100 disabled:cursor-not-allowed"
-                  placeholder="Enter amount"
-                />
-              </div>
-              <div className="w-32">
-                <select
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value as 'kg' | 'g')}
-                  disabled={isFeeding}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-lg font-semibold disabled:bg-gray-100 disabled:cursor-not-allowed"
-                >
-                  <option value="kg">kg</option>
-                  <option value="g">grams</option>
-                </select>
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              <i className="fas fa-info-circle mr-1"></i>
-              Recommended: 3-7 kg per feeding for adult koi
-            </p>
-          </div>
-
-          {/* Quick Presets */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <i className="fas fa-bolt mr-2 text-yellow-500"></i>
-              Quick Presets
-            </label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {[
-                { label: '2 kg', value: '2.0' },
-                { label: '3.5 kg', value: '3.5' },
-                { label: '5 kg', value: '5.0' },
-                { label: '7 kg', value: '7.0' },
-              ].map((preset) => (
-                <button
-                  key={preset.value}
-                  onClick={() => {
-                    setFeedAmount(preset.value);
-                    setUnit('kg');
-                  }}
-                  disabled={isFeeding}
-                  className="py-2 px-4 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Feed Now & Stop Buttons */}
-          <div className="pt-4 border-t border-gray-200">
-            <div className="grid grid-cols-2 gap-4">
-              <button
-                onClick={handleFeedNow}
-                disabled={isFeeding || !feedAmount || parseFloat(feedAmount) <= 0}
-                className={`py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 ${
-                  isFeeding || !feedAmount || parseFloat(feedAmount) <= 0
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 shadow-lg hover:shadow-xl'
-                }`}
-              >
-                {isFeeding ? (
-                  <>
-                    <i className="fas fa-spinner fa-spin text-xl"></i>
-                    Feeding...
-                  </>
-                ) : (
-                  <>
-                    <i className="fas fa-play-circle text-xl"></i>
-                    Feed Now
-                  </>
-                )}
-              </button>
-              <button
-                onClick={handleStopFeeding}
-                className="py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 bg-yellow-500 text-white hover:bg-yellow-600 shadow-lg hover:shadow-xl"
-              >
-                <i className="fas fa-stop-circle text-xl"></i>
-                Stop Feeding
-              </button>
-            </div>
-          </div>
-
-          {/* Current Status */}
+          {/* Bubbles when feeding */}
           {isFeeding && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <i className="fas fa-spinner fa-spin text-blue-500 text-xl"></i>
-                <div>
-                  <p className="text-blue-700 font-semibold">Dispensing feed...</p>
-                  <p className="text-sm text-blue-600">
-                    {feedAmount} {unit} being dispensed to {selectedPond}
-                  </p>
-                </div>
-              </div>
-            </div>
+            <>
+              <span className="absolute bottom-4 left-[20%] w-2 h-2 bg-white/40 rounded-full animate-bubble1" />
+              <span className="absolute bottom-8 left-[55%] w-3 h-3 bg-white/30 rounded-full animate-bubble2" />
+              <span className="absolute bottom-2 left-[75%] w-2 h-2 bg-white/35 rounded-full animate-bubble3" />
+            </>
           )}
         </div>
+        {/* Centre percentage */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className={`text-3xl font-extrabold drop-shadow-lg ${pct > 50 ? 'text-white' : 'text-gray-700'}`}>
+            {pct.toFixed(0)}%
+          </span>
+        </div>
+      </div>
+      {/* Level reading */}
+      <div className="text-center">
+        <span className={`text-2xl font-bold ${textColour}`}>{level.toFixed(2)} kg</span>
+        <span className="text-sm text-gray-400 block">/ {capacity.toFixed(1)} kg capacity</span>
+      </div>
+    </div>
+  );
+};
+
+/* ───────── Status Badge ───────── */
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+  const map: Record<string, string> = {
+    completed: 'bg-emerald-100 text-emerald-700',
+    feeding: 'bg-blue-100 text-blue-700 animate-pulse',
+    cancelled: 'bg-red-100 text-red-700',
+  };
+  return (
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {status}
+    </span>
+  );
+};
+
+/* ═══════════════════════════════════════
+   Main Component
+   ═══════════════════════════════════════ */
+const ManualFeeding: React.FC = () => {
+  const DEVICE_ID = 'feed_device_001';
+  const TANK_CAPACITY = 5.0; // kg maximum capacity
+
+  // ── state ──
+  const [tankLevel, setTankLevel] = useState(0);
+  const [feedAmount, setFeedAmount] = useState('');
+  const [unit, setUnit] = useState<'kg' | 'g'>('kg');
+  const [isFeeding, setIsFeeding] = useState(false);
+  const [activeFeedingId, setActiveFeedingId] = useState<number | null>(null);
+  const [tankBefore, setTankBefore] = useState(0);
+  const [startTime, setStartTime] = useState<number>(0);
+  const [dispensed, setDispensed] = useState(0);
+  const [progressPct, setProgressPct] = useState(0);
+  const [history, setHistory] = useState<ManualFeedingRow[]>([]);
+  const [deviceOnline, setDeviceOnline] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState('');
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /* ── helpers ── */
+  const amountInKg = useCallback(() => {
+    const v = parseFloat(feedAmount) || 0;
+    return unit === 'g' ? v / 1000 : v;
+  }, [feedAmount, unit]);
+
+  /* ── poll device status from Supabase ── */
+  const refreshDeviceStatus = useCallback(async () => {
+    const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
+    if (row) {
+      setTankLevel(row.tank_level ?? 0);
+      setDeviceOnline(true);
+      setLastUpdate(new Date(row.recorded_at ?? Date.now()).toLocaleTimeString());
+    }
+  }, []);
+
+  /* ── initial load + polling ── */
+  useEffect(() => {
+    refreshDeviceStatus();
+    fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory);
+
+    // Poll device status every 2 s
+    pollRef.current = setInterval(refreshDeviceStatus, 2000);
+
+    // Supabase real-time subscription for manual_feedings changes
+    const channel = supabase
+      ?.channel('manual_feedings_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_feedings' }, () => {
+        fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory);
+      })
+      .subscribe();
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (feedingPollRef.current) clearInterval(feedingPollRef.current);
+      channel?.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── monitor tank drop while feeding — auto-stop ── */
+  useEffect(() => {
+    if (!isFeeding || !activeFeedingId) return;
+
+    const target = amountInKg();
+    const dropped = Math.max(0, tankBefore - tankLevel);
+    setDispensed(dropped);
+    setProgressPct(target > 0 ? Math.min(100, (dropped / target) * 100) : 0);
+
+    // Auto-stop when dispensed >= target
+    if (dropped >= target && target > 0) {
+      handleComplete();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tankLevel, isFeeding]);
+
+  /* ── start feeding ── */
+  const handleStart = async () => {
+    const target = amountInKg();
+    if (target <= 0) return;
+
+    const currentTank = tankLevel;
+    setTankBefore(currentTank);
+    setStartTime(Date.now());
+    setDispensed(0);
+    setProgressPct(0);
+
+    const res = await startManualFeeding(DEVICE_ID, target, 'kg', currentTank);
+    if (res.error) {
+      alert('Failed to start feeding: ' + res.error);
+      return;
+    }
+    setActiveFeedingId(res.id ?? null);
+    setIsFeeding(true);
+  };
+
+  /* ── complete feeding ── */
+  const handleComplete = async () => {
+    if (!activeFeedingId) return;
+    const now = Date.now();
+    const dur = now - startTime;
+    const actualDispensed = Math.max(0, tankBefore - tankLevel);
+
+    await completeManualFeeding(activeFeedingId, tankLevel, actualDispensed, dur);
+    cleanup();
+  };
+
+  /* ── cancel feeding ── */
+  const handleCancel = async () => {
+    if (!activeFeedingId) return;
+    await cancelManualFeeding(activeFeedingId, tankLevel);
+    cleanup();
+  };
+
+  const cleanup = () => {
+    setIsFeeding(false);
+    setActiveFeedingId(null);
+    setProgressPct(0);
+    setDispensed(0);
+    fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory);
+  };
+
+  /* ── presets ── */
+  const presets = [
+    { label: '0.5 kg', value: '0.5', u: 'kg' as const },
+    { label: '1 kg', value: '1', u: 'kg' as const },
+    { label: '2 kg', value: '2', u: 'kg' as const },
+    { label: '3 kg', value: '3', u: 'kg' as const },
+  ];
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const fmtDuration = (ms: number | null) => {
+    if (!ms) return '-';
+    const s = Math.round(ms / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
+
+  /* ═══════════════════════════════════════
+     RENDER
+     ═══════════════════════════════════════ */
+  return (
+    <div className="space-y-5 max-w-5xl mx-auto animate-fadeIn">
+      {/* ── Live Tank status + Gauge ── */}
+      <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-5 sm:p-7">
+        <div className="flex flex-col md:flex-row items-center gap-6">
+          {/* Gauge */}
+          <TankGauge level={tankLevel} capacity={TANK_CAPACITY} isFeeding={isFeeding} />
+
+          {/* Info */}
+          <div className="flex-1 w-full space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-800">
+                <i className="fas fa-database mr-2 text-cyan-500" />
+                Feed Tank — Pond&nbsp;A
+              </h3>
+              <span className="flex items-center gap-1.5 text-xs font-medium">
+                <span
+                  className={`w-2 h-2 rounded-full ${deviceOnline ? 'bg-green-500 animate-pulse' : 'bg-red-400'}`}
+                />
+                <span className={deviceOnline ? 'text-green-600' : 'text-red-500'}>
+                  {deviceOnline ? 'Online' : 'Offline'}
+                </span>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="bg-gray-50 rounded-xl p-3">
+                <span className="text-gray-500 text-xs block">Current Level</span>
+                <span className="text-lg font-bold text-gray-800">{tankLevel.toFixed(2)} kg</span>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3">
+                <span className="text-gray-500 text-xs block">Last Update</span>
+                <span className="text-lg font-bold text-gray-800">{lastUpdate || '—'}</span>
+              </div>
+            </div>
+
+            {/* Feeding progress bar (visible only when feeding) */}
+            {isFeeding && (
+              <div className="bg-blue-50 rounded-xl p-4 border border-blue-200 animate-fadeIn">
+                <div className="flex justify-between text-sm mb-2">
+                  <span className="font-semibold text-blue-700">
+                    <i className="fas fa-spinner fa-spin mr-1.5" />
+                    Dispensing…
+                  </span>
+                  <span className="text-blue-600 font-mono">{dispensed.toFixed(2)} / {amountInKg().toFixed(2)} kg</span>
+                </div>
+                <div className="h-3 bg-blue-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <p className="text-xs text-blue-500 mt-1.5">
+                  Auto-stop at {amountInKg().toFixed(2)} kg • Elapsed {fmtDuration(Date.now() - startTime)}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Recent Manual Feedings */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-6 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-            <i className="fas fa-history text-gray-600"></i>
+      {/* ── Feed Control Card ── */}
+      <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-5 sm:p-7">
+        <h3 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2">
+          <i className="fas fa-hand-pointer text-orange-500" />
+          Feed Control
+        </h3>
+
+        {/* Quick presets */}
+        <div className="mb-5">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Quick Presets</label>
+          <div className="grid grid-cols-4 gap-2">
+            {presets.map((p) => (
+              <button
+                key={p.value}
+                disabled={isFeeding}
+                onClick={() => {
+                  setFeedAmount(p.value);
+                  setUnit(p.u);
+                }}
+                className={`py-2.5 rounded-xl text-sm font-semibold transition-all
+                  ${feedAmount === p.value && unit === p.u
+                    ? 'bg-orange-500 text-white shadow-lg scale-[1.04]'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}
+                  ${isFeeding ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Amount input */}
+        <div className="flex gap-3 mb-5">
+          <div className="flex-1">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max={unit === 'kg' ? '5' : '5000'}
+              value={feedAmount}
+              onChange={(e) => setFeedAmount(e.target.value)}
+              disabled={isFeeding}
+              placeholder="Enter amount"
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-400 text-lg font-bold disabled:bg-gray-100 disabled:cursor-not-allowed transition"
+            />
+          </div>
+          <select
+            value={unit}
+            onChange={(e) => setUnit(e.target.value as 'kg' | 'g')}
+            disabled={isFeeding}
+            className="w-24 px-3 py-3 border-2 border-gray-200 rounded-xl text-lg font-bold focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+          >
+            <option value="kg">kg</option>
+            <option value="g">g</option>
+          </select>
+        </div>
+
+        {/* Info text */}
+        <p className="text-xs text-gray-400 mb-5 -mt-2">
+          <i className="fas fa-info-circle mr-1" />
+          System will feed until tank drops by the entered amount, then auto-stop.
+        </p>
+
+        {/* Action buttons */}
+        <div className="grid grid-cols-2 gap-3">
+          {!isFeeding ? (
+            <button
+              onClick={handleStart}
+              disabled={!feedAmount || amountInKg() <= 0 || amountInKg() > tankLevel}
+              className="col-span-2 py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3
+                bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600
+                shadow-lg hover:shadow-xl active:scale-[0.98]
+                disabled:from-gray-300 disabled:to-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed disabled:shadow-none"
+            >
+              <i className="fas fa-play-circle text-xl" />
+              Feed Now — {amountInKg() > 0 ? `${amountInKg().toFixed(2)} kg` : '0 kg'}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleComplete}
+                className="py-4 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2
+                  bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg active:scale-[0.98]"
+              >
+                <i className="fas fa-check-circle" />
+                Complete
+              </button>
+              <button
+                onClick={handleCancel}
+                className="py-4 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2
+                  bg-red-500 text-white hover:bg-red-600 shadow-lg active:scale-[0.98]"
+              >
+                <i className="fas fa-times-circle" />
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Warning when amount exceeds current level */}
+        {feedAmount && amountInKg() > tankLevel && !isFeeding && (
+          <p className="mt-3 text-sm text-red-500 animate-fadeIn">
+            <i className="fas fa-exclamation-triangle mr-1" />
+            Amount exceeds current tank level ({tankLevel.toFixed(2)} kg). Please refill the tank or reduce amount.
+          </p>
+        )}
+      </div>
+
+      {/* ── Recent Manual Feedings ── */}
+      <div className="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
+        <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+            <i className="fas fa-history text-gray-500" />
             Recent Manual Feedings
           </h3>
+          <span className="text-xs text-gray-400">{history.length} records</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Time</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Pond</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Amount</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {feedingHistory.slice(0, 5).map((entry, index) => (
-                <tr key={index} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4">
-                    <span className="text-gray-600 flex items-center gap-2">
-                      <i className="fas fa-clock text-blue-500"></i>
-                      {entry.time}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-medium text-gray-800">{entry.pond}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-semibold text-purple-600">
-                      {entry.amount} {entry.unit}
-                    </span>
-                  </td>
+
+        {history.length === 0 ? (
+          <div className="p-10 text-center text-gray-400">
+            <i className="fas fa-inbox text-4xl mb-3 block" />
+            No manual feedings yet
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wider">
+                <tr>
+                  <th className="px-4 py-3 text-left">Time</th>
+                  <th className="px-4 py-3 text-left">Requested</th>
+                  <th className="px-4 py-3 text-left">Dispensed</th>
+                  <th className="px-4 py-3 text-left">Duration</th>
+                  <th className="px-4 py-3 text-left">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {history.map((row) => (
+                  <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-600">{fmtDate(row.started_at)}</td>
+                    <td className="px-4 py-3 font-semibold text-gray-800">
+                      {row.requested_amount} {row.requested_unit}
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-purple-600">
+                      {row.actual_dispensed != null ? `${Number(row.actual_dispensed).toFixed(2)} kg` : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{fmtDuration(row.duration_ms)}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={row.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Safety Information */}
-      <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-6 border border-blue-200">
-        <h3 className="text-lg font-semibold text-blue-900 mb-3 flex items-center gap-2">
-          <i className="fas fa-shield-alt text-blue-600"></i>
+      {/* ── Safety Note ── */}
+      <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-2xl p-5 border border-blue-200 text-sm text-blue-800">
+        <h4 className="font-semibold text-blue-900 mb-2">
+          <i className="fas fa-shield-alt mr-1.5 text-blue-600" />
           Safety Guidelines
-        </h3>
-        <ul className="space-y-2 text-sm text-blue-800">
-          <li className="flex items-start gap-2">
-            <i className="fas fa-check-circle text-green-600 mt-0.5"></i>
-            <span>Always monitor the pond during manual feeding</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <i className="fas fa-check-circle text-green-600 mt-0.5"></i>
-            <span>Do not exceed recommended feeding amounts</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <i className="fas fa-check-circle text-green-600 mt-0.5"></i>
-            <span>Wait at least 4 hours between manual feedings</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <i className="fas fa-check-circle text-green-600 mt-0.5"></i>
-            <span>Check water quality after feeding</span>
-          </li>
+        </h4>
+        <ul className="grid sm:grid-cols-2 gap-1.5">
+          {[
+            'Monitor the pond during manual feeding',
+            'Do not exceed recommended amounts',
+            'Wait at least 4 hours between feedings',
+            'Check water quality after feeding',
+          ].map((t) => (
+            <li key={t} className="flex items-start gap-1.5">
+              <i className="fas fa-check-circle text-green-600 mt-0.5 text-xs" />
+              {t}
+            </li>
+          ))}
         </ul>
       </div>
+
+      {/* ── Inline keyframe styles ── */}
+      <style>{`
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        .animate-fadeIn { animation: fadeIn .4s ease-out; }
+
+        @keyframes wave { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        .animate-wave { animation: wave 3s linear infinite; }
+        .animate-wave-fast { animation: wave 1.2s linear infinite; }
+
+        @keyframes bubble { 0% { transform: translateY(0) scale(1); opacity:.6; } 100% { transform: translateY(-80px) scale(.4); opacity:0; } }
+        .animate-bubble1 { animation: bubble 2s ease-in infinite; }
+        .animate-bubble2 { animation: bubble 2.5s ease-in infinite .4s; }
+        .animate-bubble3 { animation: bubble 1.8s ease-in infinite .8s; }
+      `}</style>
     </div>
   );
 };

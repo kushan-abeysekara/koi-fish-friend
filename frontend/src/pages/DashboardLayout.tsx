@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, Routes, Route } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation, Routes, Route } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import DashboardHome from '../components/DashboardHome';
 import UpdateCredentials from '../components/UpdateCredentials';
@@ -31,6 +31,43 @@ const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Route-specific page titles
+  const pageTitles: Record<string, { title: string; subtitle: string }> = useMemo(() => ({
+    '/dashboard': { title: 'Dashboard', subtitle: `Welcome back, ${currentUsername}!` },
+    '/dashboard/': { title: 'Dashboard', subtitle: `Welcome back, ${currentUsername}!` },
+    '/dashboard/fish-count': { title: 'Fish Count', subtitle: 'Monitor fish population' },
+    '/dashboard/camera': { title: 'Pond Camera', subtitle: 'Live video feed' },
+    '/dashboard/boat-navigation': { title: 'Boat Navigation', subtitle: 'Control boat movement' },
+    '/dashboard/water-quality-dashboard': { title: 'Water Quality', subtitle: 'Real-time water parameters' },
+    '/dashboard/water-quality-trends': { title: 'Water Quality Trends', subtitle: 'Historical water data' },
+    '/dashboard/sensor-care': { title: 'Sensor Care', subtitle: 'Sensor calibration & maintenance' },
+    '/dashboard/treatment-dosing': { title: 'Treatment & Dosing', subtitle: 'Treatment dosing log' },
+    '/dashboard/alerts-center': { title: 'Alerts Center', subtitle: 'System notifications & alerts' },
+    '/dashboard/task-calendar': { title: 'Task Calendar', subtitle: 'Scheduled tasks & reminders' },
+    '/dashboard/feeding-dashboard': { title: 'Feeding Dashboard', subtitle: 'Real-time feeding overview' },
+    '/dashboard/feeding-schedule': { title: 'Feeding Schedule', subtitle: 'Manage automated feeding' },
+    '/dashboard/manual-feeding': { title: 'Manual Feeding', subtitle: 'Trigger manual feeding outside scheduled times' },
+    '/dashboard/feed-usage-logs': { title: 'Feed Usage Logs', subtitle: 'Historical feed usage data' },
+    '/dashboard/feeder-health-safety': { title: 'Feeder Health', subtitle: 'Feeder system diagnostics' },
+    '/dashboard/feed-tank-history': { title: 'Feed Tank History', subtitle: 'Tank level & weight history' },
+    '/dashboard/expenditures': { title: 'Expenditures', subtitle: 'Track expenses & spending' },
+    '/dashboard/inventory': { title: 'Inventory', subtitle: 'Manage stock & supplies' },
+    '/dashboard/profit-loss': { title: 'Profit & Loss', subtitle: 'Financial overview' },
+    '/dashboard/budget-forecasting': { title: 'Budget Forecasting', subtitle: 'Financial projections' },
+    '/dashboard/energy-monitor': { title: 'Energy Monitor', subtitle: 'Power consumption tracking' },
+    '/dashboard/power-control': { title: 'Power Management', subtitle: 'Device power control' },
+    '/dashboard/power-schedules': { title: 'Power Schedules', subtitle: 'Automated power scheduling' },
+    '/dashboard/realtime-current': { title: 'Realtime Current', subtitle: 'Live current readings' },
+    '/dashboard/calculate-kwh': { title: 'Calculate kWh', subtitle: 'Energy consumption calculator' },
+    '/dashboard/credentials': { title: 'Update Credentials', subtitle: 'Change username or password' },
+    '/dashboard/profile': { title: 'Profile', subtitle: 'Your account profile' },
+    '/dashboard/settings': { title: 'Settings', subtitle: 'System configuration' },
+    '/dashboard/system-status': { title: 'System Status', subtitle: 'Device & service health' },
+  }), [currentUsername]);
+
+  const currentPage = pageTitles[location.pathname] ?? { title: 'Dashboard', subtitle: `Welcome back, ${currentUsername}!` };
 
   useEffect(() => {
     // Get username from localStorage (persists across tabs/windows)
@@ -89,8 +126,8 @@ const Dashboard: React.FC = () => {
                 <i className="fas fa-bars text-2xl"></i>
               </button>
               <div>
-                <h1 className="text-xl md:text-2xl font-bold text-gray-800">Dashboard</h1>
-                <p className="text-xs md:text-sm text-gray-500">Welcome back, {currentUsername}!</p>
+                <h1 className="text-xl md:text-2xl font-bold text-gray-800">{currentPage.title}</h1>
+                <p className="text-xs md:text-sm text-gray-500">{currentPage.subtitle}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
