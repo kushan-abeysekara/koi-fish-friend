@@ -2,7 +2,9 @@ package com.example.backend.controller;
 
 import com.example.backend.dto.ApiResponse;
 import com.example.backend.entity.FeedingHistory;
+import com.example.backend.entity.SensorDevice;
 import com.example.backend.repository.FeedingHistoryRepository;
+import com.example.backend.repository.SensorDeviceRepository;
 import com.example.backend.service.MqttService;
 import com.example.backend.service.SupabaseService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,9 @@ public class FeedingController {
 
     @Autowired
     private FeedingHistoryRepository feedingHistoryRepository;
+
+    @Autowired
+    private SensorDeviceRepository sensorDeviceRepository;
 
     @Autowired
     private SupabaseService supabaseService;
@@ -229,21 +234,47 @@ public class FeedingController {
         }
     }
 
-    // ─── Supabase-backed endpoints (reads from Supabase via pg/query) ───
+    // ─── MySQL-backed device status (reads from sensor_devices, updated by MQTT) ───
 
     /**
-     * Get real-time device status from Supabase feeddb table.
-     * ESP32 writes directly to this table every 2 seconds.
+     * Get real-time device status from MySQL sensor_devices table.
+     * MQTT handler updates this table on every message (~every 1s).
+     * Includes staleness check: if last_seen > 15s ago, mark as offline.
      */
     @GetMapping("/device-status")
-    public ResponseEntity<Map<String, Object>> getDeviceStatusFromSupabase(
+    public ResponseEntity<Map<String, Object>> getDeviceStatusFromMySQL(
             @RequestParam(defaultValue = "feed_device_001") String deviceId) {
         try {
-            Map<String, Object> status = supabaseService.getDeviceStatus(deviceId);
-            if (status.isEmpty()) {
-                status.put("status", "offline");
-                status.put("device_id", deviceId);
+            var optDevice = sensorDeviceRepository.findByDeviceId(deviceId);
+            if (optDevice.isEmpty()) {
+                return ResponseEntity.ok(Map.of("status", "offline", "device_id", deviceId));
             }
+            SensorDevice dev = optDevice.get();
+
+            // Staleness check: if last_seen is > 15s ago, device is offline
+            boolean isOnline = dev.getLastSeen() != null &&
+                    dev.getLastSeen().isAfter(LocalDateTime.now().minusSeconds(15));
+
+            // Map MySQL fields to the same JSON keys the frontend expects (feeddb schema)
+            Map<String, Object> status = new HashMap<>();
+            status.put("device_id", dev.getDeviceId());
+            status.put("status", isOnline ? "online" : "offline");
+            status.put("weight", dev.getCurrentWeight() != null ? dev.getCurrentWeight() : 0);
+            status.put("tank_level", dev.getHopperLevel() != null ? dev.getHopperLevel() : 0);
+            status.put("tank_capacity", dev.getHopperCapacity() != null ? dev.getHopperCapacity() : 20000);
+            status.put("tank_percentage", dev.getHopperPercentage() != null ? dev.getHopperPercentage() : 0);
+            status.put("motor_status", dev.getMotorStatus() != null ? dev.getMotorStatus() : "STOPPED");
+            status.put("motor_rpm", dev.getPlateSpeed() != null ? dev.getPlateSpeed() : 0);
+            status.put("esc_percent", 0); // Not stored in MySQL; ESP32 sends it but we don't persist ESC
+            status.put("feeding_active", dev.getFeedingActive() != null ? dev.getFeedingActive() : false);
+            status.put("feed_count", dev.getFeedCount() != null ? dev.getFeedCount() : 0);
+            status.put("total_grams_fed", dev.getTotalGramsFed() != null ? dev.getTotalGramsFed() : 0);
+            status.put("target_weight", dev.getTargetWeight() != null ? dev.getTargetWeight() : 0);
+            status.put("rssi", dev.getRssi() != null ? dev.getRssi() : 0);
+            status.put("ip_address", dev.getIpAddress());
+            status.put("uptime_ms", 0); // Not stored in MySQL entity
+            status.put("updated_at", dev.getLastSeen() != null ? dev.getLastSeen().toString() : null);
+
             return ResponseEntity.ok(status);
         } catch (Exception e) {
             return ResponseEntity.ok(Map.of("status", "error", "message", e.getMessage()));

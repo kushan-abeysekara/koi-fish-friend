@@ -129,7 +129,6 @@ const FeedingDashboard: React.FC = () => {
   const [lastRtMsg, setLastRtMsg] = useState<Date | null>(null);
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
-  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── EMA smoothers for noisy sensor values ───
   // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
@@ -145,7 +144,7 @@ const FeedingDashboard: React.FC = () => {
 
   // (All data now flows through Backend API → Supabase pg/query — no direct browser-to-Supabase connection)
 
-  // ─── Backend polling: fetch device status every 2s (Backend reads Supabase via pg/query) ───
+  // ─── Backend polling: fetch device status every 2s (Backend reads MySQL sensor_devices, updated by MQTT) ───
   useEffect(() => {
     let isMounted = true;
 
@@ -154,6 +153,9 @@ const FeedingDashboard: React.FC = () => {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
         if (!isMounted) return;
         if (fbData && fbData.device_id) {
+          // Backend now returns status='offline' if last_seen > 15s ago
+          const deviceIsOnline = fbData.status === 'online';
+
           const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
           const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
           const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
@@ -161,7 +163,7 @@ const FeedingDashboard: React.FC = () => {
           setDevice(prev => {
             const updated: DeviceData = {
               ...prev,
-              status: 'online',
+              status: deviceIsOnline ? 'online' : 'offline',
               currentWeight: sWeight,
               hopperLevel: sHopper,
               hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
@@ -181,7 +183,7 @@ const FeedingDashboard: React.FC = () => {
             cacheDevice(updated);
             return updated;
           });
-          setIsStale(false);
+          setIsStale(!deviceIsOnline);
           setRtStatus('connected');
           setLastRtMsg(new Date());
 
@@ -189,34 +191,29 @@ const FeedingDashboard: React.FC = () => {
           if (fbData.feeding_active) setFeedingInProgress(true);
           else setFeedingInProgress(false);
 
-          // Feed events tracking
-          const newFeedCount = fbData.feed_count ?? 0;
-          if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
-            setFeedEvents(prev => {
-              const next = [...prev, {
-                time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-                amount: (fbData.total_grams_fed ?? 0) / 1000,
-              }];
-              return next.slice(-10);
+          // Feed events tracking (only when online)
+          if (deviceIsOnline) {
+            const newFeedCount = fbData.feed_count ?? 0;
+            if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
+              setFeedEvents(prev => {
+                const next = [...prev, {
+                  time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+                  amount: (fbData.total_grams_fed ?? 0) / 1000,
+                }];
+                return next.slice(-10);
+              });
+            }
+            prevFeedCount.current = newFeedCount;
+
+            // Feed weight history chart
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            setWeightHistory(prev => {
+              const last = prev[prev.length - 1];
+              if (last && last.time === timeStr) return prev;
+              const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
+              return next.slice(-120);
             });
           }
-          prevFeedCount.current = newFeedCount;
-
-          // Feed weight history chart
-          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-          setWeightHistory(prev => {
-            const last = prev[prev.length - 1];
-            if (last && last.time === timeStr) return prev;
-            const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
-            return next.slice(-120);
-          });
-
-          // Reset offline timer — if no successful poll in 15s, mark offline
-          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-          offlineTimerRef.current = setTimeout(() => {
-            setDevice(prev => ({ ...prev, status: 'offline' }));
-            setIsStale(true);
-          }, 15000);
         }
       } catch {
         if (isMounted) setRtStatus('error');
@@ -225,13 +222,12 @@ const FeedingDashboard: React.FC = () => {
 
     // Initial fetch immediately
     pollDevice();
-    // Then poll every 2s (ESP32 writes to Supabase every 2s)
+    // Then poll every 2s (Backend reads MySQL updated by MQTT every ~1s)
     const interval = setInterval(pollDevice, 2000);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
     };
   }, []);
 

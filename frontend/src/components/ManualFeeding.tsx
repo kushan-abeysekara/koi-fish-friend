@@ -126,7 +126,7 @@ const ManualFeeding: React.FC = () => {
     return unit === 'g' ? v / 1000 : v;
   }, [feedAmount, unit]);
 
-  /* ── bootstrap: fetch device status from Backend API (values in grams → convert to kg → smooth) ── */
+  /* ── fetch device status from Backend API (MySQL sensor_devices, grams → kg → smooth) ── */
   const refreshDeviceStatus = useCallback(async () => {
     const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
     if (row) {
@@ -134,12 +134,12 @@ const ManualFeeding: React.FC = () => {
       const rawCap = (row.tank_capacity ?? 20000) / 1000;
       setTankLevel(smoothLevel.current.update(rawLevel));
       setTankCapacity(smoothCap.current.update(rawCap));
-      setDeviceOnline(true);
+      setDeviceOnline(row.status === 'online');
       setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());
     }
   }, []);
 
-  /* ── initial load + 2s Backend polling (Backend reads Supabase via pg/query) ── */
+  /* ── initial load + 2s Backend polling (Backend reads MySQL sensor_devices) ── */
   useEffect(() => {
     // Bootstrap: fetch current state + history
     refreshDeviceStatus();

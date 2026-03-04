@@ -28,6 +28,7 @@ export const supabase: SupabaseClient | null = _client;
 /** feeddb table — ESP32 writes every 2 seconds (UPSERT per device) */
 export interface FeeddbRow {
   device_id: string;
+  status?: string;           // 'online' | 'offline' — set by backend based on last_seen staleness
   weight: number;
   tank_level: number;
   tank_capacity: number;
