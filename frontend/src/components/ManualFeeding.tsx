@@ -115,7 +115,6 @@ const ManualFeeding: React.FC = () => {
   const [deviceOnline, setDeviceOnline] = useState(false);
   const [lastUpdate, setLastUpdate] = useState('');
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // EMA smoothers for stable display (tank_level in kg, capacity in kg)
@@ -128,7 +127,7 @@ const ManualFeeding: React.FC = () => {
     return unit === 'g' ? v / 1000 : v;
   }, [feedAmount, unit]);
 
-  /* ── poll device status from Supabase (values stored in grams → convert to kg → smooth) ── */
+  /* ── bootstrap: fetch device status once from Supabase (values in grams → convert to kg → smooth) ── */
   const refreshDeviceStatus = useCallback(async () => {
     const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
     if (row) {
@@ -141,19 +140,44 @@ const ManualFeeding: React.FC = () => {
     }
   }, []);
 
-  /* ── initial load + polling ── */
+  /* ── initial load + Supabase Realtime (single data path) ── */
   useEffect(() => {
+    // Bootstrap: one-time fetch of current state
     refreshDeviceStatus();
     fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
 
-    // Poll device status every 2 s
-    pollRef.current = setInterval(refreshDeviceStatus, 2000);
+    let feeddbChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    let manualChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
 
-    // Supabase real-time subscription for manual_feedings changes
-    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
     try {
       if (supabase) {
-        channel = supabase
+        // Live tank level via feeddb Realtime (ESP32 → Supabase → Browser)
+        feeddbChannel = supabase
+          .channel('feeddb_manual_rt')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'feeddb',
+              filter: `device_id=eq.${DEVICE_ID}`,
+            },
+            (payload) => {
+              const r = payload.new as Record<string, unknown>;
+              const rawLevel = ((r.tank_level as number) ?? 0) / 1000;
+              const rawCap = ((r.tank_capacity as number) ?? 20000) / 1000;
+              setTankLevel(smoothLevel.current.update(rawLevel));
+              setTankCapacity(smoothCap.current.update(rawCap));
+              setDeviceOnline(true);
+              setLastUpdate(new Date().toLocaleTimeString());
+            },
+          )
+          .subscribe((status) => {
+            console.log('[ManualFeed] feeddb RT status:', status);
+          });
+
+        // Manual feedings history updates
+        manualChannel = supabase
           .channel('manual_feedings_rt')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_feedings' }, () => {
             fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
@@ -165,9 +189,11 @@ const ManualFeeding: React.FC = () => {
     }
 
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
       if (feedingPollRef.current) clearInterval(feedingPollRef.current);
-      try { if (channel && supabase) supabase.removeChannel(channel); } catch (_e) { /* ignore */ }
+      try {
+        if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
+        if (manualChannel && supabase) supabase.removeChannel(manualChannel);
+      } catch (_e) { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

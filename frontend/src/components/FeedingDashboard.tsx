@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { supabase, fetchFeedingHistory, fetchFeedingEvents, fetchDeviceStatus, type FeedingHistoryRow } from '../services/supabase';
 import {
@@ -6,9 +6,6 @@ import {
   ResponsiveContainer, BarChart, Bar, Cell, LineChart, Line
 } from 'recharts';
 
-// Build WebSocket URL from the REST API URL (same backend, /ws/feeding endpoint)
-const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
-const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding';
 const DEVICE_ID = 'feed_device_001';
 
 interface DeviceData {
@@ -128,16 +125,11 @@ const FeedingDashboard: React.FC = () => {
   const [historyEvents, setHistoryEvents] = useState<FeedingHistoryRow[]>([]);
   const [historyRange, setHistoryRange] = useState<number>(24); // hours
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
-  const [lastMqttMsg, setLastMqttMsg] = useState<Date | null>(null);
-  const [messageRate, setMessageRate] = useState(0);
+  const [rtStatus, setRtStatus] = useState<'connecting' | 'subscribed' | 'error'>('connecting');
+  const [lastRtMsg, setLastRtMsg] = useState<Date | null>(null);
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
-  const msgCountRef = useRef(0);
-  const wsRef = useRef<WebSocket | null>(null);
   const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectDelayRef = useRef(1000); // Exponential backoff starting at 1s
 
   // ─── EMA smoothers for noisy sensor values ───
   // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
@@ -151,198 +143,17 @@ const FeedingDashboard: React.FC = () => {
   // Show values if online OR if we have cached stale data
   const hasData = isOnline || isStale;
 
-  // ─── Parse incoming WebSocket message (relayed from backend MQTT) ───
-  const handleWsMessage = useCallback((rawPayload: string) => {
-    try {
-      const d = JSON.parse(rawPayload);
+  // (WebSocket + MQTT relay removed — Supabase Realtime is the sole live data path)
 
-      // Filter: only process messages from OUR device
-      if (d.deviceId && d.deviceId !== DEVICE_ID) return;
-
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-
-      // Apply EMA smoothing to noisy sensor values
-      const sHopper = smoothHopper.current.update(d.hopperLevel ?? 0);
-      const sWeight = smoothWeight.current.update(d.weight ?? 0);
-      const sPct = smoothPct.current.update(d.hopperPercentage ?? 0);
-
-      const newDevice: DeviceData = {
-        status: d.status || 'online',
-        feedingActive: d.feedingActive || false,
-        hopperLevel: sHopper,
-        hopperCapacity: d.hopperCapacity ?? 20000,
-        hopperPercentage: sPct,
-        currentWeight: sWeight,
-        targetWeight: d.targetWeight ?? 0,
-        feedCount: d.feedCount ?? 0,
-        totalGramsFed: d.totalGrams ?? 0,
-        motorStatus: d.motorStatus || 'STOPPED',
-        plateSpeed: d.plateSpeed ?? 0,
-        lastFeedingTime: d.status === 'feeding_stopped' ? now.toISOString() : null,
-        lastSeen: now.toISOString(),
-        rssi: d.rssi ?? null,
-        ipAddress: d.ipAddress || null,
-        scheduleCount: d.scheduleCount ?? 0,
-        escPercent: d.escPercent ?? 0,
-        uptimeMs: d.uptimeMs ?? 0,
-      };
-
-      setDevice(newDevice);
-      cacheDevice(newDevice); // Persist to localStorage for weak-connection recovery
-      setIsStale(false);      // Data is fresh
-
-      if (d.feedingActive) setFeedingInProgress(true);
-      else setFeedingInProgress(false);
-
-      setLastMqttMsg(now);
-      msgCountRef.current++;
-
-      // Weight history (keep last 60 data points = ~2 min at 2s interval)
-      setWeightHistory(prev => {
-        const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
-        return next.slice(-60);
-      });
-
-      // Feed events tracking
-      const newFeedCount = d.feedCount ?? 0;
-      if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
-        setFeedEvents(prev => {
-          const next = [...prev, {
-            time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-            amount: (d.totalGrams ?? 0) / 1000,
-          }];
-          return next.slice(-10);
-        });
-      }
-      prevFeedCount.current = newFeedCount;
-
-      // Reset offline timer — if no message in 30s, mark offline but keep cached values
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      offlineTimerRef.current = setTimeout(() => {
-        setDevice(prev => ({ ...prev, status: 'offline' }));
-        setIsStale(true); // Mark as stale but keep values visible
-      }, 30000);
-    } catch (err) {
-      console.error('Failed to parse WebSocket message:', err);
-    }
-  }, []);
-
-  // ─── WebSocket connection to backend (relays MQTT messages) ───
+  // ─── Bootstrap: fetch current state from Supabase on mount ───
   useEffect(() => {
-    let isMounted = true;
-
-    const connect = () => {
-      if (!isMounted) return;
-      setMqttStatus('connecting');
-      console.log('[WS] Connecting to', WS_URL);
-
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (!isMounted) return;
-        console.log('[WS] Connected to backend WebSocket');
-        setMqttStatus('connected');
-        reconnectDelayRef.current = 1000; // Reset backoff on successful connection
-      };
-
-      ws.onmessage = (event) => {
-        if (!isMounted) return;
-        handleWsMessage(event.data);
-      };
-
-      ws.onerror = (err) => {
-        console.error('[WS] Error:', err);
-        if (isMounted) setMqttStatus('error');
-      };
-
-      ws.onclose = () => {
-        if (!isMounted) return;
-        const delay = reconnectDelayRef.current;
-        console.log(`[WS] Disconnected, reconnecting in ${delay / 1000}s...`);
-        setMqttStatus('disconnected');
-        wsRef.current = null;
-        // Exponential backoff: 1s → 2s → 4s → 8s → max 15s
-        reconnectTimerRef.current = setTimeout(connect, delay);
-        reconnectDelayRef.current = Math.min(delay * 2, 15000);
-      };
-    };
-
-    connect();
-
-    // Message rate calculator (msgs/sec)
-    const rateInterval = setInterval(() => {
-      setMessageRate(msgCountRef.current);
-      msgCountRef.current = 0;
-    }, 1000);
-
-    return () => {
-      isMounted = false;
-      clearInterval(rateInterval);
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [handleWsMessage]);
-
-  // ─── Fetch device data from REST API (bootstrap + polling fallback) ───
-  const fetchDeviceFromRest = useCallback(async () => {
-    try {
-      const response = await api.get(`/sensors/device/${DEVICE_ID}`);
-      if (response.data.success && response.data.data) {
-        const d = response.data.data;
-        setDevice(prev => {
-          const updated: DeviceData = {
-            status: d.status || prev.status || 'online',
-            feedingActive: d.feedingActive ?? prev.feedingActive,
-            hopperLevel: d.hopperLevel ?? prev.hopperLevel,
-            hopperCapacity: d.hopperCapacity ?? prev.hopperCapacity ?? 20000,
-            hopperPercentage: d.hopperPercentage ?? prev.hopperPercentage,
-            currentWeight: d.currentWeight ?? prev.currentWeight,
-            targetWeight: d.targetWeight ?? prev.targetWeight,
-            feedCount: d.feedCount ?? prev.feedCount,
-            totalGramsFed: d.totalGramsFed ?? prev.totalGramsFed,
-            motorStatus: d.motorStatus || prev.motorStatus || 'STOPPED',
-            plateSpeed: d.plateSpeed ?? prev.plateSpeed,
-            lastFeedingTime: d.lastFeedingTime || prev.lastFeedingTime,
-            lastSeen: d.lastSeen || prev.lastSeen || new Date().toISOString(),
-            rssi: d.rssi ?? prev.rssi,
-            ipAddress: d.ipAddress || prev.ipAddress,
-            scheduleCount: d.scheduleCount ?? prev.scheduleCount,
-            escPercent: d.escPercent ?? prev.escPercent,
-            uptimeMs: d.uptimeMs ?? prev.uptimeMs,
-          };
-          cacheDevice(updated);
-          return updated;
-        });
-        setIsStale(true); // REST data is slightly stale vs live WS
-        if (d.feedCount) prevFeedCount.current = d.feedCount;
-      }
-    } catch { /* REST fallback — ignore errors silently */ }
-  }, []);
-
-  // Initial fetch on mount
-  useEffect(() => {
-    fetchDeviceFromRest();
-  }, [fetchDeviceFromRest]);
-
-  // ─── Fast polling: query Supabase feeddb every 2s (ESP32 writes every 2s) ───
-  // Always active — WebSocket and Supabase Realtime are bonus channels, not gates.
-  useEffect(() => {
-    const pollInterval = setInterval(async () => {
-      // Primary: Supabase feeddb via backend pg/query (most up-to-date)
+    const bootstrap = async () => {
       try {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
         if (fbData && fbData.device_id) {
-          // Apply EMA smoothing to noisy sensor values
           const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
           const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
           const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
-
           setDevice(prev => {
             const updated: DeviceData = {
               ...prev,
@@ -367,30 +178,15 @@ const FeedingDashboard: React.FC = () => {
             return updated;
           });
           setIsStale(false);
-          setLastMqttMsg(new Date()); // keep offline-timer happy
-
-          // Also feed live weight chart
-          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-          setWeightHistory(prev => {
-            const last = prev[prev.length - 1];
-            // Skip duplicate if same second
-            if (last && last.time === timeStr) return prev;
-            const next = [...prev, {
-              time: timeStr,
-              weight: sWeight,
-              hopper: sHopper / 1000,
-            }];
-            return next.slice(-120);
-          });
-          return;
+          setLastRtMsg(new Date());
+          if (fbData.feed_count) prevFeedCount.current = fbData.feed_count;
         }
-      } catch { /* Supabase feeddb unavailable, fall through to REST */ }
-
-      // Fallback: use backend REST API (which reads from MQTT cache / MySQL)
-      fetchDeviceFromRest();
-    }, 2000);
-    return () => clearInterval(pollInterval);
-  }, [fetchDeviceFromRest]);
+      } catch (err) {
+        console.warn('[Bootstrap] Failed to fetch initial device state:', err);
+      }
+    };
+    bootstrap();
+  }, []);
 
   // ─── Load historical data from Backend REST API (MySQL) + optional Supabase real-time ───
   useEffect(() => {
@@ -467,7 +263,31 @@ const FeedingDashboard: React.FC = () => {
                 return updated;
               });
               setIsStale(false);
-              setLastMqttMsg(new Date());
+              setLastRtMsg(new Date());
+
+              // Track feeding state
+              if ((r.feeding_active as boolean)) setFeedingInProgress(true);
+              else setFeedingInProgress(false);
+
+              // Feed events tracking
+              const newFeedCount = (r.feed_count as number) ?? 0;
+              if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
+                setFeedEvents(prev => {
+                  const next = [...prev, {
+                    time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+                    amount: ((r.total_grams_fed as number) ?? 0) / 1000,
+                  }];
+                  return next.slice(-10);
+                });
+              }
+              prevFeedCount.current = newFeedCount;
+
+              // Reset offline timer — if no message in 30s, mark offline
+              if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+              offlineTimerRef.current = setTimeout(() => {
+                setDevice(prev => ({ ...prev, status: 'offline' }));
+                setIsStale(true);
+              }, 30000);
 
               // Also add to weight history chart
               const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -483,6 +303,8 @@ const FeedingDashboard: React.FC = () => {
           )
           .subscribe((status) => {
             console.log('[Supabase RT] feeddb subscription status:', status);
+            if (status === 'SUBSCRIBED') setRtStatus('subscribed');
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRtStatus('error');
           });
 
         // ─── feeding_history real-time: Event tracking ───
@@ -537,6 +359,7 @@ const FeedingDashboard: React.FC = () => {
 
     return () => {
       isMounted = false;
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
       if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
       if (historyChannel && supabase) supabase.removeChannel(historyChannel);
     };
@@ -611,11 +434,11 @@ const FeedingDashboard: React.FC = () => {
     return { label: 'Weak', color: 'text-red-500', bars: 1 };
   };
 
-  const getMqttStatusDisplay = () => {
-    switch (mqttStatus) {
-      case 'connected': return { text: 'Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
+  const getRtStatusDisplay = () => {
+    switch (rtStatus) {
+      case 'subscribed': return { text: 'Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
       case 'connecting': return { text: 'Connecting...', color: 'bg-yellow-400/30 text-yellow-100', dot: 'bg-yellow-400 animate-pulse' };
-      case 'error': return { text: 'WS Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
+      case 'error': return { text: 'RT Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
       default: return { text: 'Disconnected', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
     }
   };
@@ -624,7 +447,7 @@ const FeedingDashboard: React.FC = () => {
   const hopperKg = device.hopperLevel / 1000;
   const capacityKg = device.hopperCapacity / 1000;
   const signal = getSignalStrength(device.rssi);
-  const mqttStatusDisplay = getMqttStatusDisplay();
+  const rtStatusDisplay = getRtStatusDisplay();
 
   const barColors = ['#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#ef4444'];
 
@@ -640,14 +463,14 @@ const FeedingDashboard: React.FC = () => {
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold">Feed Control Center</h2>
-              <p className="text-emerald-100 text-xs sm:text-sm">Real-time MQTT monitoring &bull; Pond A</p>
+              <p className="text-emerald-100 text-xs sm:text-sm">Supabase Realtime monitoring &bull; Pond A</p>
             </div>
           </div>
           <div className="flex items-center gap-3 self-end sm:self-auto">
-            {/* MQTT Connection Badge */}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${mqttStatusDisplay.color}`}>
-              <span className={`w-2 h-2 rounded-full ${mqttStatusDisplay.dot}`} />
-              {mqttStatusDisplay.text}
+            {/* Supabase RT Connection Badge */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${rtStatusDisplay.color}`}>
+              <span className={`w-2 h-2 rounded-full ${rtStatusDisplay.dot}`} />
+              {rtStatusDisplay.text}
             </div>
             {/* Device Status Badge */}
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${
@@ -660,12 +483,6 @@ const FeedingDashboard: React.FC = () => {
             {!isOnline && isStale && device.lastSeen && (
               <span className="text-yellow-200 text-xs hidden sm:inline">
                 <i className="fas fa-clock mr-1"></i>Last: {new Date(device.lastSeen).toLocaleTimeString()}
-              </span>
-            )}
-            {/* Message rate indicator */}
-            {mqttStatus === 'connected' && (
-              <span className="text-emerald-200 text-xs hidden sm:inline">
-                {messageRate > 0 ? `${messageRate} msg/s` : 'Waiting...'}
               </span>
             )}
           </div>
@@ -976,7 +793,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-chart-line text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for live data...</p>
-                <p className="text-xs">{mqttStatus === 'connected' ? 'MQTT connected, waiting for ESP32...' : 'Connecting to MQTT...'}</p>
+                <p className="text-xs">{rtStatus === 'subscribed' ? 'Supabase connected, waiting for ESP32...' : 'Connecting to Supabase...'}</p>
               </div>
             </div>
           )}
@@ -1012,7 +829,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-box text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for hopper data...</p>
-                <p className="text-xs">{mqttStatus === 'connected' ? 'MQTT connected, waiting for ESP32...' : 'Connecting to MQTT...'}</p>
+                <p className="text-xs">{rtStatus === 'subscribed' ? 'Supabase connected, waiting for ESP32...' : 'Connecting to Supabase...'}</p>
               </div>
             </div>
           )}
@@ -1220,16 +1037,16 @@ const FeedingDashboard: React.FC = () => {
           </div>
           <div>
             <span className="text-gray-500 block mb-1">Last Message</span>
-            <span className="font-semibold text-gray-700">{lastMqttMsg ? lastMqttMsg.toLocaleTimeString() : 'N/A'}</span>
+            <span className="font-semibold text-gray-700">{lastRtMsg ? lastRtMsg.toLocaleTimeString() : 'N/A'}</span>
           </div>
           <div>
             <span className="text-gray-500 block mb-1">Connection</span>
             <span className={`font-semibold ${
-              mqttStatus === 'connected' ? 'text-green-600' :
-              mqttStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
+              rtStatus === 'subscribed' ? 'text-green-600' :
+              rtStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
             }`}>
               <i className={`fas fa-circle text-[8px] mr-1`}></i>
-              {mqttStatus === 'connected' ? 'WebSocket Live' : mqttStatus === 'connecting' ? 'Reconnecting...' : 'Disconnected'}
+              {rtStatus === 'subscribed' ? 'Supabase RT Live' : rtStatus === 'connecting' ? 'Connecting...' : 'RT Error'}
             </span>
           </div>
         </div>
