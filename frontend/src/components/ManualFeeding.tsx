@@ -5,7 +5,6 @@ import {
   completeManualFeeding,
   cancelManualFeeding,
   fetchManualFeedingHistory,
-  supabase,
 } from '../services/supabase';
 import type { FeeddbRow, ManualFeedingRow } from '../services/supabase';
 
@@ -116,7 +115,6 @@ const ManualFeeding: React.FC = () => {
   const [lastUpdate, setLastUpdate] = useState('');
 
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastRtRef = useRef<number>(0); // epoch ms — for fallback poll
 
   // EMA smoothers for stable display (tank_level in kg, capacity in kg)
   const smoothLevel = useRef(new SmoothValue(0.18, 2));  // maxDelta 2 kg
@@ -128,7 +126,7 @@ const ManualFeeding: React.FC = () => {
     return unit === 'g' ? v / 1000 : v;
   }, [feedAmount, unit]);
 
-  /* ── bootstrap: fetch device status once from Supabase (values in grams → convert to kg → smooth) ── */
+  /* ── bootstrap: fetch device status from Backend API (values in grams → convert to kg → smooth) ── */
   const refreshDeviceStatus = useCallback(async () => {
     const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
     if (row) {
@@ -141,68 +139,26 @@ const ManualFeeding: React.FC = () => {
     }
   }, []);
 
-  /* ── initial load + Supabase Realtime (single data path) ── */
+  /* ── initial load + 2s Backend polling (Backend reads Supabase via pg/query) ── */
   useEffect(() => {
-    // Bootstrap: one-time fetch of current state
+    // Bootstrap: fetch current state + history
     refreshDeviceStatus();
     fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
 
-    let feeddbChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
-    let manualChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
-
-    try {
-      if (supabase) {
-        // Live tank level via feeddb Realtime (ESP32 → Supabase → Browser)
-        feeddbChannel = supabase
-          .channel('feeddb_manual_rt')
-          .on(
-            'postgres_changes',
-            {
-              event: '*',
-              schema: 'public',
-              table: 'feeddb',
-              filter: `device_id=eq.${DEVICE_ID}`,
-            },
-            (payload) => {
-              const r = payload.new as Record<string, unknown>;
-              const rawLevel = ((r.tank_level as number) ?? 0) / 1000;
-              const rawCap = ((r.tank_capacity as number) ?? 20000) / 1000;
-              setTankLevel(smoothLevel.current.update(rawLevel));
-              setTankCapacity(smoothCap.current.update(rawCap));
-              setDeviceOnline(true);
-              setLastUpdate(new Date().toLocaleTimeString());
-              lastRtRef.current = Date.now();
-            },
-          )
-          .subscribe((status) => {
-            console.log('[ManualFeed] feeddb RT status:', status);
-          });
-
-        // Manual feedings history updates
-        manualChannel = supabase
-          .channel('manual_feedings_rt')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_feedings' }, () => {
-            fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
-          })
-          .subscribe();
-      }
-    } catch (err) {
-      console.warn('[ManualFeed] Realtime subscription failed:', err);
-    }
-
-    // Safety fallback poll: only fires when RT is silent for >8 s
-    const fallbackPollRef = setInterval(() => {
-      if (Date.now() - lastRtRef.current < 8000) return;
+    // Poll device status every 2s via Backend API
+    const pollInterval = setInterval(() => {
       refreshDeviceStatus();
-    }, 5000);
+    }, 2000);
+
+    // Poll feeding history every 10s (lightweight)
+    const historyPollInterval = setInterval(() => {
+      fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
+    }, 10000);
 
     return () => {
       if (feedingPollRef.current) clearInterval(feedingPollRef.current);
-      if (fallbackPollRef) clearInterval(fallbackPollRef);
-      try {
-        if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
-        if (manualChannel && supabase) supabase.removeChannel(manualChannel);
-      } catch (_e) { /* ignore */ }
+      clearInterval(pollInterval);
+      clearInterval(historyPollInterval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

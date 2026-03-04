@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { supabase, fetchFeedingHistory, fetchFeedingEvents, fetchDeviceStatus, type FeedingHistoryRow } from '../services/supabase';
+import { fetchFeedingHistory, fetchFeedingEvents, fetchDeviceStatus, type FeedingHistoryRow } from '../services/supabase';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, BarChart, Bar, Cell, LineChart, Line
@@ -125,12 +125,11 @@ const FeedingDashboard: React.FC = () => {
   const [historyEvents, setHistoryEvents] = useState<FeedingHistoryRow[]>([]);
   const [historyRange, setHistoryRange] = useState<number>(24); // hours
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [rtStatus, setRtStatus] = useState<'connecting' | 'subscribed' | 'error'>('connecting');
+  const [rtStatus, setRtStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [lastRtMsg, setLastRtMsg] = useState<Date | null>(null);
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
   const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastRtMsgRef = useRef<number>(0); // epoch ms — for fallback poll to check
 
   // ─── EMA smoothers for noisy sensor values ───
   // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
@@ -144,17 +143,21 @@ const FeedingDashboard: React.FC = () => {
   // Show values if online OR if we have cached stale data
   const hasData = isOnline || isStale;
 
-  // (WebSocket + MQTT relay removed — Supabase Realtime is the sole live data path)
+  // (All data now flows through Backend API → Supabase pg/query — no direct browser-to-Supabase connection)
 
-  // ─── Bootstrap: fetch current state from Supabase on mount ───
+  // ─── Backend polling: fetch device status every 2s (Backend reads Supabase via pg/query) ───
   useEffect(() => {
-    const bootstrap = async () => {
+    let isMounted = true;
+
+    const pollDevice = async () => {
       try {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
+        if (!isMounted) return;
         if (fbData && fbData.device_id) {
           const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
           const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
           const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
+
           setDevice(prev => {
             const updated: DeviceData = {
               ...prev,
@@ -179,58 +182,25 @@ const FeedingDashboard: React.FC = () => {
             return updated;
           });
           setIsStale(false);
+          setRtStatus('connected');
           setLastRtMsg(new Date());
-          lastRtMsgRef.current = Date.now();
-          if (fbData.feed_count) prevFeedCount.current = fbData.feed_count;
 
-          // Seed the weight history chart with one data point (so charts aren't empty)
-          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-          setWeightHistory([{ time: timeStr, weight: sWeight, hopper: sHopper / 1000 }]);
-        }
-      } catch (err) {
-        console.warn('[Bootstrap] Failed to fetch initial device state:', err);
-      }
-    };
-    bootstrap();
-  }, []);
+          // Track feeding state
+          if (fbData.feeding_active) setFeedingInProgress(true);
+          else setFeedingInProgress(false);
 
-  // ─── Safety fallback poll: only fires when Supabase Realtime is silent (>8 s) ───
-  useEffect(() => {
-    const pollInterval = setInterval(async () => {
-      // Skip if Realtime delivered data recently (< 8 s ago)
-      if (Date.now() - lastRtMsgRef.current < 8000) return;
-      try {
-        const fbData = await fetchDeviceStatus(DEVICE_ID);
-        if (fbData && fbData.device_id) {
-          const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
-          const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
-          const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
-          setDevice(prev => {
-            const updated: DeviceData = {
-              ...prev,
-              status: 'online',
-              currentWeight: sWeight,
-              hopperLevel: sHopper,
-              hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
-              hopperPercentage: sPct,
-              motorStatus: fbData.motor_status || prev.motorStatus,
-              plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
-              escPercent: fbData.esc_percent ?? prev.escPercent,
-              feedingActive: fbData.feeding_active ?? prev.feedingActive,
-              feedCount: fbData.feed_count ?? prev.feedCount,
-              totalGramsFed: fbData.total_grams_fed ?? prev.totalGramsFed,
-              targetWeight: fbData.target_weight ?? prev.targetWeight,
-              rssi: fbData.rssi ?? prev.rssi,
-              ipAddress: fbData.ip_address || prev.ipAddress,
-              uptimeMs: fbData.uptime_ms ?? prev.uptimeMs,
-              lastSeen: fbData.updated_at || prev.lastSeen,
-            };
-            cacheDevice(updated);
-            return updated;
-          });
-          setIsStale(false);
-          setLastRtMsg(new Date());
-          lastRtMsgRef.current = Date.now();
+          // Feed events tracking
+          const newFeedCount = fbData.feed_count ?? 0;
+          if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
+            setFeedEvents(prev => {
+              const next = [...prev, {
+                time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+                amount: (fbData.total_grams_fed ?? 0) / 1000,
+              }];
+              return next.slice(-10);
+            });
+          }
+          prevFeedCount.current = newFeedCount;
 
           // Feed weight history chart
           const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -240,14 +210,34 @@ const FeedingDashboard: React.FC = () => {
             const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
             return next.slice(-120);
           });
+
+          // Reset offline timer — if no successful poll in 15s, mark offline
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = setTimeout(() => {
+            setDevice(prev => ({ ...prev, status: 'offline' }));
+            setIsStale(true);
+          }, 15000);
         }
-      } catch { /* fallback poll failed — silent */ }
-    }, 5000);
-    return () => clearInterval(pollInterval);
+      } catch {
+        if (isMounted) setRtStatus('error');
+      }
+    };
+
+    // Initial fetch immediately
+    pollDevice();
+    // Then poll every 2s (ESP32 writes to Supabase every 2s)
+    const interval = setInterval(pollDevice, 2000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+    };
   }, []);
+
+  // ─── Load historical data from Backend (Supabase pg/query) ───
   useEffect(() => {
     let isMounted = true;
-
     const loadHistory = async () => {
       setHistoryLoading(true);
       try {
@@ -266,160 +256,7 @@ const FeedingDashboard: React.FC = () => {
       }
     };
     loadHistory();
-
-    // Subscribe to real-time changes on Supabase tables
-    // feeddb: ESP32 writes DIRECTLY every 2s (UPDATE events — primary live data)
-    // feeding_history: Feeding events (INSERT — start/stop transitions)
-    let feeddbChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
-    let historyChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
-    if (supabase) {
-      try {
-        // ─── feeddb real-time: Live device status (ESP32 → Supabase → Browser) ───
-        feeddbChannel = supabase
-          .channel('feeddb_realtime')
-          .on(
-            'postgres_changes',
-            {
-              event: '*',  // INSERT or UPDATE (ESP32 does UPSERT)
-              schema: 'public',
-              table: 'feeddb',
-              filter: `device_id=eq.${DEVICE_ID}`,
-            },
-            (payload) => {
-              if (!isMounted) return;
-              const r = payload.new as Record<string, unknown>;
-
-              // Apply EMA smoothing
-              const sHopper = smoothHopper.current.update((r.tank_level as number) ?? 0);
-              const sWeight = smoothWeight.current.update((r.weight as number) ?? 0);
-              const sPct = smoothPct.current.update((r.tank_percentage as number) ?? 0);
-
-              // Update live device data from feeddb real-time
-              setDevice(prev => {
-                const updated: DeviceData = {
-                  ...prev,
-                  status: 'online',
-                  currentWeight: sWeight,
-                  hopperLevel: sHopper,
-                  hopperCapacity: (r.tank_capacity as number) ?? prev.hopperCapacity ?? 20000,
-                  hopperPercentage: sPct,
-                  motorStatus: (r.motor_status as string) || prev.motorStatus,
-                  plateSpeed: (r.motor_rpm as number) ?? prev.plateSpeed,
-                  escPercent: (r.esc_percent as number) ?? prev.escPercent,
-                  feedingActive: (r.feeding_active as boolean) ?? prev.feedingActive,
-                  feedCount: (r.feed_count as number) ?? prev.feedCount,
-                  totalGramsFed: (r.total_grams_fed as number) ?? prev.totalGramsFed,
-                  targetWeight: (r.target_weight as number) ?? prev.targetWeight,
-                  rssi: (r.rssi as number) ?? prev.rssi,
-                  ipAddress: (r.ip_address as string) || prev.ipAddress,
-                  uptimeMs: (r.uptime_ms as number) ?? prev.uptimeMs,
-                  lastSeen: new Date().toISOString(),
-                };
-                cacheDevice(updated);
-                return updated;
-              });
-              setIsStale(false);
-              setLastRtMsg(new Date());
-              lastRtMsgRef.current = Date.now();
-
-              // Track feeding state
-              if ((r.feeding_active as boolean)) setFeedingInProgress(true);
-              else setFeedingInProgress(false);
-
-              // Feed events tracking
-              const newFeedCount = (r.feed_count as number) ?? 0;
-              if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
-                setFeedEvents(prev => {
-                  const next = [...prev, {
-                    time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-                    amount: ((r.total_grams_fed as number) ?? 0) / 1000,
-                  }];
-                  return next.slice(-10);
-                });
-              }
-              prevFeedCount.current = newFeedCount;
-
-              // Reset offline timer — if no message in 30s, mark offline
-              if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-              offlineTimerRef.current = setTimeout(() => {
-                setDevice(prev => ({ ...prev, status: 'offline' }));
-                setIsStale(true);
-              }, 30000);
-
-              // Also add to weight history chart
-              const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-              setWeightHistory(prev => {
-                const next = [...prev, {
-                  time: timeStr,
-                  weight: sWeight,
-                  hopper: sHopper / 1000,
-                }];
-                return next.slice(-60);
-              });
-            },
-          )
-          .subscribe((status) => {
-            console.log('[Supabase RT] feeddb subscription status:', status);
-            if (status === 'SUBSCRIBED') setRtStatus('subscribed');
-            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRtStatus('error');
-          });
-
-        // ─── feeding_history real-time: Event tracking ───
-        historyChannel = supabase
-          .channel('feeding_history_realtime')
-          .on(
-            'postgres_changes',
-            {
-              event: 'INSERT',
-              schema: 'public',
-              table: 'feeding_history',
-              filter: `device_id=eq.${DEVICE_ID}`,
-            },
-            (payload) => {
-              if (!isMounted) return;
-              const r = payload.new as Record<string, unknown>;
-
-              const newRow: FeedingHistoryRow = {
-                id: (r.id as number) ?? 0,
-                device_id: (r.device_id ?? '') as string,
-                recorded_at: (r.recorded_at ?? '') as string,
-                status: (r.event_type ?? r.status ?? '') as string,
-                feeding_active: (r.feeding_active ?? false) as boolean,
-                hopper_level: (r.tank_level ?? 0) as number,
-                hopper_capacity: (r.tank_capacity ?? 20000) as number,
-                hopper_percentage: (r.tank_percentage ?? 0) as number,
-                current_weight: (r.weight ?? 0) as number,
-                target_weight: (r.target_weight ?? 0) as number,
-                feed_count: (r.feed_count ?? 0) as number,
-                total_grams_fed: (r.total_grams_fed ?? 0) as number,
-                motor_status: (r.motor_status ?? '') as string,
-                plate_speed: (r.motor_rpm ?? 0) as number,
-                esc_percent: (r.esc_percent ?? 0) as number,
-                rssi: (r.rssi ?? null) as number | null,
-                ip_address: (r.ip_address ?? null) as string | null,
-                uptime_ms: 0,
-              };
-
-              // If it's a feeding event, add to events list
-              if (newRow.status === 'feeding_started' || newRow.status === 'feeding_stopped') {
-                setHistoryEvents(prev => [...prev, newRow].slice(-100));
-              }
-            },
-          )
-          .subscribe((status) => {
-            console.log('[Supabase RT] feeding_history subscription status:', status);
-          });
-      } catch (err) {
-        console.warn('[Supabase] Realtime subscription failed:', err);
-      }
-    }
-
-    return () => {
-      isMounted = false;
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
-      if (historyChannel && supabase) supabase.removeChannel(historyChannel);
-    };
+    return () => { isMounted = false; };
   }, [historyRange]);
 
   // ── Action Handlers ──
@@ -493,7 +330,7 @@ const FeedingDashboard: React.FC = () => {
 
   const getRtStatusDisplay = () => {
     switch (rtStatus) {
-      case 'subscribed': return { text: 'Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
+      case 'connected': return { text: 'Live', color: 'bg-green-400/30 text-green-100', dot: 'bg-green-400 animate-pulse' };
       case 'connecting': return { text: 'Connecting...', color: 'bg-yellow-400/30 text-yellow-100', dot: 'bg-yellow-400 animate-pulse' };
       case 'error': return { text: 'RT Error', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
       default: return { text: 'Disconnected', color: 'bg-red-400/30 text-red-100', dot: 'bg-red-400' };
@@ -520,11 +357,11 @@ const FeedingDashboard: React.FC = () => {
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold">Feed Control Center</h2>
-              <p className="text-emerald-100 text-xs sm:text-sm">Supabase Realtime monitoring &bull; Pond A</p>
+              <p className="text-emerald-100 text-xs sm:text-sm">Backend API monitoring &bull; Pond A</p>
             </div>
           </div>
           <div className="flex items-center gap-3 self-end sm:self-auto">
-            {/* Supabase RT Connection Badge */}
+            {/* Backend Connection Badge */}
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-sm ${rtStatusDisplay.color}`}>
               <span className={`w-2 h-2 rounded-full ${rtStatusDisplay.dot}`} />
               {rtStatusDisplay.text}
@@ -850,7 +687,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-chart-line text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for live data...</p>
-                <p className="text-xs">{rtStatus === 'subscribed' ? 'Supabase connected, waiting for ESP32...' : 'Connecting to Supabase...'}</p>
+                <p className="text-xs">{rtStatus === 'connected' ? 'Backend connected, waiting for ESP32...' : 'Connecting to backend...'}</p>
               </div>
             </div>
           )}
@@ -886,7 +723,7 @@ const FeedingDashboard: React.FC = () => {
               <div className="text-center">
                 <i className="fas fa-box text-3xl mb-2"></i>
                 <p className="text-sm">Waiting for hopper data...</p>
-                <p className="text-xs">{rtStatus === 'subscribed' ? 'Supabase connected, waiting for ESP32...' : 'Connecting to Supabase...'}</p>
+                <p className="text-xs">{rtStatus === 'connected' ? 'Backend connected, waiting for ESP32...' : 'Connecting to backend...'}</p>
               </div>
             </div>
           )}
@@ -1099,11 +936,11 @@ const FeedingDashboard: React.FC = () => {
           <div>
             <span className="text-gray-500 block mb-1">Connection</span>
             <span className={`font-semibold ${
-              rtStatus === 'subscribed' ? 'text-green-600' :
+              rtStatus === 'connected' ? 'text-green-600' :
               rtStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
             }`}>
               <i className={`fas fa-circle text-[8px] mr-1`}></i>
-              {rtStatus === 'subscribed' ? 'Supabase RT Live' : rtStatus === 'connecting' ? 'Connecting...' : 'RT Error'}
+              {rtStatus === 'connected' ? 'Backend API Live' : rtStatus === 'connecting' ? 'Connecting...' : 'API Error'}
             </span>
           </div>
         </div>

@@ -6,11 +6,9 @@ import {
   Brush, ReferenceLine
 } from 'recharts';
 import {
-  supabase,
   fetchFeedingHistory,
   fetchFeedingEvents,
   type FeedingHistoryRow,
-  type WeightHistoryRow
 } from '../services/supabase';
 
 const DEVICE_ID = 'feed_device_001';
@@ -45,7 +43,7 @@ const FeedTankHistory: FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'capacity' | 'feeding' | 'events'>('overview');
   const chartContainerRef = useRef<HTMLDivElement>(null);
 
-  /* ── Load data from Supabase via backend ── */
+  /* ── Load data from Backend API (Backend reads Supabase via pg/query) ── */
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -64,96 +62,11 @@ const FeedTankHistory: FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  /* ── Realtime subscription — weight_history table (continuous readings) ── */
+  /* ── Periodic refresh: poll Backend every 30s for fresh history data ── */
   useEffect(() => {
-    if (!supabase) return;
-    let weightChannel: ReturnType<typeof supabase.channel> | null = null;
-    let eventChannel: ReturnType<typeof supabase.channel> | null = null;
-    try {
-      // Subscribe to weight_history for continuous chart updates
-      weightChannel = supabase
-        .channel('weight_history_rt')
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'weight_history',
-          filter: `device_id=eq.${DEVICE_ID}`,
-        }, (payload) => {
-          const r = payload.new as WeightHistoryRow;
-
-          // Update historyData (normalised) for backward compat with existing charts
-          const normalised: FeedingHistoryRow = {
-            id: r.id ?? 0,
-            device_id: r.device_id ?? '',
-            recorded_at: r.recorded_at ?? '',
-            status: r.motor_status ?? '',
-            feeding_active: r.feeding_active ?? false,
-            hopper_level: r.tank_level ?? 0,
-            hopper_capacity: 20000,
-            hopper_percentage: r.tank_percentage ?? 0,
-            current_weight: r.weight ?? 0,
-            target_weight: 0,
-            feed_count: 0,
-            total_grams_fed: 0,
-            motor_status: r.motor_status ?? '',
-            plate_speed: r.motor_rpm ?? 0,
-            esc_percent: r.esc_percent ?? 0,
-            rssi: r.rssi ?? null,
-            ip_address: null,
-            uptime_ms: 0,
-          };
-          setHistoryData(prev => [...prev, normalised].slice(-5000));
-        })
-        .subscribe((status) => {
-          console.log('[Supabase RT] Weight history subscription:', status);
-        });
-
-      // Subscribe to feeding_history for events
-      eventChannel = supabase
-        .channel('feeding_events_rt')
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'feeding_history',
-          filter: `device_id=eq.${DEVICE_ID}`,
-        }, (payload) => {
-          const r = payload.new as Record<string, unknown>;
-          const row: FeedingHistoryRow = {
-            id: (r.id as number) ?? 0,
-            device_id: (r.device_id ?? '') as string,
-            recorded_at: (r.recorded_at ?? '') as string,
-            status: (r.event_type ?? '') as string,
-            feeding_active: (r.feeding_active ?? false) as boolean,
-            hopper_level: (r.tank_level ?? 0) as number,
-            hopper_capacity: (r.tank_capacity ?? 20000) as number,
-            hopper_percentage: (r.tank_percentage ?? 0) as number,
-            current_weight: (r.weight ?? 0) as number,
-            target_weight: (r.target_weight ?? 0) as number,
-            feed_count: (r.feed_count ?? 0) as number,
-            total_grams_fed: (r.total_grams_fed ?? 0) as number,
-            motor_status: (r.motor_status ?? '') as string,
-            plate_speed: (r.motor_rpm ?? 0) as number,
-            esc_percent: (r.esc_percent ?? 0) as number,
-            rssi: (r.rssi ?? null) as number | null,
-            ip_address: (r.ip_address ?? null) as string | null,
-            uptime_ms: 0,
-          };
-          if (row.status === 'feeding_started' || row.status === 'feeding_stopped') {
-            setFeedingEvents(prev => [...prev, row].slice(-500));
-          }
-        })
-        .subscribe((status) => {
-          console.log('[Supabase RT] Feeding events subscription:', status);
-        });
-    } catch (err) {
-      console.warn('[Supabase] Realtime subscription failed:', err);
-    }
-
-    return () => {
-      if (weightChannel && supabase) supabase.removeChannel(weightChannel);
-      if (eventChannel && supabase) supabase.removeChannel(eventChannel);
-    };
-  }, []);
+    const interval = setInterval(() => { loadData(); }, 30000);
+    return () => clearInterval(interval);
+  }, [loadData]);
 
   /* ── Prepare chart data ── */
   const chartData = historyData.map(row => {
@@ -398,7 +311,7 @@ const FeedTankHistory: FC = () => {
             <div>
               <h2 className="text-xl sm:text-2xl font-bold">Feed Tank History</h2>
               <p className="text-purple-200 text-xs sm:text-sm">
-                Historical hopper capacity &amp; feeding data &bull; Stored in Supabase
+                Historical hopper capacity &amp; feeding data &bull; via Backend API
               </p>
             </div>
           </div>
