@@ -33,14 +33,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * (/rest/v1/) to return 401 for all keys.
  *
  * Tables:
- *   - feeddb:           Real-time device status (ESP32 writes directly every 2s)
- *   - feeding_history:  Feeding events (start/stop with tank diff)
- *   - weight_history:   Continuous sensor readings for charts (every 10s)
+ * - feeddb: Real-time device status (ESP32 writes directly every 2s)
+ * - feeding_history: Feeding events (start/stop with tank diff)
+ * - weight_history: Continuous sensor readings for charts (every 10s)
  *
  * Architecture:
- *   - ESP32 → Supabase directly (heavy continuous data)
- *   - Backend → Supabase (backup writes + read API for frontend)
- *   - MySQL: user details only
+ * - ESP32 → Supabase directly (heavy continuous data)
+ * - Backend → Supabase (backup writes + read API for frontend)
+ * - MySQL: user details only
  */
 @Service
 public class SupabaseService {
@@ -94,63 +94,64 @@ public class SupabaseService {
      */
     private void ensureTablesExist() {
         String[] ddls = {
-            // Energy: live status (one row per device)
-            "CREATE TABLE IF NOT EXISTS energydb (" +
-            "  device_id   TEXT PRIMARY KEY," +
-            "  voltage     FLOAT   DEFAULT 0," +
-            "  current     FLOAT   DEFAULT 0," +
-            "  power       FLOAT   DEFAULT 0," +
-            "  energy_wh   FLOAT   DEFAULT 0," +
-            "  status      TEXT    DEFAULT 'normal'," +
-            "  rssi        INT     DEFAULT 0," +
-            "  ip_address  TEXT    DEFAULT ''," +
-            "  updated_at  TIMESTAMPTZ DEFAULT NOW()" +
-            ")",
+                // Energy: live status (one row per device)
+                "CREATE TABLE IF NOT EXISTS energydb (" +
+                        "  device_id   TEXT PRIMARY KEY," +
+                        "  voltage     FLOAT   DEFAULT 0," +
+                        "  current     FLOAT   DEFAULT 0," +
+                        "  power       FLOAT   DEFAULT 0," +
+                        "  energy_wh   FLOAT   DEFAULT 0," +
+                        "  status      TEXT    DEFAULT 'normal'," +
+                        "  rssi        INT     DEFAULT 0," +
+                        "  ip_address  TEXT    DEFAULT ''," +
+                        "  updated_at  TIMESTAMPTZ DEFAULT NOW()" +
+                        ")",
 
-            // Energy: historical readings (1 per minute)
-            "CREATE TABLE IF NOT EXISTS energy_history (" +
-            "  id          BIGSERIAL PRIMARY KEY," +
-            "  device_id   TEXT," +
-            "  voltage     FLOAT," +
-            "  current     FLOAT," +
-            "  power       FLOAT," +
-            "  energy_wh   FLOAT," +
-            "  status      TEXT    DEFAULT 'normal'," +
-            "  recorded_at TIMESTAMPTZ DEFAULT NOW()" +
-            ")",
+                // Energy: historical readings (1 per minute)
+                "CREATE TABLE IF NOT EXISTS energy_history (" +
+                        "  id          BIGSERIAL PRIMARY KEY," +
+                        "  device_id   TEXT," +
+                        "  voltage     FLOAT," +
+                        "  current     FLOAT," +
+                        "  power       FLOAT," +
+                        "  energy_wh   FLOAT," +
+                        "  status      TEXT    DEFAULT 'normal'," +
+                        "  recorded_at TIMESTAMPTZ DEFAULT NOW()" +
+                        ")",
 
-            // Water quality: live status (one row per device)
-            "CREATE TABLE IF NOT EXISTS sensor_live (" +
-            "  device_id            TEXT PRIMARY KEY," +
-            "  ph_value             FLOAT   DEFAULT 0," +
-            "  turbidity            FLOAT   DEFAULT 0," +
-            "  water_quality_status TEXT    DEFAULT 'normal'," +
-            "  status               TEXT    DEFAULT 'normal'," +
-            "  rssi                 INT     DEFAULT 0," +
-            "  updated_at           TIMESTAMPTZ DEFAULT NOW()" +
-            ")",
+                // Water quality: live status (one row per device)
+                "CREATE TABLE IF NOT EXISTS sensor_live (" +
+                        "  device_id            TEXT PRIMARY KEY," +
+                        "  ph_value             FLOAT   DEFAULT 0," +
+                        "  turbidity            FLOAT   DEFAULT 0," +
+                        "  water_quality_status TEXT    DEFAULT 'normal'," +
+                        "  status               TEXT    DEFAULT 'normal'," +
+                        "  rssi                 INT     DEFAULT 0," +
+                        "  updated_at           TIMESTAMPTZ DEFAULT NOW()" +
+                        ")",
 
-            // Water quality: historical readings (1 per minute)
-            "CREATE TABLE IF NOT EXISTS sensor_history (" +
-            "  id                   BIGSERIAL PRIMARY KEY," +
-            "  device_id            TEXT," +
-            "  ph_value             FLOAT," +
-            "  turbidity            FLOAT," +
-            "  water_quality_status TEXT    DEFAULT 'normal'," +
-            "  status               TEXT    DEFAULT 'normal'," +
-            "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
-            ")",
+                // Water quality: historical readings (1 per minute)
+                "CREATE TABLE IF NOT EXISTS sensor_history (" +
+                        "  id                   BIGSERIAL PRIMARY KEY," +
+                        "  device_id            TEXT," +
+                        "  ph_value             FLOAT," +
+                        "  turbidity            FLOAT," +
+                        "  water_quality_status TEXT    DEFAULT 'normal'," +
+                        "  status               TEXT    DEFAULT 'normal'," +
+                        "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
+                        ")",
 
-            // Enable Realtime on live tables
-            "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
-            "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live"
+                // Enable Realtime on live tables
+                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
+                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live"
         };
 
         for (String sql : ddls) {
             try {
                 executePgQuery(sql);
             } catch (Exception e) {
-                // Log but don't fail startup — table may already exist or Realtime already added
+                // Log but don't fail startup — table may already exist or Realtime already
+                // added
                 System.out.println("[Supabase] ℹ️ DDL note: " + e.getMessage());
             }
         }
@@ -158,7 +159,7 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  pg/query SQL execution
+    // pg/query SQL execution
     // ═══════════════════════════════════════════════════════════════
 
     /**
@@ -192,7 +193,8 @@ public class SupabaseService {
      * Execute a SQL SELECT and return rows as list of maps.
      */
     public List<Map<String, Object>> queryRows(String sql) {
-        if (!enabled || httpClient == null) return new ArrayList<>();
+        if (!enabled || httpClient == null)
+            return new ArrayList<>();
         try {
             String body = executePgQuery(sql);
             JsonNode arr = objectMapper.readTree(body);
@@ -201,10 +203,14 @@ public class SupabaseService {
                 for (JsonNode node : arr) {
                     Map<String, Object> row = new HashMap<>();
                     node.fields().forEachRemaining(e -> {
-                        if (e.getValue().isNumber()) row.put(e.getKey(), e.getValue().numberValue());
-                        else if (e.getValue().isBoolean()) row.put(e.getKey(), e.getValue().booleanValue());
-                        else if (e.getValue().isNull()) row.put(e.getKey(), null);
-                        else row.put(e.getKey(), e.getValue().asText());
+                        if (e.getValue().isNumber())
+                            row.put(e.getKey(), e.getValue().numberValue());
+                        else if (e.getValue().isBoolean())
+                            row.put(e.getKey(), e.getValue().booleanValue());
+                        else if (e.getValue().isNull())
+                            row.put(e.getKey(), null);
+                        else
+                            row.put(e.getKey(), e.getValue().asText());
                     });
                     rows.add(row);
                 }
@@ -217,7 +223,7 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  READ operations — Backend reads from Supabase for frontend
+    // READ operations — Backend reads from Supabase for frontend
     // ═══════════════════════════════════════════════════════════════
 
     /**
@@ -276,7 +282,7 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  WRITE operations — Backup path (ESP32 writes directly too)
+    // WRITE operations — Backup path (ESP32 writes directly too)
     // ═══════════════════════════════════════════════════════════════
 
     /**
@@ -284,12 +290,15 @@ public class SupabaseService {
      * ESP32 also writes directly every 10s — this is redundancy.
      */
     public void storeFeedingData(String deviceId, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
         long now = System.currentTimeMillis();
         long last = lastInsertTime.get();
-        if (now - last < throttleMs) return;
-        if (!lastInsertTime.compareAndSet(last, now)) return;
+        if (now - last < throttleMs)
+            return;
+        if (!lastInsertTime.compareAndSet(last, now))
+            return;
 
         executor.submit(() -> {
             try {
@@ -320,7 +329,8 @@ public class SupabaseService {
      * Store a feeding event (start/stop) — always stored, not throttled.
      */
     public void storeFeedingEvent(String deviceId, String eventType, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
         executor.submit(() -> {
             try {
@@ -356,7 +366,7 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Manual Feeding operations (manual_feedings table)
+    // Manual Feeding operations (manual_feedings table)
     // ═══════════════════════════════════════════════════════════════
 
     /**
@@ -371,7 +381,8 @@ public class SupabaseService {
     }
 
     /**
-     * Complete a manual feeding record — update tank_after, actual_dispensed, status, duration.
+     * Complete a manual feeding record — update tank_after, actual_dispensed,
+     * status, duration.
      */
     public void completeManualFeeding(long feedingId, double tankAfter, double actualDispensed, long durationMs) {
         String sql = "UPDATE manual_feedings SET " +
@@ -418,11 +429,12 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Helpers
+    // Helpers
     // ═══════════════════════════════════════════════════════════════
 
     private String esc(String val) {
-        if (val == null) return "";
+        if (val == null)
+            return "";
         return val.replace("'", "''");
     }
 
@@ -451,7 +463,7 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  ENERGY / BUDGET_MANAGEMENT device write operations
+    // ENERGY / BUDGET_MANAGEMENT device write operations
     // ═══════════════════════════════════════════════════════════════
 
     // Separate throttle for energy_history (don't share with feeding throttle)
@@ -464,19 +476,21 @@ public class SupabaseService {
      * Frontend subscribes via Supabase Realtime to get ~100ms updates.
      */
     public void storeEnergyLive(String deviceId, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
         executor.submit(() -> {
             try {
-                double voltage   = getDoubleOrDefault(mqttPayload, "voltage",   0);
-                double current   = getDoubleOrDefault(mqttPayload, "current",   0);
-                double power     = getDoubleOrDefault(mqttPayload, "power",     0);
-                double energyWh  = getDoubleOrDefault(mqttPayload, "energyWh",  0);
-                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
-                int    rssi      = getIntOrDefault(mqttPayload,    "rssi",      0);
-                String ipAddress = getTextOrDefault(mqttPayload,   "ipAddress", "");
+                double voltage = getDoubleOrDefault(mqttPayload, "voltage", 0);
+                double current = getDoubleOrDefault(mqttPayload, "current", 0);
+                double power = getDoubleOrDefault(mqttPayload, "power", 0);
+                double energyWh = getDoubleOrDefault(mqttPayload, "energyWh", 0);
+                String status = getTextOrDefault(mqttPayload, "status", "normal");
+                int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
+                String ipAddress = getTextOrDefault(mqttPayload, "ipAddress", "");
 
-                String sql = "INSERT INTO energydb (device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) " +
+                String sql = "INSERT INTO energydb (device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) "
+                        +
                         "VALUES ('" + esc(deviceId) + "', " + voltage + ", " + current + ", " + power + ", " +
                         energyWh + ", '" + esc(status) + "', " + rssi + ", '" + esc(ipAddress) + "', NOW()) " +
                         "ON CONFLICT (device_id) DO UPDATE SET " +
@@ -498,22 +512,26 @@ public class SupabaseService {
      * Provides historical data for charts. Throttled to 1/min.
      */
     public void storeEnergyHistory(String deviceId, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
-        long now  = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
         long last = lastEnergyHistoryInsertTime.get();
-        if (now - last < ENERGY_HISTORY_THROTTLE_MS) return;
-        if (!lastEnergyHistoryInsertTime.compareAndSet(last, now)) return;
+        if (now - last < ENERGY_HISTORY_THROTTLE_MS)
+            return;
+        if (!lastEnergyHistoryInsertTime.compareAndSet(last, now))
+            return;
 
         executor.submit(() -> {
             try {
-                double voltage  = getDoubleOrDefault(mqttPayload, "voltage",  0);
-                double current  = getDoubleOrDefault(mqttPayload, "current",  0);
-                double power    = getDoubleOrDefault(mqttPayload, "power",    0);
+                double voltage = getDoubleOrDefault(mqttPayload, "voltage", 0);
+                double current = getDoubleOrDefault(mqttPayload, "current", 0);
+                double power = getDoubleOrDefault(mqttPayload, "power", 0);
                 double energyWh = getDoubleOrDefault(mqttPayload, "energyWh", 0);
-                String status   = getTextOrDefault(mqttPayload,   "status",   "normal");
+                String status = getTextOrDefault(mqttPayload, "status", "normal");
 
-                String sql = "INSERT INTO energy_history (device_id, voltage, current, power, energy_wh, status, recorded_at) " +
+                String sql = "INSERT INTO energy_history (device_id, voltage, current, power, energy_wh, status, recorded_at) "
+                        +
                         "VALUES ('" + esc(deviceId) + "', " + voltage + ", " + current + ", " +
                         power + ", " + energyWh + ", '" + esc(status) + "', NOW())";
 
@@ -526,7 +544,57 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  WATER_QUALITY device write operations
+    // ENERGY read operations (proxied through backend → avoids Mixed Content)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Read the latest live row from energydb for a device (or all devices).
+     * Returns raw JSON string from Supabase pg/query.
+     */
+    public String readEnergyLive(String deviceId) throws Exception {
+        String where = (deviceId != null && !deviceId.isBlank())
+                ? "WHERE device_id = '" + esc(deviceId) + "'"
+                : "";
+        String sql = "SELECT * FROM energydb " + where + " ORDER BY updated_at DESC LIMIT 50";
+        return executePgQuery(sql);
+    }
+
+    /**
+     * Read historical energy readings from energy_history.
+     * 
+     * @param hoursBack how many hours back to query
+     * @param limit     max rows to return
+     */
+    public String readEnergyHistory(int hoursBack, int limit) throws Exception {
+        String sql = "SELECT * FROM energy_history " +
+                "WHERE recorded_at >= NOW() - INTERVAL '" + hoursBack + " hours' " +
+                "ORDER BY recorded_at DESC LIMIT " + limit;
+        return executePgQuery(sql);
+    }
+
+    /**
+     * Read historical sensor (water quality) readings from sensor_history.
+     */
+    public String readSensorHistory(int hoursBack, int limit) throws Exception {
+        String sql = "SELECT * FROM sensor_history " +
+                "WHERE recorded_at >= NOW() - INTERVAL '" + hoursBack + " hours' " +
+                "ORDER BY recorded_at DESC LIMIT " + limit;
+        return executePgQuery(sql);
+    }
+
+    /**
+     * Read latest sensor live row from sensor_live.
+     */
+    public String readSensorLive(String deviceId) throws Exception {
+        String where = (deviceId != null && !deviceId.isBlank())
+                ? "WHERE device_id = '" + esc(deviceId) + "'"
+                : "";
+        String sql = "SELECT * FROM sensor_live " + where + " ORDER BY updated_at DESC LIMIT 50";
+        return executePgQuery(sql);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WATER_QUALITY device write operations
     // ═══════════════════════════════════════════════════════════════
 
     private final AtomicLong lastSensorHistoryInsertTime = new AtomicLong(0);
@@ -537,17 +605,19 @@ public class SupabaseService {
      * Called on every MQTT message. Triggers Supabase Realtime → frontend ~100ms.
      */
     public void storeSensorLive(String deviceId, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
         executor.submit(() -> {
             try {
-                double phValue   = getDoubleOrDefault(mqttPayload, "phValue",   0);
+                double phValue = getDoubleOrDefault(mqttPayload, "phValue", 0);
                 double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
-                String wqStatus  = getTextOrDefault(mqttPayload,   "waterQualityStatus", "normal");
-                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
-                int    rssi      = getIntOrDefault(mqttPayload,    "rssi",      0);
+                String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
+                String status = getTextOrDefault(mqttPayload, "status", "normal");
+                int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
 
-                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, status, rssi, updated_at) " +
+                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, status, rssi, updated_at) "
+                        +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
                         esc(wqStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
                         "ON CONFLICT (device_id) DO UPDATE SET " +
@@ -569,21 +639,25 @@ public class SupabaseService {
      * Provides historical data for water quality charts.
      */
     public void storeSensorHistory(String deviceId, JsonNode mqttPayload) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
-        long now  = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
         long last = lastSensorHistoryInsertTime.get();
-        if (now - last < SENSOR_HISTORY_THROTTLE_MS) return;
-        if (!lastSensorHistoryInsertTime.compareAndSet(last, now)) return;
+        if (now - last < SENSOR_HISTORY_THROTTLE_MS)
+            return;
+        if (!lastSensorHistoryInsertTime.compareAndSet(last, now))
+            return;
 
         executor.submit(() -> {
             try {
-                double phValue   = getDoubleOrDefault(mqttPayload, "phValue",   0);
+                double phValue = getDoubleOrDefault(mqttPayload, "phValue", 0);
                 double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
-                String wqStatus  = getTextOrDefault(mqttPayload,   "waterQualityStatus", "normal");
-                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
+                String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
+                String status = getTextOrDefault(mqttPayload, "status", "normal");
 
-                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, status, recorded_at) " +
+                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, status, recorded_at) "
+                        +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
                         esc(wqStatus) + "', '" + esc(status) + "', NOW())";
 
@@ -600,19 +674,29 @@ public class SupabaseService {
      */
     private SSLContext createTrustAllSSLContext() {
         try {
-            TrustManager[] trustAll = new TrustManager[]{
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
-                }
+            TrustManager[] trustAll = new TrustManager[] {
+                    new X509TrustManager() {
+                        public X509Certificate[] getAcceptedIssuers() {
+                            return new X509Certificate[0];
+                        }
+
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                        }
+
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                        }
+                    }
             };
             SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(null, trustAll, new java.security.SecureRandom());
             return sc;
         } catch (Exception e) {
             System.err.println("[Supabase] ⚠️ Failed to create trust-all SSL: " + e.getMessage());
-            try { return SSLContext.getDefault(); } catch (Exception ex) { throw new RuntimeException(ex); }
+            try {
+                return SSLContext.getDefault();
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
         }
     }
 }

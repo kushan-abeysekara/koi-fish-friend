@@ -60,8 +60,6 @@ public class MqttService {
     private final AtomicLong lastHistoryInsertTime = new AtomicLong(0);
     private static final long HISTORY_THROTTLE_MS = 10_000;
 
-
-
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
         try {

@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { sensorDataApi } from '../services/api';
 import type { SensorData } from '../services/api';
-import { supabase, fetchEnergyHistory as fetchEnergyHistoryFromSupabase } from '../services/supabase';
+// Direct Supabase calls removed — frontend is HTTPS, Supabase is HTTP.
+// All data now goes through the Spring Boot backend (HTTPS) as a proxy.
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
@@ -97,102 +98,43 @@ export default function EnergyMonitor() {
     };
   }, []);
 
-  // ── Supabase Realtime: PRIMARY live data path (ESP32→Backend→Supabase→Frontend) ──
-  // Faster than WebSocket (~100ms vs ~300ms). WebSocket above stays as backup.
-  useEffect(() => {
-    if (!supabase) return; // Supabase unavailable — WebSocket handles it
-    let isMounted = true;
-
-    // Bootstrap: load latest value immediately on mount
-    (async () => {
-      try {
-        const { data } = await supabase.from('energydb').select('*').limit(1).single();
-        if (data && isMounted) {
-          const now = new Date();
-          setLastUpdateTime(now);
-          setLatestData(prev => ({
-            id: prev?.id ?? 0,
-            device: prev?.device ?? ({ deviceId: data.device_id } as SensorData['device']),
-            pond: prev?.pond ?? null,
-            voltage:  data.voltage  ?? 0,
-            current:  data.current  ?? 0,
-            power:    data.power    ?? 0,
-            energyWh: data.energy_wh ?? 0,
-            status:   data.status   ?? 'normal',
-            timestamp: data.updated_at ?? now.toISOString(),
-          }));
-          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-          offlineTimerRef.current = setTimeout(() => {
-            setLatestData(null); setLastUpdateTime(null);
-          }, 60000);
-        }
-      } catch { /* ignore bootstrap errors */ }
-    })();
-
-    // Subscribe to live UPSERT changes on energydb
-    const channel = supabase
-      .channel('energydb_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'energydb' }, (payload) => {
-        if (!isMounted) return;
-        const r = payload.new as Record<string, unknown>;
-        const now = new Date();
-        setLastUpdateTime(now);
-        setLatestData(prev => ({
-          id:       prev?.id ?? 0,
-          device:   prev?.device ?? ({ deviceId: r.device_id } as SensorData['device']),
-          pond:     prev?.pond ?? null,
-          voltage:  (r.voltage  as number) ?? 0,
-          current:  (r.current  as number) ?? 0,
-          power:    (r.power    as number) ?? 0,
-          energyWh: (r.energy_wh as number) ?? 0,
-          status:   (r.status   as string) ?? 'normal',
-          timestamp: (r.updated_at as string) ?? now.toISOString(),
-        }));
-        // Reset offline watchdog on every Supabase RT message
-        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-        offlineTimerRef.current = setTimeout(() => {
-          setLatestData(null); setLastUpdateTime(null);
-        }, 60000);
-      })
-      .subscribe((status) => {
-        console.log('[Supabase RT] energydb subscription:', status);
-      });
-
-    return () => {
-      isMounted = false;
-      supabase?.removeChannel(channel);
-    };
-  }, []);
+  // Supabase Realtime removed — direct ws:// blocked from HTTPS pages.
+  // Live data comes from Spring Boot WebSocket (wss://) above.
 
   // ── History: Supabase primary → REST fallback ───────────────────────────
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
+    // Fetch energy history via Spring Boot proxy (HTTPS safe — no Mixed Content)
     try {
-      // Try Supabase energy_history first (fastest, direct)
-      const sbRows = await fetchEnergyHistoryFromSupabase(selectedHours, 1500);
-      if (sbRows.length > 0) {
-        // Map EnergyHistoryRow → SensorData shape used by the component
-        const mapped: SensorData[] = sbRows.map(r => ({
-          id:        r.id,
-          device:    { deviceId: r.device_id } as SensorData['device'],
-          pond:      null,
-          voltage:   r.voltage,
-          current:   r.current,
-          power:     r.power,
-          energyWh:  r.energy_wh,
-          status:    r.status,
-          timestamp: r.recorded_at,
-        }));
-        setHistoricalData(mapped);
-        setLoading(false);
-        return; // Supabase succeeded — skip REST
+      const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+      const res = await fetch(`${API_BASE}/api/energy/history?hours=${selectedHours}&limit=1500`);
+      if (res.ok) {
+        const json = await res.json();
+        // pg/query returns { rows: [...] }
+        const rows: Record<string, unknown>[] = Array.isArray(json) ? json : (json.rows ?? []);
+        if (rows.length > 0) {
+          const mapped: SensorData[] = rows.map((r, i) => ({
+            id:        (r.id as number) ?? i,
+            device:    { deviceId: r.device_id as string } as SensorData['device'],
+            pond:      null,
+            voltage:   (r.voltage  as number) ?? 0,
+            current:   (r.current  as number) ?? 0,
+            power:     (r.power    as number) ?? 0,
+            energyWh:  (r.energy_wh as number) ?? 0,
+            status:    (r.status   as string) ?? 'normal',
+            timestamp: (r.recorded_at as string) ?? '',
+          }));
+          setHistoricalData(mapped);
+          setLoading(false);
+          return;
+        }
       }
     } catch (err) {
-      console.warn('[EnergyMonitor] Supabase history fetch failed, trying REST:', err);
+      console.warn('[EnergyMonitor] Backend energy/history fetch failed:', err);
     }
 
-    // Fallback: backend REST API (MySQL)
+    // Final fallback: original sensorDataApi (MySQL — may be empty for energy now)
     try {
       const historicalRes = await sensorDataApi.getEnergyHistory(selectedHours);
       if (historicalRes.success && historicalRes.data) {
