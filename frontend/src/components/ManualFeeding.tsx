@@ -122,23 +122,30 @@ const ManualFeeding: React.FC = () => {
   /* ── initial load + polling ── */
   useEffect(() => {
     refreshDeviceStatus();
-    fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory);
+    fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
 
     // Poll device status every 2 s
     pollRef.current = setInterval(refreshDeviceStatus, 2000);
 
     // Supabase real-time subscription for manual_feedings changes
-    const channel = supabase
-      ?.channel('manual_feedings_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_feedings' }, () => {
-        fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory);
-      })
-      .subscribe();
+    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    try {
+      if (supabase) {
+        channel = supabase
+          .channel('manual_feedings_rt')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'manual_feedings' }, () => {
+            fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
+          })
+          .subscribe();
+      }
+    } catch (err) {
+      console.warn('[ManualFeed] Realtime subscription failed:', err);
+    }
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (feedingPollRef.current) clearInterval(feedingPollRef.current);
-      channel?.unsubscribe();
+      try { if (channel && supabase) supabase.removeChannel(channel); } catch (_e) { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -443,7 +450,7 @@ const ManualFeeding: React.FC = () => {
         )}
       </div>
 
-      {/* ── Safety Note ── */}
+      {/* Safety Note */}
       <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-2xl p-5 border border-blue-200 text-sm text-blue-800">
         <h4 className="font-semibold text-blue-900 mb-2">
           <i className="fas fa-shield-alt mr-1.5 text-blue-600" />
@@ -463,21 +470,6 @@ const ManualFeeding: React.FC = () => {
           ))}
         </ul>
       </div>
-
-      {/* ── Inline keyframe styles ── */}
-      <style>{`
-        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-        .animate-fadeIn { animation: fadeIn .4s ease-out; }
-
-        @keyframes wave { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
-        .animate-wave { animation: wave 3s linear infinite; }
-        .animate-wave-fast { animation: wave 1.2s linear infinite; }
-
-        @keyframes bubble { 0% { transform: translateY(0) scale(1); opacity:.6; } 100% { transform: translateY(-80px) scale(.4); opacity:0; } }
-        .animate-bubble1 { animation: bubble 2s ease-in infinite; }
-        .animate-bubble2 { animation: bubble 2.5s ease-in infinite .4s; }
-        .animate-bubble3 { animation: bubble 1.8s ease-in infinite .8s; }
-      `}</style>
     </div>
   );
 };

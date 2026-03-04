@@ -27,6 +27,46 @@ import BudgetForecasting from '../components/BudgetForecasting';
 import PowerManagement from '../components/PowerManagement';
 import SystemStatus from '../components/SystemStatus';
 
+/* ── Error Boundary to prevent a single page crash from blanking everything ── */
+class RouteErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[RouteErrorBoundary]', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-red-50 rounded-2xl p-8 border border-red-200 text-center">
+          <i className="fas fa-exclamation-triangle text-red-500 text-4xl mb-4 block" />
+          <h2 className="text-xl font-bold text-red-700 mb-2">Page Error</h2>
+          <p className="text-red-600 mb-4">
+            Something went wrong loading this page.
+          </p>
+          <pre className="text-xs text-red-400 bg-red-100 p-3 rounded-lg overflow-auto max-h-32 mb-4">
+            {this.state.error?.message}
+          </pre>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            className="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+          >
+            Try Again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const Dashboard: React.FC = () => {
   const [currentUsername, setCurrentUsername] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -141,6 +181,7 @@ const Dashboard: React.FC = () => {
 
         {/* Dashboard Content */}
         <div className="p-4 md:p-8">
+          <RouteErrorBoundary>
           <Routes>
             <Route path="/" element={<DashboardHome username={currentUsername} />} />
             <Route path="/fish-count" element={<FishCount />} />
@@ -181,6 +222,7 @@ const Dashboard: React.FC = () => {
             <Route path="/settings" element={<Settings />} />
             <Route path="/system-status" element={<SystemStatus />} />
           </Routes>
+          </RouteErrorBoundary>
         </div>
       </div>
     </div>
