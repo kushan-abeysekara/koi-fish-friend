@@ -34,10 +34,10 @@ export default function PowerManagement() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirm, setConfirm] = useState<ConfirmDialog | null>(null);
 
-  // Online = received a live WebSocket message in the last 15 s AND device reported online
+  // Online = received a live WebSocket message in the last 60 s AND device reported online
   const isOnline = lastWsMessage !== null &&
     device?.status === 'online' &&
-    (Date.now() - lastWsMessage.getTime()) < 15000;
+    (Date.now() - lastWsMessage.getTime()) < 60000;
 
   const [formData, setFormData] = useState({
     name: '',
@@ -113,12 +113,12 @@ export default function PowerManagement() {
             });
           }
 
-          // Reset offline watchdog — 15 s without a message → device is offline
+          // Reset offline watchdog — 60 s without a message → device is offline
           if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
           offlineTimerRef.current = setTimeout(() => {
             setDevice(prev => prev ? { ...prev, status: 'offline' } : null);
             setLastWsMessage(null);
-          }, 15000);
+          }, 60000);
         } catch (err) {
           console.error('[PWR-WS] Failed to parse message:', err);
         }
@@ -516,7 +516,7 @@ export default function PowerManagement() {
                       <button
                         key={mode.key}
                         onClick={mode.onClick}
-                        disabled={loading || commandInProgress || !isOnline}
+                        disabled={loading || commandInProgress}
                         className={`relative group bg-white rounded-2xl border-2 p-5 text-left shadow-sm transition-all duration-200
                           hover:shadow-md hover:-translate-y-0.5 active:scale-95
                           disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-sm
