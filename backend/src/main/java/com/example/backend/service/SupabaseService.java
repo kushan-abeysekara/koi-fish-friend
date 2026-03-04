@@ -83,6 +83,78 @@ public class SupabaseService {
 
         System.out.println("[Supabase] ✅ Initialized - URL: " + supabaseUrl);
         System.out.println("[Supabase] ✅ Using pg/query endpoint for all operations");
+
+        // Create all required tables on startup (idempotent)
+        executor.submit(this::ensureTablesExist);
+    }
+
+    /**
+     * Creates all required Supabase tables if they do not already exist.
+     * Called once during @PostConstruct — safe to run on every restart.
+     */
+    private void ensureTablesExist() {
+        String[] ddls = {
+            // Energy: live status (one row per device)
+            "CREATE TABLE IF NOT EXISTS energydb (" +
+            "  device_id   TEXT PRIMARY KEY," +
+            "  voltage     FLOAT   DEFAULT 0," +
+            "  current     FLOAT   DEFAULT 0," +
+            "  power       FLOAT   DEFAULT 0," +
+            "  energy_wh   FLOAT   DEFAULT 0," +
+            "  status      TEXT    DEFAULT 'normal'," +
+            "  rssi        INT     DEFAULT 0," +
+            "  ip_address  TEXT    DEFAULT ''," +
+            "  updated_at  TIMESTAMPTZ DEFAULT NOW()" +
+            ")",
+
+            // Energy: historical readings (1 per minute)
+            "CREATE TABLE IF NOT EXISTS energy_history (" +
+            "  id          BIGSERIAL PRIMARY KEY," +
+            "  device_id   TEXT," +
+            "  voltage     FLOAT," +
+            "  current     FLOAT," +
+            "  power       FLOAT," +
+            "  energy_wh   FLOAT," +
+            "  status      TEXT    DEFAULT 'normal'," +
+            "  recorded_at TIMESTAMPTZ DEFAULT NOW()" +
+            ")",
+
+            // Water quality: live status (one row per device)
+            "CREATE TABLE IF NOT EXISTS sensor_live (" +
+            "  device_id            TEXT PRIMARY KEY," +
+            "  ph_value             FLOAT   DEFAULT 0," +
+            "  turbidity            FLOAT   DEFAULT 0," +
+            "  water_quality_status TEXT    DEFAULT 'normal'," +
+            "  status               TEXT    DEFAULT 'normal'," +
+            "  rssi                 INT     DEFAULT 0," +
+            "  updated_at           TIMESTAMPTZ DEFAULT NOW()" +
+            ")",
+
+            // Water quality: historical readings (1 per minute)
+            "CREATE TABLE IF NOT EXISTS sensor_history (" +
+            "  id                   BIGSERIAL PRIMARY KEY," +
+            "  device_id            TEXT," +
+            "  ph_value             FLOAT," +
+            "  turbidity            FLOAT," +
+            "  water_quality_status TEXT    DEFAULT 'normal'," +
+            "  status               TEXT    DEFAULT 'normal'," +
+            "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
+            ")",
+
+            // Enable Realtime on live tables
+            "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
+            "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live"
+        };
+
+        for (String sql : ddls) {
+            try {
+                executePgQuery(sql);
+            } catch (Exception e) {
+                // Log but don't fail startup — table may already exist or Realtime already added
+                System.out.println("[Supabase] ℹ️ DDL note: " + e.getMessage());
+            }
+        }
+        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history)");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -376,6 +448,151 @@ public class SupabaseService {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  ENERGY / BUDGET_MANAGEMENT device write operations
+    // ═══════════════════════════════════════════════════════════════
+
+    // Separate throttle for energy_history (don't share with feeding throttle)
+    private final AtomicLong lastEnergyHistoryInsertTime = new AtomicLong(0);
+    private static final long ENERGY_HISTORY_THROTTLE_MS = 60_000; // 1 per minute
+
+    /**
+     * UPSERT real-time energy device status into energydb table.
+     * Called on every MQTT message (~every 3s). Updates a single row per device_id.
+     * Frontend subscribes via Supabase Realtime to get ~100ms updates.
+     */
+    public void storeEnergyLive(String deviceId, JsonNode mqttPayload) {
+        if (!enabled || httpClient == null) return;
+
+        executor.submit(() -> {
+            try {
+                double voltage   = getDoubleOrDefault(mqttPayload, "voltage",   0);
+                double current   = getDoubleOrDefault(mqttPayload, "current",   0);
+                double power     = getDoubleOrDefault(mqttPayload, "power",     0);
+                double energyWh  = getDoubleOrDefault(mqttPayload, "energyWh",  0);
+                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
+                int    rssi      = getIntOrDefault(mqttPayload,    "rssi",      0);
+                String ipAddress = getTextOrDefault(mqttPayload,   "ipAddress", "");
+
+                String sql = "INSERT INTO energydb (device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) " +
+                        "VALUES ('" + esc(deviceId) + "', " + voltage + ", " + current + ", " + power + ", " +
+                        energyWh + ", '" + esc(status) + "', " + rssi + ", '" + esc(ipAddress) + "', NOW()) " +
+                        "ON CONFLICT (device_id) DO UPDATE SET " +
+                        "voltage = EXCLUDED.voltage, current = EXCLUDED.current, power = EXCLUDED.power, " +
+                        "energy_wh = EXCLUDED.energy_wh, status = EXCLUDED.status, rssi = EXCLUDED.rssi, " +
+                        "ip_address = EXCLUDED.ip_address, updated_at = NOW()";
+
+                executePgQuery(sql);
+                System.out.println("[Supabase] ⚡ energydb upserted: " + deviceId +
+                        " V:" + voltage + " I:" + current + " P:" + power + "W");
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error upserting energydb: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * INSERT one reading per minute into energy_history table.
+     * Provides historical data for charts. Throttled to 1/min.
+     */
+    public void storeEnergyHistory(String deviceId, JsonNode mqttPayload) {
+        if (!enabled || httpClient == null) return;
+
+        long now  = System.currentTimeMillis();
+        long last = lastEnergyHistoryInsertTime.get();
+        if (now - last < ENERGY_HISTORY_THROTTLE_MS) return;
+        if (!lastEnergyHistoryInsertTime.compareAndSet(last, now)) return;
+
+        executor.submit(() -> {
+            try {
+                double voltage  = getDoubleOrDefault(mqttPayload, "voltage",  0);
+                double current  = getDoubleOrDefault(mqttPayload, "current",  0);
+                double power    = getDoubleOrDefault(mqttPayload, "power",    0);
+                double energyWh = getDoubleOrDefault(mqttPayload, "energyWh", 0);
+                String status   = getTextOrDefault(mqttPayload,   "status",   "normal");
+
+                String sql = "INSERT INTO energy_history (device_id, voltage, current, power, energy_wh, status, recorded_at) " +
+                        "VALUES ('" + esc(deviceId) + "', " + voltage + ", " + current + ", " +
+                        power + ", " + energyWh + ", '" + esc(status) + "', NOW())";
+
+                executePgQuery(sql);
+                System.out.println("[Supabase] ⚡ energy_history saved (1/min): " + deviceId);
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error storing energy_history: " + e.getMessage());
+            }
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  WATER_QUALITY device write operations
+    // ═══════════════════════════════════════════════════════════════
+
+    private final AtomicLong lastSensorHistoryInsertTime = new AtomicLong(0);
+    private static final long SENSOR_HISTORY_THROTTLE_MS = 60_000; // 1 per minute
+
+    /**
+     * UPSERT real-time water quality device status into sensor_live table.
+     * Called on every MQTT message. Triggers Supabase Realtime → frontend ~100ms.
+     */
+    public void storeSensorLive(String deviceId, JsonNode mqttPayload) {
+        if (!enabled || httpClient == null) return;
+
+        executor.submit(() -> {
+            try {
+                double phValue   = getDoubleOrDefault(mqttPayload, "phValue",   0);
+                double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
+                String wqStatus  = getTextOrDefault(mqttPayload,   "waterQualityStatus", "normal");
+                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
+                int    rssi      = getIntOrDefault(mqttPayload,    "rssi",      0);
+
+                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, status, rssi, updated_at) " +
+                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
+                        esc(wqStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
+                        "ON CONFLICT (device_id) DO UPDATE SET " +
+                        "ph_value = EXCLUDED.ph_value, turbidity = EXCLUDED.turbidity, " +
+                        "water_quality_status = EXCLUDED.water_quality_status, " +
+                        "status = EXCLUDED.status, rssi = EXCLUDED.rssi, updated_at = NOW()";
+
+                executePgQuery(sql);
+                System.out.println("[Supabase] 🌊 sensor_live upserted: " + deviceId +
+                        " pH:" + phValue + " Turb:" + turbidity);
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error upserting sensor_live: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * INSERT one reading per minute into sensor_history table.
+     * Provides historical data for water quality charts.
+     */
+    public void storeSensorHistory(String deviceId, JsonNode mqttPayload) {
+        if (!enabled || httpClient == null) return;
+
+        long now  = System.currentTimeMillis();
+        long last = lastSensorHistoryInsertTime.get();
+        if (now - last < SENSOR_HISTORY_THROTTLE_MS) return;
+        if (!lastSensorHistoryInsertTime.compareAndSet(last, now)) return;
+
+        executor.submit(() -> {
+            try {
+                double phValue   = getDoubleOrDefault(mqttPayload, "phValue",   0);
+                double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
+                String wqStatus  = getTextOrDefault(mqttPayload,   "waterQualityStatus", "normal");
+                String status    = getTextOrDefault(mqttPayload,   "status",    "normal");
+
+                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, status, recorded_at) " +
+                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
+                        esc(wqStatus) + "', '" + esc(status) + "', NOW())";
+
+                executePgQuery(sql);
+                System.out.println("[Supabase] 🌊 sensor_history saved (1/min): " + deviceId);
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error storing sensor_history: " + e.getMessage());
+            }
+        });
     }
 
     /**

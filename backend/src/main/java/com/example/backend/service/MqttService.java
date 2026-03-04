@@ -60,6 +60,8 @@ public class MqttService {
     private final AtomicLong lastHistoryInsertTime = new AtomicLong(0);
     private static final long HISTORY_THROTTLE_MS = 10_000;
 
+
+
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
         try {
@@ -89,7 +91,8 @@ public class MqttService {
                 // prefix
                 if (deviceId.contains("feed_device")) {
                     feedingWebSocketHandler.broadcast(payload);
-                    // Store feeding data to Supabase for historical records (server-side, always running)
+                    // Store feeding data to Supabase for historical records (server-side, always
+                    // running)
                     supabaseService.storeFeedingData(deviceId, jsonNode);
                     // Store feeding data to MySQL (primary storage, auto-created table)
                     storeFeedingHistoryToMySQL(deviceId, jsonNode);
@@ -231,8 +234,10 @@ public class MqttService {
             // Throttle: skip if less than 10s since last insert
             long now = System.currentTimeMillis();
             long last = lastHistoryInsertTime.get();
-            if (now - last < HISTORY_THROTTLE_MS) return;
-            if (!lastHistoryInsertTime.compareAndSet(last, now)) return;
+            if (now - last < HISTORY_THROTTLE_MS)
+                return;
+            if (!lastHistoryInsertTime.compareAndSet(last, now))
+                return;
 
             FeedingHistory h = buildFeedingHistory(deviceId, json, "online");
             feedingHistoryRepository.save(h);
@@ -297,10 +302,12 @@ public class MqttService {
     }
 
     /**
-     * Detect feeding start/stop transitions and log events to Supabase + MySQL (not throttled).
+     * Detect feeding start/stop transitions and log events to Supabase + MySQL (not
+     * throttled).
      */
     private void detectFeedingEvent(String deviceId, JsonNode json) {
-        if (!json.has("feedingActive")) return;
+        if (!json.has("feedingActive"))
+            return;
         boolean isActive = json.get("feedingActive").asBoolean();
         if (isActive && !lastFeedingActiveState) {
             supabaseService.storeFeedingEvent(deviceId, "feeding_started", json);
@@ -334,9 +341,11 @@ public class MqttService {
             if (json.has("waterQualityStatus"))
                 data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
 
-            System.out.println("Water quality data saved: " + deviceId + " - Pond: " +
-                    (device.getPond() != null ? device.getPond().getId() : "Not assigned") +
-                    " - pH:" + data.getPhValue() + " Turb:" + data.getTurbidity());
+            // Water quality: skip MySQL, save only to Supabase
+            supabaseService.storeSensorLive(deviceId, json);
+            supabaseService.storeSensorHistory(deviceId, json);
+            System.out.println("🌊 Water quality → Supabase: " + deviceId +
+                    " pH:" + data.getPhValue() + " Turb:" + data.getTurbidity());
         } else if (device.getDeviceType() == SensorDevice.DeviceType.FEEDING_MANAGEMENT) {
             // Store feeding device status
             device.setStatus("online");
@@ -390,15 +399,16 @@ public class MqttService {
             data.setEnergyWh(json.get("energyWh").asDouble());
             data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
 
-            // Always save energy data for BUDGET_MANAGEMENT devices
-            dataRepository.save(data);
-
-            System.out.println("⚡ Energy data saved: " + deviceId + " - Pond: " +
-                    (device.getPond() != null ? device.getPond().getId() : "Unassigned") +
-                    " - V:" + data.getVoltage() + " I:" + data.getCurrent() +
+            // Energy data: skip MySQL, save only to Supabase
+            // Supabase: UPSERT live status on every message (Realtime → frontend ~100ms)
+            supabaseService.storeEnergyLive(deviceId, json);
+            // Supabase: INSERT history once per minute (for charts)
+            supabaseService.storeEnergyHistory(deviceId, json);
+            System.out.println("⚡ Energy received → Supabase: " + deviceId +
+                    " V:" + data.getVoltage() + " I:" + data.getCurrent() +
                     " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");
 
-            // Update device energy counter
+            // Always update live device energy counter regardless of throttle
             device.setEnergyWh(data.getEnergyWh());
         } else {
             // No relevant data to store
@@ -406,12 +416,6 @@ public class MqttService {
             deviceRepository.save(device);
             System.out.println("⚠️ No sensor data to save for device: " + deviceId);
             return;
-        }
-
-        // Save sensor data if applicable
-        if (device.getDeviceType() == SensorDevice.DeviceType.WATER_QUALITY) {
-            dataRepository.save(data);
-            System.out.println("✅ Water quality data saved to database for device: " + deviceId);
         }
 
         device.setLastSeen(LocalDateTime.now());

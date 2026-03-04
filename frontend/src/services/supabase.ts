@@ -2,7 +2,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
 // Self-hosted Supabase instance (kept for optional real-time subscriptions)
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://superbase.koifishfriend.online';
+// MUST be http:// (not https://) — self-hosted instance has no TLS.
+// This makes the Supabase JS client use ws:// instead of wss:// for Realtime.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'http://superbase.koifishfriend.online';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY';
 
@@ -83,6 +85,31 @@ export interface FeedingEventRow {
   target_weight: number;
   rssi: number;
   ip_address: string;
+}
+
+/** energydb table — backend UPSERTS on every MQTT message (~3s). One row per device. */
+export interface EnergyDbRow {
+  device_id: string;
+  voltage:   number;
+  current:   number;
+  power:     number;
+  energy_wh: number;
+  status:    string;
+  rssi:      number;
+  ip_address: string;
+  updated_at: string;
+}
+
+/** energy_history table — one INSERT per minute per device. */
+export interface EnergyHistoryRow {
+  id:          number;
+  device_id:   string;
+  voltage:     number;
+  current:     number;
+  power:       number;
+  energy_wh:   number;
+  status:      string;
+  recorded_at: string;
 }
 
 /**
@@ -318,5 +345,53 @@ export async function fetchManualFeedingHistory(
   } catch (err) {
     console.error('[ManualFeed] Error fetching history:', err);
     return [];
+  }
+}
+
+// ─── Energy Monitor — Supabase direct queries ────────────────────────────────
+
+/**
+ * Fetch energy_history rows for the given time range directly from Supabase.
+ * Returns rows newest-first. Falls back to empty array on error.
+ */
+export async function fetchEnergyHistory(
+  hoursBack: number = 24,
+  limit: number = 1500,
+): Promise<EnergyHistoryRow[]> {
+  if (!supabase) return [];
+  try {
+    const since = new Date(Date.now() - hoursBack * 3600 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('energy_history')
+      .select('*')
+      .gte('recorded_at', since)
+      .order('recorded_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return (data ?? []) as EnergyHistoryRow[];
+  } catch (err) {
+    console.warn('[Supabase] fetchEnergyHistory failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch the latest live status row from energydb for a given device.
+ */
+export async function fetchEnergyLive(deviceId: string): Promise<EnergyDbRow | null> {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('energydb')
+      .select('*')
+      .eq('device_id', deviceId)
+      .single();
+
+    if (error) throw error;
+    return (data ?? null) as EnergyDbRow | null;
+  } catch (err) {
+    console.warn('[Supabase] fetchEnergyLive failed:', err);
+    return null;
   }
 }

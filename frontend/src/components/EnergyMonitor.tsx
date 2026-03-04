@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { sensorDataApi } from '../services/api';
 import type { SensorData } from '../services/api';
+import { supabase, fetchEnergyHistory as fetchEnergyHistoryFromSupabase } from '../services/supabase';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
@@ -96,10 +97,102 @@ export default function EnergyMonitor() {
     };
   }, []);
 
-  // ── REST: historical data only (no stale-latest-check needed) ───────────
+  // ── Supabase Realtime: PRIMARY live data path (ESP32→Backend→Supabase→Frontend) ──
+  // Faster than WebSocket (~100ms vs ~300ms). WebSocket above stays as backup.
+  useEffect(() => {
+    if (!supabase) return; // Supabase unavailable — WebSocket handles it
+    let isMounted = true;
+
+    // Bootstrap: load latest value immediately on mount
+    (async () => {
+      try {
+        const { data } = await supabase.from('energydb').select('*').limit(1).single();
+        if (data && isMounted) {
+          const now = new Date();
+          setLastUpdateTime(now);
+          setLatestData(prev => ({
+            id: prev?.id ?? 0,
+            device: prev?.device ?? ({ deviceId: data.device_id } as SensorData['device']),
+            pond: prev?.pond ?? null,
+            voltage:  data.voltage  ?? 0,
+            current:  data.current  ?? 0,
+            power:    data.power    ?? 0,
+            energyWh: data.energy_wh ?? 0,
+            status:   data.status   ?? 'normal',
+            timestamp: data.updated_at ?? now.toISOString(),
+          }));
+          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = setTimeout(() => {
+            setLatestData(null); setLastUpdateTime(null);
+          }, 60000);
+        }
+      } catch { /* ignore bootstrap errors */ }
+    })();
+
+    // Subscribe to live UPSERT changes on energydb
+    const channel = supabase
+      .channel('energydb_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'energydb' }, (payload) => {
+        if (!isMounted) return;
+        const r = payload.new as Record<string, unknown>;
+        const now = new Date();
+        setLastUpdateTime(now);
+        setLatestData(prev => ({
+          id:       prev?.id ?? 0,
+          device:   prev?.device ?? ({ deviceId: r.device_id } as SensorData['device']),
+          pond:     prev?.pond ?? null,
+          voltage:  (r.voltage  as number) ?? 0,
+          current:  (r.current  as number) ?? 0,
+          power:    (r.power    as number) ?? 0,
+          energyWh: (r.energy_wh as number) ?? 0,
+          status:   (r.status   as string) ?? 'normal',
+          timestamp: (r.updated_at as string) ?? now.toISOString(),
+        }));
+        // Reset offline watchdog on every Supabase RT message
+        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+        offlineTimerRef.current = setTimeout(() => {
+          setLatestData(null); setLastUpdateTime(null);
+        }, 60000);
+      })
+      .subscribe((status) => {
+        console.log('[Supabase RT] energydb subscription:', status);
+      });
+
+    return () => {
+      isMounted = false;
+      supabase?.removeChannel(channel);
+    };
+  }, []);
+
+  // ── History: Supabase primary → REST fallback ───────────────────────────
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
+    try {
+      // Try Supabase energy_history first (fastest, direct)
+      const sbRows = await fetchEnergyHistoryFromSupabase(selectedHours, 1500);
+      if (sbRows.length > 0) {
+        // Map EnergyHistoryRow → SensorData shape used by the component
+        const mapped: SensorData[] = sbRows.map(r => ({
+          id:        r.id,
+          device:    { deviceId: r.device_id } as SensorData['device'],
+          pond:      null,
+          voltage:   r.voltage,
+          current:   r.current,
+          power:     r.power,
+          energyWh:  r.energy_wh,
+          status:    r.status,
+          timestamp: r.recorded_at,
+        }));
+        setHistoricalData(mapped);
+        setLoading(false);
+        return; // Supabase succeeded — skip REST
+      }
+    } catch (err) {
+      console.warn('[EnergyMonitor] Supabase history fetch failed, trying REST:', err);
+    }
+
+    // Fallback: backend REST API (MySQL)
     try {
       const historicalRes = await sensorDataApi.getEnergyHistory(selectedHours);
       if (historicalRes.success && historicalRes.data) {
@@ -117,7 +210,7 @@ export default function EnergyMonitor() {
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 30000); // refresh history every 30s
+    const interval = setInterval(fetchHistory, 60000); // refresh every 60s
     return () => clearInterval(interval);
   }, [fetchHistory]);
 
@@ -140,13 +233,27 @@ export default function EnergyMonitor() {
   // latestData is null when offline (cleared by the 15s WebSocket watchdog)
   const isOnline = latestData !== null;
 
+  // Group by minute — keep only the most recent reading per minute
+  // This de-duplicates old DB rows that were saved every 3s (before the backend throttle)
+  const minuteFilteredData = useMemo(() => {
+    const seen = new Map<string, SensorData>();
+    for (const d of historicalData) {
+      // Ensure UTC parsing: append 'Z' if no timezone info present
+      const ts = d.timestamp.endsWith('Z') || d.timestamp.includes('+') ? d.timestamp : d.timestamp + 'Z';
+      // key = "YYYY-MM-DDTHH:MM" — truncate to the minute
+      const key = new Date(ts).toISOString().slice(0, 16);
+      if (!seen.has(key)) seen.set(key, d); // first hit = most recent (data comes DESC)
+    }
+    return Array.from(seen.values());
+  }, [historicalData]);
+
   const chartData = useMemo(() => {
-    return [...historicalData].reverse().map(d => ({
+    return [...minuteFilteredData].reverse().map(d => ({
       time: new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       voltage: parseFloat((d.voltage ?? 0).toFixed(1)),
       current: parseFloat((d.current ?? 0).toFixed(3)),
     }));
-  }, [historicalData]);
+  }, [minuteFilteredData]);
 
   // ── shared chart config ───────────────────────────────────────────────────
   const ChartEmpty = () => (
@@ -375,7 +482,7 @@ export default function EnergyMonitor() {
                       Last {timeRangeLabel(selectedHours)}
                     </span>
                   </div>
-                  {historicalData.length === 0 ? (
+                  {minuteFilteredData.length === 0 ? (
                     <div className="text-center py-12 text-gray-400 text-sm">No data available yet.</div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -391,7 +498,7 @@ export default function EnergyMonitor() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                          {historicalData.slice(0, 20).map((data, index) => (
+                          {minuteFilteredData.slice(0, 20).map((data, index) => (
                             <tr
                               key={data.id}
                               className={`hover:bg-gray-50 transition-colors ${index === 0 ? 'bg-blue-50/50' : ''}`}
@@ -499,10 +606,10 @@ export default function EnergyMonitor() {
                   <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
                     <h2 className="font-semibold text-gray-700">Detailed Cost Breakdown</h2>
                     <span className="text-xs text-gray-400 bg-gray-100 px-2.5 py-1 rounded-full">
-                      {historicalData.length} records
+                      {minuteFilteredData.length} records
                     </span>
                   </div>
-                  {historicalData.length === 0 ? (
+                  {minuteFilteredData.length === 0 ? (
                     <div className="text-center py-12 text-gray-400 text-sm">No historical data available.</div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -519,7 +626,7 @@ export default function EnergyMonitor() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                          {historicalData.map((data) => {
+                          {minuteFilteredData.map((data) => {
                             const kWh = data.energyWh / 1000;
                             const cost = kWh * electricityRate;
                             return (
