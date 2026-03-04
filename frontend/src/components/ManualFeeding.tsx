@@ -115,7 +115,7 @@ const ManualFeeding: React.FC = () => {
     if (row) {
       setTankLevel(row.tank_level ?? 0);
       setDeviceOnline(true);
-      setLastUpdate(new Date(row.recorded_at ?? Date.now()).toLocaleTimeString());
+      setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());
     }
   }, []);
 
