@@ -67,6 +67,39 @@ const INITIAL_DEVICE: DeviceData = {
 // Cache key for persisting last known device data
 const DEVICE_CACHE_KEY = 'feedingDashboard_lastDevice';
 
+// ─── Smooth Value Filter (EMA + spike rejection) ───
+// Smooths noisy load-cell readings while staying responsive to real changes.
+// `alpha` controls responsiveness: 0.15 = smooth, 0.5 = fast.
+// Spikes > `maxDelta` from the smoothed value are clamped.
+class SmoothValue {
+  private value: number;
+  private alpha: number;
+  private maxDelta: number;
+  private initialized = false;
+
+  constructor(alpha = 0.2, maxDelta = Infinity) {
+    this.value = 0;
+    this.alpha = alpha;
+    this.maxDelta = maxDelta;
+  }
+
+  update(raw: number): number {
+    if (!this.initialized || !isFinite(this.value)) {
+      this.value = raw;
+      this.initialized = true;
+      return raw;
+    }
+    // Clamp spikes: if delta > maxDelta, treat as real jump (use higher alpha)
+    const delta = Math.abs(raw - this.value);
+    const a = delta > this.maxDelta ? 0.6 : this.alpha;
+    this.value = this.value + a * (raw - this.value);
+    return this.value;
+  }
+
+  get() { return this.value; }
+  reset() { this.initialized = false; this.value = 0; }
+}
+
 function loadCachedDevice(): DeviceData {
   try {
     const cached = localStorage.getItem(DEVICE_CACHE_KEY);
@@ -106,6 +139,14 @@ const FeedingDashboard: React.FC = () => {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(1000); // Exponential backoff starting at 1s
 
+  // ─── EMA smoothers for noisy sensor values ───
+  // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
+  const smoothHopper = useRef(new SmoothValue(0.18, 2000));
+  // currentWeight (scale) in grams, maxDelta 200g
+  const smoothWeight = useRef(new SmoothValue(0.18, 200));
+  // percentage 0-100, maxDelta 15%
+  const smoothPct = useRef(new SmoothValue(0.18, 15));
+
   const isOnline = device.status !== 'offline';
   // Show values if online OR if we have cached stale data
   const hasData = isOnline || isStale;
@@ -121,13 +162,18 @@ const FeedingDashboard: React.FC = () => {
       const now = new Date();
       const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
+      // Apply EMA smoothing to noisy sensor values
+      const sHopper = smoothHopper.current.update(d.hopperLevel ?? 0);
+      const sWeight = smoothWeight.current.update(d.weight ?? 0);
+      const sPct = smoothPct.current.update(d.hopperPercentage ?? 0);
+
       const newDevice: DeviceData = {
         status: d.status || 'online',
         feedingActive: d.feedingActive || false,
-        hopperLevel: d.hopperLevel ?? 0,
+        hopperLevel: sHopper,
         hopperCapacity: d.hopperCapacity ?? 20000,
-        hopperPercentage: d.hopperPercentage ?? 0,
-        currentWeight: d.weight ?? 0,
+        hopperPercentage: sPct,
+        currentWeight: sWeight,
         targetWeight: d.targetWeight ?? 0,
         feedCount: d.feedCount ?? 0,
         totalGramsFed: d.totalGrams ?? 0,
@@ -154,7 +200,7 @@ const FeedingDashboard: React.FC = () => {
 
       // Weight history (keep last 60 data points = ~2 min at 2s interval)
       setWeightHistory(prev => {
-        const next = [...prev, { time: timeStr, weight: d.weight ?? 0, hopper: (d.hopperLevel ?? 0) / 1000 }];
+        const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
         return next.slice(-60);
       });
 
@@ -292,14 +338,19 @@ const FeedingDashboard: React.FC = () => {
       try {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
         if (fbData && fbData.device_id) {
+          // Apply EMA smoothing to noisy sensor values
+          const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
+          const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
+          const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
+
           setDevice(prev => {
             const updated: DeviceData = {
               ...prev,
               status: 'online',
-              currentWeight: fbData.weight ?? prev.currentWeight,
-              hopperLevel: fbData.tank_level ?? prev.hopperLevel,
+              currentWeight: sWeight,
+              hopperLevel: sHopper,
               hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
-              hopperPercentage: fbData.tank_percentage ?? prev.hopperPercentage,
+              hopperPercentage: sPct,
               motorStatus: fbData.motor_status || prev.motorStatus,
               plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
               escPercent: fbData.esc_percent ?? prev.escPercent,
@@ -326,8 +377,8 @@ const FeedingDashboard: React.FC = () => {
             if (last && last.time === timeStr) return prev;
             const next = [...prev, {
               time: timeStr,
-              weight: fbData.weight ?? 0,
-              hopper: (fbData.tank_level ?? 0) / 1000,
+              weight: sWeight,
+              hopper: sHopper / 1000,
             }];
             return next.slice(-120);
           });
@@ -386,15 +437,20 @@ const FeedingDashboard: React.FC = () => {
               if (!isMounted) return;
               const r = payload.new as Record<string, unknown>;
 
+              // Apply EMA smoothing
+              const sHopper = smoothHopper.current.update((r.tank_level as number) ?? 0);
+              const sWeight = smoothWeight.current.update((r.weight as number) ?? 0);
+              const sPct = smoothPct.current.update((r.tank_percentage as number) ?? 0);
+
               // Update live device data from feeddb real-time
               setDevice(prev => {
                 const updated: DeviceData = {
                   ...prev,
                   status: 'online',
-                  currentWeight: (r.weight as number) ?? prev.currentWeight,
-                  hopperLevel: (r.tank_level as number) ?? prev.hopperLevel,
+                  currentWeight: sWeight,
+                  hopperLevel: sHopper,
                   hopperCapacity: (r.tank_capacity as number) ?? prev.hopperCapacity ?? 20000,
-                  hopperPercentage: (r.tank_percentage as number) ?? prev.hopperPercentage,
+                  hopperPercentage: sPct,
                   motorStatus: (r.motor_status as string) || prev.motorStatus,
                   plateSpeed: (r.motor_rpm as number) ?? prev.plateSpeed,
                   escPercent: (r.esc_percent as number) ?? prev.escPercent,
@@ -418,8 +474,8 @@ const FeedingDashboard: React.FC = () => {
               setWeightHistory(prev => {
                 const next = [...prev, {
                   time: timeStr,
-                  weight: (r.weight as number) ?? 0,
-                  hopper: ((r.tank_level as number) ?? 0) / 1000,
+                  weight: sWeight,
+                  hopper: sHopper / 1000,
                 }];
                 return next.slice(-60);
               });

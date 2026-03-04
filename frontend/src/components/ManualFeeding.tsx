@@ -9,6 +9,21 @@ import {
 } from '../services/supabase';
 import type { FeeddbRow, ManualFeedingRow } from '../services/supabase';
 
+/* ─── EMA Smoother (matches FeedingDashboard) ─── */
+class SmoothValue {
+  private value = 0;
+  private alpha: number;
+  private maxDelta: number;
+  private initialized = false;
+  constructor(alpha = 0.2, maxDelta = Infinity) { this.alpha = alpha; this.maxDelta = maxDelta; }
+  update(raw: number): number {
+    if (!this.initialized || !isFinite(this.value)) { this.value = raw; this.initialized = true; return raw; }
+    const a = Math.abs(raw - this.value) > this.maxDelta ? 0.6 : this.alpha;
+    this.value += a * (raw - this.value);
+    return this.value;
+  }
+}
+
 /* ───────── Animated Tank Gauge ───────── */
 const TankGauge: React.FC<{ level: number; capacity: number; isFeeding: boolean }> = ({
   level,
@@ -103,18 +118,24 @@ const ManualFeeding: React.FC = () => {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // EMA smoothers for stable display (tank_level in kg, capacity in kg)
+  const smoothLevel = useRef(new SmoothValue(0.18, 2));  // maxDelta 2 kg
+  const smoothCap = useRef(new SmoothValue(0.18, 5));    // maxDelta 5 kg
+
   /* ── helpers ── */
   const amountInKg = useCallback(() => {
     const v = parseFloat(feedAmount) || 0;
     return unit === 'g' ? v / 1000 : v;
   }, [feedAmount, unit]);
 
-  /* ── poll device status from Supabase (values stored in grams → convert to kg) ── */
+  /* ── poll device status from Supabase (values stored in grams → convert to kg → smooth) ── */
   const refreshDeviceStatus = useCallback(async () => {
     const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
     if (row) {
-      setTankLevel((row.tank_level ?? 0) / 1000);
-      setTankCapacity((row.tank_capacity ?? 20000) / 1000);
+      const rawLevel = (row.tank_level ?? 0) / 1000;
+      const rawCap = (row.tank_capacity ?? 20000) / 1000;
+      setTankLevel(smoothLevel.current.update(rawLevel));
+      setTankCapacity(smoothCap.current.update(rawCap));
       setDeviceOnline(true);
       setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());
     }
