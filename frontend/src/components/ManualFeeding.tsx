@@ -84,10 +84,10 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
    ═══════════════════════════════════════ */
 const ManualFeeding: React.FC = () => {
   const DEVICE_ID = 'feed_device_001';
-  const TANK_CAPACITY = 5.0; // kg maximum capacity
 
   // ── state ──
   const [tankLevel, setTankLevel] = useState(0);
+  const [tankCapacity, setTankCapacity] = useState(20); // kg — read from device
   const [feedAmount, setFeedAmount] = useState('');
   const [unit, setUnit] = useState<'kg' | 'g'>('kg');
   const [isFeeding, setIsFeeding] = useState(false);
@@ -109,11 +109,12 @@ const ManualFeeding: React.FC = () => {
     return unit === 'g' ? v / 1000 : v;
   }, [feedAmount, unit]);
 
-  /* ── poll device status from Supabase ── */
+  /* ── poll device status from Supabase (values stored in grams → convert to kg) ── */
   const refreshDeviceStatus = useCallback(async () => {
     const row: FeeddbRow | null = await fetchDeviceStatus(DEVICE_ID);
     if (row) {
-      setTankLevel(row.tank_level ?? 0);
+      setTankLevel((row.tank_level ?? 0) / 1000);
+      setTankCapacity((row.tank_capacity ?? 20000) / 1000);
       setDeviceOnline(true);
       setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());
     }
@@ -238,7 +239,7 @@ const ManualFeeding: React.FC = () => {
       <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-5 sm:p-7">
         <div className="flex flex-col md:flex-row items-center gap-6">
           {/* Gauge */}
-          <TankGauge level={tankLevel} capacity={TANK_CAPACITY} isFeeding={isFeeding} />
+          <TankGauge level={tankLevel} capacity={tankCapacity} isFeeding={isFeeding} />
 
           {/* Info */}
           <div className="flex-1 w-full space-y-4">
