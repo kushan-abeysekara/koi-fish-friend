@@ -14,11 +14,18 @@ class SmoothValue {
   private alpha: number;
   private maxDelta: number;
   private initialized = false;
-  constructor(alpha = 0.2, maxDelta = Infinity) { this.alpha = alpha; this.maxDelta = maxDelta; }
+  private spikeCount = 0;
+  constructor(alpha = 0.5, maxDelta = Infinity) { this.alpha = alpha; this.maxDelta = maxDelta; }
   update(raw: number): number {
     if (!this.initialized || !isFinite(this.value)) { this.value = raw; this.initialized = true; return raw; }
-    const a = Math.abs(raw - this.value) > this.maxDelta ? 0.6 : this.alpha;
-    this.value += a * (raw - this.value);
+    const delta = Math.abs(raw - this.value);
+    if (delta > this.maxDelta) {
+      this.spikeCount++;
+      if (this.spikeCount >= 3) { this.value = raw; this.spikeCount = 0; }
+      return this.value;
+    }
+    this.spikeCount = 0;
+    this.value += this.alpha * (raw - this.value);
     return this.value;
   }
 }
@@ -117,8 +124,8 @@ const ManualFeeding: React.FC = () => {
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // EMA smoothers for stable display (tank_level in kg, capacity in kg)
-  const smoothLevel = useRef(new SmoothValue(0.18, 2));  // maxDelta 2 kg
-  const smoothCap = useRef(new SmoothValue(0.18, 5));    // maxDelta 5 kg
+  const smoothLevel = useRef(new SmoothValue(0.5, 3));   // reject spikes > 3 kg
+  const smoothCap = useRef(new SmoothValue(0.5, 5));     // reject spikes > 5 kg
 
   /* ── helpers ── */
   const amountInKg = useCallback(() => {
@@ -132,7 +139,8 @@ const ManualFeeding: React.FC = () => {
     if (row) {
       const rawLevel = (row.tank_level ?? 0) / 1000;
       const rawCap = (row.tank_capacity ?? 20000) / 1000;
-      setTankLevel(smoothLevel.current.update(rawLevel));
+      // Hard-clamp: level ≤ capacity, both ≥ 0
+      setTankLevel(Math.min(Math.max(smoothLevel.current.update(rawLevel), 0), rawCap));
       setTankCapacity(smoothCap.current.update(rawCap));
       setDeviceOnline(row.status === 'online');
       setLastUpdate(new Date(row.updated_at ?? Date.now()).toLocaleTimeString());

@@ -65,16 +65,16 @@ const INITIAL_DEVICE: DeviceData = {
 const DEVICE_CACHE_KEY = 'feedingDashboard_lastDevice';
 
 // ─── Smooth Value Filter (EMA + spike rejection) ───
-// Smooths noisy load-cell readings while staying responsive to real changes.
-// `alpha` controls responsiveness: 0.15 = smooth, 0.5 = fast.
-// Spikes > `maxDelta` from the smoothed value are clamped.
+// Fast alpha (0.5) = responds within 2-3 polls.
+// Spikes > `maxDelta` are IGNORED (not followed) unless 3 consecutive → real change.
 class SmoothValue {
   private value: number;
   private alpha: number;
   private maxDelta: number;
   private initialized = false;
+  private spikeCount = 0;
 
-  constructor(alpha = 0.2, maxDelta = Infinity) {
+  constructor(alpha = 0.5, maxDelta = Infinity) {
     this.value = 0;
     this.alpha = alpha;
     this.maxDelta = maxDelta;
@@ -86,15 +86,25 @@ class SmoothValue {
       this.initialized = true;
       return raw;
     }
-    // Clamp spikes: if delta > maxDelta, treat as real jump (use higher alpha)
     const delta = Math.abs(raw - this.value);
-    const a = delta > this.maxDelta ? 0.6 : this.alpha;
-    this.value = this.value + a * (raw - this.value);
+    if (delta > this.maxDelta) {
+      // Possible sensor spike — ignore unless 3+ consecutive = real change
+      this.spikeCount++;
+      if (this.spikeCount >= 3) {
+        // Sustained new level — accept it
+        this.value = raw;
+        this.spikeCount = 0;
+      }
+      return this.value;
+    }
+    // Normal reading — apply EMA
+    this.spikeCount = 0;
+    this.value = this.value + this.alpha * (raw - this.value);
     return this.value;
   }
 
   get() { return this.value; }
-  reset() { this.initialized = false; this.value = 0; }
+  reset() { this.initialized = false; this.value = 0; this.spikeCount = 0; }
 }
 
 function loadCachedDevice(): DeviceData {
@@ -130,13 +140,10 @@ const FeedingDashboard: React.FC = () => {
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
 
-  // ─── EMA smoothers for noisy sensor values ───
-  // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
-  const smoothHopper = useRef(new SmoothValue(0.18, 2000));
-  // currentWeight (scale) in grams, maxDelta 200g
-  const smoothWeight = useRef(new SmoothValue(0.18, 200));
-  // percentage 0-100, maxDelta 15%
-  const smoothPct = useRef(new SmoothValue(0.18, 15));
+  // ─── EMA smoothers (fast alpha=0.5, spike rejection ignores impossible jumps) ───
+  const smoothHopper = useRef(new SmoothValue(0.5, 3000));  // reject spikes > 3kg
+  const smoothWeight = useRef(new SmoothValue(0.5, 500));   // reject spikes > 500g
+  const smoothPct = useRef(new SmoothValue(0.5, 20));       // reject spikes > 20%
 
   const isOnline = device.status !== 'offline';
   // Show values if online OR if we have cached stale data
@@ -156,9 +163,11 @@ const FeedingDashboard: React.FC = () => {
           // Backend now returns status='offline' if last_seen > 15s ago
           const deviceIsOnline = fbData.status === 'online';
 
-          const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
-          const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
-          const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
+          const cap = fbData.tank_capacity ?? 20000;
+          // Smooth + hard-clamp: hopper ≤ capacity, weight ≤ 20 kg, pct 0-100
+          const sHopper = Math.min(Math.max(smoothHopper.current.update(fbData.tank_level ?? 0), 0), cap);
+          const sWeight = Math.min(Math.max(smoothWeight.current.update(fbData.weight ?? 0), 0), 20000);
+          const sPct = Math.min(Math.max(smoothPct.current.update(fbData.tank_percentage ?? 0), 0), 100);
 
           setDevice(prev => {
             const updated: DeviceData = {
