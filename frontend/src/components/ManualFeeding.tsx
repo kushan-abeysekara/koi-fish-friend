@@ -116,6 +116,7 @@ const ManualFeeding: React.FC = () => {
   const [lastUpdate, setLastUpdate] = useState('');
 
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastRtRef = useRef<number>(0); // epoch ms — for fallback poll
 
   // EMA smoothers for stable display (tank_level in kg, capacity in kg)
   const smoothLevel = useRef(new SmoothValue(0.18, 2));  // maxDelta 2 kg
@@ -170,6 +171,7 @@ const ManualFeeding: React.FC = () => {
               setTankCapacity(smoothCap.current.update(rawCap));
               setDeviceOnline(true);
               setLastUpdate(new Date().toLocaleTimeString());
+              lastRtRef.current = Date.now();
             },
           )
           .subscribe((status) => {
@@ -188,8 +190,15 @@ const ManualFeeding: React.FC = () => {
       console.warn('[ManualFeed] Realtime subscription failed:', err);
     }
 
+    // Safety fallback poll: only fires when RT is silent for >8 s
+    const fallbackPollRef = setInterval(() => {
+      if (Date.now() - lastRtRef.current < 8000) return;
+      refreshDeviceStatus();
+    }, 5000);
+
     return () => {
       if (feedingPollRef.current) clearInterval(feedingPollRef.current);
+      if (fallbackPollRef) clearInterval(fallbackPollRef);
       try {
         if (feeddbChannel && supabase) supabase.removeChannel(feeddbChannel);
         if (manualChannel && supabase) supabase.removeChannel(manualChannel);

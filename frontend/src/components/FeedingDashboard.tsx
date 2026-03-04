@@ -130,6 +130,7 @@ const FeedingDashboard: React.FC = () => {
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
   const prevFeedCount = useRef(0);
   const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRtMsgRef = useRef<number>(0); // epoch ms — for fallback poll to check
 
   // ─── EMA smoothers for noisy sensor values ───
   // hopperLevel stored in grams (e.g. 5860), maxDelta 2000g = 2kg real change
@@ -179,7 +180,12 @@ const FeedingDashboard: React.FC = () => {
           });
           setIsStale(false);
           setLastRtMsg(new Date());
+          lastRtMsgRef.current = Date.now();
           if (fbData.feed_count) prevFeedCount.current = fbData.feed_count;
+
+          // Seed the weight history chart with one data point (so charts aren't empty)
+          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          setWeightHistory([{ time: timeStr, weight: sWeight, hopper: sHopper / 1000 }]);
         }
       } catch (err) {
         console.warn('[Bootstrap] Failed to fetch initial device state:', err);
@@ -188,7 +194,57 @@ const FeedingDashboard: React.FC = () => {
     bootstrap();
   }, []);
 
-  // ─── Load historical data from Backend REST API (MySQL) + optional Supabase real-time ───
+  // ─── Safety fallback poll: only fires when Supabase Realtime is silent (>8 s) ───
+  useEffect(() => {
+    const pollInterval = setInterval(async () => {
+      // Skip if Realtime delivered data recently (< 8 s ago)
+      if (Date.now() - lastRtMsgRef.current < 8000) return;
+      try {
+        const fbData = await fetchDeviceStatus(DEVICE_ID);
+        if (fbData && fbData.device_id) {
+          const sHopper = smoothHopper.current.update(fbData.tank_level ?? 0);
+          const sWeight = smoothWeight.current.update(fbData.weight ?? 0);
+          const sPct = smoothPct.current.update(fbData.tank_percentage ?? 0);
+          setDevice(prev => {
+            const updated: DeviceData = {
+              ...prev,
+              status: 'online',
+              currentWeight: sWeight,
+              hopperLevel: sHopper,
+              hopperCapacity: fbData.tank_capacity ?? prev.hopperCapacity ?? 20000,
+              hopperPercentage: sPct,
+              motorStatus: fbData.motor_status || prev.motorStatus,
+              plateSpeed: fbData.motor_rpm ?? prev.plateSpeed,
+              escPercent: fbData.esc_percent ?? prev.escPercent,
+              feedingActive: fbData.feeding_active ?? prev.feedingActive,
+              feedCount: fbData.feed_count ?? prev.feedCount,
+              totalGramsFed: fbData.total_grams_fed ?? prev.totalGramsFed,
+              targetWeight: fbData.target_weight ?? prev.targetWeight,
+              rssi: fbData.rssi ?? prev.rssi,
+              ipAddress: fbData.ip_address || prev.ipAddress,
+              uptimeMs: fbData.uptime_ms ?? prev.uptimeMs,
+              lastSeen: fbData.updated_at || prev.lastSeen,
+            };
+            cacheDevice(updated);
+            return updated;
+          });
+          setIsStale(false);
+          setLastRtMsg(new Date());
+          lastRtMsgRef.current = Date.now();
+
+          // Feed weight history chart
+          const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          setWeightHistory(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.time === timeStr) return prev;
+            const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
+            return next.slice(-120);
+          });
+        }
+      } catch { /* fallback poll failed — silent */ }
+    }, 5000);
+    return () => clearInterval(pollInterval);
+  }, []);
   useEffect(() => {
     let isMounted = true;
 
@@ -264,6 +320,7 @@ const FeedingDashboard: React.FC = () => {
               });
               setIsStale(false);
               setLastRtMsg(new Date());
+              lastRtMsgRef.current = Date.now();
 
               // Track feeding state
               if ((r.feeding_active as boolean)) setFeedingInProgress(true);
