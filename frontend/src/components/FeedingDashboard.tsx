@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { fetchFeedingHistory, fetchFeedingEvents, fetchDeviceStatus, type FeedingHistoryRow } from '../services/supabase';
+import {
+  fetchDeviceStatusDirect,
+  fetchLastFeedingEvent,
+  fetchFeedingEventsDirect,
+  fetchWeightHistoryDirect,
+  type FeedingHistoryRow,
+  type LastFeedingEvent,
+  type WeightHistoryRow,
+} from '../services/supabase';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, BarChart, Bar, Cell, LineChart, Line
@@ -112,7 +120,7 @@ const FeedingDashboard: React.FC = () => {
   const [feedingInProgress, setFeedingInProgress] = useState(false);
   const [weightHistory, setWeightHistory] = useState<WeightHistoryPoint[]>([]);
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([]);
-  // Historical feeding data from server DB
+  // Historical feeding data from Supabase
   const [historyData, setHistoryData] = useState<FeedingHistoryRow[]>([]);
   const [historyEvents, setHistoryEvents] = useState<FeedingHistoryRow[]>([]);
   const [historyRange, setHistoryRange] = useState<number>(24); // hours
@@ -120,6 +128,7 @@ const FeedingDashboard: React.FC = () => {
   const [rtStatus, setRtStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [lastRtMsg, setLastRtMsg] = useState<Date | null>(null);
   const [isStale, setIsStale] = useState(true); // True when showing cached/old data
+  const [lastFeeding, setLastFeeding] = useState<LastFeedingEvent | null>(null);
   const prevFeedCount = useRef(0);
 
   // Client-side staleness tracking: if updated_at stops changing, device is offline
@@ -136,126 +145,18 @@ const FeedingDashboard: React.FC = () => {
   // Show values if online OR if we have cached stale data
   const hasData = isOnline || isStale;
 
-  // (All data now flows through Backend API — WebSocket for real-time, HTTP polling as fallback)
-
-  // ─── WebSocket (primary, ~1s real-time) + HTTP polling fallback (5s) ───
+  // ─── Direct Supabase polling: read feeddb every 2s (ESP32 writes here every 2s via pg/query) ───
+  // This is the most reliable path — same endpoint ESP32 uses, bypasses backend entirely.
   useEffect(() => {
     let isMounted = true;
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-    // Derive WebSocket URL from API URL (http→ws, https→wss)
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8081';
-    const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws/feeding';
-
-    // ── Process raw ESP32 MQTT JSON (from WebSocket — fields use ESP32 naming) ──
-    const processWsMessage = (data: Record<string, unknown>) => {
-      if (!isMounted) return;
-      if (data.deviceId !== DEVICE_ID) return;
-
-      const cap = (data.hopperCapacity as number) ?? 20000;
-      const sHopper = Math.min(Math.max(smoothHopper.current.update((data.hopperLevel as number) ?? 0), 0), cap);
-      const sWeight = Math.min(Math.max(smoothWeight.current.update((data.weight as number) ?? 0), 0), 20000);
-      const sPct = Math.min(Math.max(smoothPct.current.update((data.hopperPercentage as number) ?? 0), 0), 100);
-
-      // Reset staleness — fresh data via WebSocket
-      staleCountRef.current = 0;
-      lastUpdatedAtRef.current = new Date().toISOString();
-
-      setDevice(prev => {
-        const updated: DeviceData = {
-          ...prev,
-          status: 'online',
-          currentWeight: sWeight,
-          hopperLevel: sHopper,
-          hopperCapacity: cap,
-          hopperPercentage: sPct,
-          motorStatus: (data.motorStatus as string) || prev.motorStatus,
-          plateSpeed: (data.plateSpeed as number) ?? prev.plateSpeed,
-          escPercent: (data.escPercent as number) ?? prev.escPercent,
-          feedingActive: (data.feedingActive as boolean) ?? prev.feedingActive,
-          feedCount: (data.feedCount as number) ?? prev.feedCount,
-          totalGramsFed: (data.totalGrams as number) ?? prev.totalGramsFed,
-          targetWeight: (data.targetWeight as number) ?? prev.targetWeight,
-          rssi: (data.rssi as number) ?? prev.rssi,
-          ipAddress: (data.ipAddress as string) || prev.ipAddress,
-          uptimeMs: (data.uptimeMs as number) ?? prev.uptimeMs,
-          lastSeen: new Date().toISOString(),
-        };
-        cacheDevice(updated);
-        return updated;
-      });
-      setIsStale(false);
-      setRtStatus('connected');
-      setLastRtMsg(new Date());
-
-      // Track feeding state
-      setFeedingInProgress(!!(data.feedingActive));
-
-      // Feed events tracking
-      const newFeedCount = (data.feedCount as number) ?? 0;
-      if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
-        setFeedEvents(prev => {
-          const next = [...prev, {
-            time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-            amount: ((data.totalGrams as number) ?? 0) / 1000,
-          }];
-          return next.slice(-10);
-        });
-      }
-      prevFeedCount.current = newFeedCount;
-
-      // Weight history chart
-      const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-      setWeightHistory(prev => {
-        const last = prev[prev.length - 1];
-        if (last && last.time === timeStr) return prev;
-        const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
-        return next.slice(-120);
-      });
-    };
-
-    // ── WebSocket connection with auto-reconnect ──
-    const connectWs = () => {
-      if (!isMounted) return;
+    const pollSupabase = async () => {
       try {
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-          console.log('[FeedingDashboard] WebSocket connected to', wsUrl);
-          if (isMounted) setRtStatus('connected');
-        };
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            processWsMessage(data);
-          } catch (e) {
-            console.error('[FeedingDashboard] WS parse error:', e);
-          }
-        };
-        ws.onclose = () => {
-          console.log('[FeedingDashboard] WebSocket closed, reconnecting in 3s...');
-          if (isMounted) {
-            setRtStatus('connecting');
-            reconnectTimer = setTimeout(connectWs, 3000);
-          }
-        };
-        ws.onerror = (err) => {
-          console.error('[FeedingDashboard] WebSocket error:', err);
-          ws?.close();
-        };
-      } catch {
-        console.error('[FeedingDashboard] WS connect failed, retrying in 3s...');
-        if (isMounted) reconnectTimer = setTimeout(connectWs, 3000);
-      }
-    };
-
-    // ── HTTP polling fallback (5s — backup when WebSocket is down) ──
-    const pollDevice = async () => {
-      try {
-        const fbData = await fetchDeviceStatus(DEVICE_ID);
+        const fbData = await fetchDeviceStatusDirect(DEVICE_ID);
         if (!isMounted) return;
+
         if (fbData && fbData.device_id) {
+          // Client-side staleness: track if updated_at changes between polls
           const currentUpdatedAt = fbData.updated_at || '';
           if (currentUpdatedAt && currentUpdatedAt !== lastUpdatedAtRef.current) {
             lastUpdatedAtRef.current = currentUpdatedAt;
@@ -263,11 +164,10 @@ const FeedingDashboard: React.FC = () => {
           } else {
             staleCountRef.current++;
           }
-          const backendSaysOnline = fbData.status === 'online';
-          const dataIsFresh = staleCountRef.current < STALE_THRESHOLD;
-          const deviceIsOnline = backendSaysOnline && dataIsFresh;
+          const deviceIsOnline = fbData.status === 'online' && staleCountRef.current < STALE_THRESHOLD;
 
           const cap = fbData.tank_capacity ?? 20000;
+          // Smooth + hard-clamp: hopper ≤ capacity, weight ≤ 20 kg, pct 0-100
           const sHopper = Math.min(Math.max(smoothHopper.current.update(fbData.tank_level ?? 0), 0), cap);
           const sWeight = Math.min(Math.max(smoothWeight.current.update(fbData.weight ?? 0), 0), 20000);
           const sPct = Math.min(Math.max(smoothPct.current.update(fbData.tank_percentage ?? 0), 0), 100);
@@ -296,12 +196,14 @@ const FeedingDashboard: React.FC = () => {
             return updated;
           });
           setIsStale(!deviceIsOnline);
-          setRtStatus(prev => prev === 'error' ? 'connected' : prev);
+          setRtStatus('connected');
           setLastRtMsg(new Date());
 
+          // Track feeding state
           if (fbData.feeding_active) setFeedingInProgress(true);
           else setFeedingInProgress(false);
 
+          // Feed events tracking (only when online)
           if (deviceIsOnline) {
             const newFeedCount = fbData.feed_count ?? 0;
             if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
@@ -314,39 +216,106 @@ const FeedingDashboard: React.FC = () => {
               });
             }
             prevFeedCount.current = newFeedCount;
+
+            // Live weight history chart
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            setWeightHistory(prev => {
+              const last = prev[prev.length - 1];
+              if (last && last.time === timeStr) return prev;
+              const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
+              return next.slice(-120);
+            });
           }
         }
-      } catch {
+      } catch (err) {
+        console.error('[FeedingDashboard] Supabase poll error:', err);
         if (isMounted) setRtStatus('error');
       }
     };
 
-    // Start both: WebSocket (real-time ~1s) + HTTP polling (fallback every 5s)
-    connectWs();
-    pollDevice(); // Initial fetch immediately
-    pollTimer = setInterval(pollDevice, 5000);
+    // Poll immediately, then every 2s (matches ESP32 write interval)
+    pollSupabase();
+    const interval = setInterval(pollSupabase, 2000);
 
     return () => {
       isMounted = false;
-      ws?.close();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (pollTimer) clearInterval(pollTimer);
+      clearInterval(interval);
     };
   }, []);
 
-  // ─── Load historical data from Backend (Supabase pg/query) ───
+  // ─── Load last feeding event from Supabase feeding_history ───
+  useEffect(() => {
+    let isMounted = true;
+    const loadLastFeeding = async () => {
+      try {
+        const evt = await fetchLastFeedingEvent(DEVICE_ID);
+        if (isMounted && evt) setLastFeeding(evt);
+      } catch { /* ignore */ }
+    };
+    loadLastFeeding();
+    // Refresh every 30 seconds
+    const interval = setInterval(loadLastFeeding, 30000);
+    return () => { isMounted = false; clearInterval(interval); };
+  }, []);
+
+  // ─── Load historical data directly from Supabase ───
   useEffect(() => {
     let isMounted = true;
     const loadHistory = async () => {
       setHistoryLoading(true);
       try {
-        const [history, events] = await Promise.all([
-          fetchFeedingHistory(DEVICE_ID, historyRange),
-          fetchFeedingEvents(DEVICE_ID, Math.max(historyRange, 72)),
+        const [weightRows, eventRows] = await Promise.all([
+          fetchWeightHistoryDirect(DEVICE_ID, historyRange),
+          fetchFeedingEventsDirect(DEVICE_ID, 50),
         ]);
         if (isMounted) {
-          setHistoryData(history);
-          setHistoryEvents(events);
+          // Map weight_history rows to FeedingHistoryRow for chart compatibility
+          const mapped: FeedingHistoryRow[] = weightRows.map((r: WeightHistoryRow) => ({
+            id: r.id,
+            device_id: r.device_id,
+            recorded_at: r.recorded_at,
+            status: r.motor_status || '',
+            feeding_active: r.feeding_active,
+            hopper_level: r.tank_level ?? 0,
+            hopper_capacity: 20000,
+            hopper_percentage: r.tank_percentage ?? 0,
+            current_weight: r.weight ?? 0,
+            target_weight: 0,
+            feed_count: 0,
+            total_grams_fed: 0,
+            motor_status: r.motor_status || '',
+            plate_speed: r.motor_rpm ?? 0,
+            esc_percent: r.esc_percent ?? 0,
+            rssi: r.rssi ?? null,
+            ip_address: null,
+            uptime_ms: 0,
+          }));
+          setHistoryData(mapped);
+          // Map feeding events to FeedingHistoryRow for table
+          const evtMapped: FeedingHistoryRow[] = eventRows.map((e: LastFeedingEvent) => {
+            const raw = e as unknown as Record<string, unknown>;
+            return {
+              id: e.id,
+              device_id: DEVICE_ID,
+              recorded_at: e.recorded_at,
+              status: e.event_type || '',
+              feeding_active: e.event_type === 'feeding_started',
+              hopper_level: (raw.tank_level as number) ?? 0,
+              hopper_capacity: 20000,
+              hopper_percentage: (raw.tank_percentage as number) ?? 0,
+              current_weight: e.weight ?? 0,
+              target_weight: e.target_weight ?? 0,
+              feed_count: e.feed_count ?? 0,
+              total_grams_fed: e.total_grams_fed ?? 0,
+              motor_status: (raw.motor_status as string) ?? '',
+              plate_speed: (raw.motor_rpm as number) ?? 0,
+              esc_percent: (raw.esc_percent as number) ?? 0,
+              rssi: (raw.rssi as number) ?? null,
+              ip_address: (raw.ip_address as string) ?? null,
+              uptime_ms: 0,
+            };
+          });
+          setHistoryEvents(evtMapped);
         }
       } catch (err) {
         console.error('[FeedingHistory] Failed to load history:', err);
@@ -456,7 +425,7 @@ const FeedingDashboard: React.FC = () => {
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold">Feed Control Center</h2>
-              <p className="text-emerald-100 text-xs sm:text-sm">Backend API monitoring &bull; Pond A</p>
+              <p className="text-emerald-100 text-xs sm:text-sm">Supabase Direct monitoring &bull; Pond A</p>
             </div>
           </div>
           <div className="flex items-center gap-3 self-end sm:self-auto">
@@ -665,28 +634,35 @@ const FeedingDashboard: React.FC = () => {
                 <div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><i className="fas fa-clock"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Time</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{formatTime(device.lastFeedingTime)}</span>
+              <span className="font-semibold text-sm text-gray-800">{lastFeeding ? formatTime(lastFeeding.recorded_at) : formatTime(device.lastFeedingTime)}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><i className="fas fa-bullseye"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Target Weight</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{hasData && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{lastFeeding && lastFeeding.target_weight > 0 ? formatWeight(lastFeeding.target_weight) : (hasData && device.targetWeight > 0 ? formatWeight(device.targetWeight) : 'N/A')}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-teal-100 text-teal-600 flex items-center justify-center"><i className="fas fa-weight"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Total Dispensed</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{hasData ? formatWeight(device.totalGramsFed) : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{lastFeeding && lastFeeding.total_feed > 0 ? formatWeight(lastFeeding.total_feed) : (lastFeeding && lastFeeding.total_grams_fed > 0 ? formatWeight(lastFeeding.total_grams_fed) : (hasData ? formatWeight(device.totalGramsFed) : 'N/A'))}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center"><i className="fas fa-hashtag"></i></div>
                 <span className="text-sm text-gray-600 font-medium">Feed Sessions</span>
               </div>
-              <span className="font-semibold text-sm text-gray-800">{hasData ? device.feedCount : 'N/A'}</span>
+              <span className="font-semibold text-sm text-gray-800">{lastFeeding ? lastFeeding.feed_count : (hasData ? device.feedCount : 'N/A')}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center"><i className="fas fa-stopwatch"></i></div>
+                <span className="text-sm text-gray-600 font-medium">Duration</span>
+              </div>
+              <span className="font-semibold text-sm text-gray-800">{lastFeeding && lastFeeding.duration_ms > 0 ? formatUptime(lastFeeding.duration_ms) : 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
               <div className="flex items-center gap-3">
@@ -1039,7 +1015,7 @@ const FeedingDashboard: React.FC = () => {
               rtStatus === 'connecting' ? 'text-yellow-600' : 'text-red-600'
             }`}>
               <i className={`fas fa-circle text-[8px] mr-1`}></i>
-              {rtStatus === 'connected' ? 'Backend API Live' : rtStatus === 'connecting' ? 'Connecting...' : 'API Error'}
+              {rtStatus === 'connected' ? 'Supabase Live' : rtStatus === 'connecting' ? 'Connecting...' : 'Connection Error'}
             </span>
           </div>
         </div>

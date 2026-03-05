@@ -11,6 +11,124 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
 // Backend REST API base URL (reads from Supabase via pg/query)
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
+// ─── Supabase pg/query — direct SQL access (same endpoint ESP32 uses to write) ───
+// This is the most reliable path: ESP32 → pg/query (write) → pg/query (read) → Frontend
+const SUPABASE_PG_URL = SUPABASE_URL + '/pg/query';
+const SUPABASE_SERVICE_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q';
+
+/**
+ * Execute a raw SQL query against Supabase pg/query endpoint.
+ * Returns the result rows as a typed array.
+ */
+export async function supabasePgQuery<T = Record<string, unknown>>(sql: string): Promise<T[]> {
+  const res = await axios.post(SUPABASE_PG_URL, { query: sql }, {
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_SERVICE_KEY,
+      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+    },
+    timeout: 5000,
+  });
+  return Array.isArray(res.data) ? res.data : [];
+}
+
+/**
+ * Fetch device status DIRECTLY from Supabase feeddb table (bypasses backend).
+ * The ESP32 UPSERTs this table every 2 seconds — this is the freshest data source.
+ * Calculates online/offline based on how stale `updated_at` is.
+ */
+export async function fetchDeviceStatusDirect(
+  deviceId: string = 'feed_device_001',
+): Promise<FeeddbRow | null> {
+  try {
+    const rows = await supabasePgQuery<FeeddbRow & { age_seconds: number }>(
+      `SELECT *, EXTRACT(EPOCH FROM (now() - updated_at))::float AS age_seconds FROM feeddb WHERE device_id = '${deviceId}' LIMIT 1`,
+    );
+    if (rows.length > 0) {
+      const row = rows[0];
+      // Device is online if data is less than 15 seconds old
+      const age = row.age_seconds ?? 999;
+      row.status = age < 15 ? 'online' : 'offline';
+      return row;
+    }
+    return null;
+  } catch (err) {
+    console.error('[Supabase Direct] fetchDeviceStatusDirect error:', err);
+    return null;
+  }
+}
+
+/** Last feeding event from feeding_history table (ESP32 logs start/stop events directly) */
+export interface LastFeedingEvent {
+  id: number;
+  event_type: string;
+  recorded_at: string;
+  tank_before: number;
+  tank_after: number;
+  total_feed: number;
+  duration_ms: number;
+  target_weight: number;
+  feed_count: number;
+  total_grams_fed: number;
+  motor_max_speed: number;
+  weight: number;
+}
+
+/**
+ * Fetch the most recent completed feeding event from Supabase feeding_history.
+ * The ESP32 logs 'feeding_started' and 'feeding_stopped' events directly.
+ */
+export async function fetchLastFeedingEvent(
+  deviceId: string = 'feed_device_001',
+): Promise<LastFeedingEvent | null> {
+  try {
+    const rows = await supabasePgQuery<LastFeedingEvent>(
+      `SELECT * FROM feeding_history WHERE device_id = '${deviceId}' AND event_type = 'feeding_stopped' ORDER BY recorded_at DESC LIMIT 1`,
+    );
+    return rows.length > 0 ? rows[0] : null;
+  } catch (err) {
+    console.error('[Supabase Direct] fetchLastFeedingEvent error:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetch recent feeding events from Supabase feeding_history directly.
+ */
+export async function fetchFeedingEventsDirect(
+  deviceId: string = 'feed_device_001',
+  limit: number = 20,
+): Promise<LastFeedingEvent[]> {
+  try {
+    return await supabasePgQuery<LastFeedingEvent>(
+      `SELECT * FROM feeding_history WHERE device_id = '${deviceId}' ORDER BY recorded_at DESC LIMIT ${limit}`,
+    );
+  } catch (err) {
+    console.error('[Supabase Direct] fetchFeedingEventsDirect error:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch weight history directly from Supabase weight_history table.
+ * ESP32 inserts every 10 seconds.
+ */
+export async function fetchWeightHistoryDirect(
+  deviceId: string = 'feed_device_001',
+  hoursBack: number = 24,
+  limit: number = 2000,
+): Promise<WeightHistoryRow[]> {
+  try {
+    return await supabasePgQuery<WeightHistoryRow>(
+      `SELECT * FROM weight_history WHERE device_id = '${deviceId}' AND recorded_at > now() - interval '${hoursBack} hours' ORDER BY recorded_at ASC LIMIT ${limit}`,
+    );
+  } catch (err) {
+    console.error('[Supabase Direct] fetchWeightHistoryDirect error:', err);
+    return [];
+  }
+}
+
 // Safe initialisation — never crash the app if Supabase is unavailable
 let _client: SupabaseClient | null = null;
 try {
