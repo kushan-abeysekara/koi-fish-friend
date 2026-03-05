@@ -1004,25 +1004,34 @@ void startWeightBasedFeeding(float targetGrams) {
   feedingActive = true;
   feedCount++;
   
+  // Record tank level before feeding for Supabase logging
+  tankLevelBeforeFeeding = totalTankWeight;
+  feedingStartTime = millis();
+  maxEscDuringFeeding = 0.0;
+  
   // Tare the scale to start from zero
   scale.tare();
   currentWeight = 0;
   
-  // Start NEMA17 stepper motor ONLY (ESC starts after weight reached)
+  // ── Start BOTH motors simultaneously ──
+  // NEMA 17 stepper: pushes feed out of hopper
   stepperActive = true;
   setStepperEnabled(true);
   digitalWrite(dirPin, HIGH);
   isHoming = false;
   
-  // DO NOT start ESC yet - it will start after NEMA17 finishes
-  setESCPercent(0);
-  currentESCPercent = 0;
+  // ESC motor: spins distribution plate at the same time
+  int escSpeed = escSpeedFromPot > 0 ? min(escSpeedFromPot, ESC_MAX_PERCENT) : 25;
+  targetESCPercent = escSpeed;
+  setESCPercent(escSpeed);
+  maxEscDuringFeeding = escSpeed;
   
-  Serial.println("NEMA17 started - Dispensing food...");
-  Serial.println("ESC will start after target weight reached");
+  Serial.println("BOTH motors started simultaneously!");
+  Serial.print("  NEMA17: RUNNING at speed "); Serial.println(stepperSpeed);
+  Serial.print("  ESC: RUNNING at "); Serial.print(escSpeed); Serial.println("%");
   
   publishStatus("weight_feeding_started");
-  logFeedingEventToSupabase("feeding_started");  // Log to Supabase directly
+  logFeedingEventToSupabase("feeding_started");
 }
 
 // ==================== NEW FUNCTION: Check Weight and Stop ====================
@@ -1043,37 +1052,30 @@ void checkWeightAndControl() {
   // Check if target weight reached
   if (currentWeight >= targetWeight) {
     Serial.println("✓✓✓ TARGET WEIGHT REACHED! ✓✓✓");
-    Serial.println("Stopping NEMA17...");
+    Serial.println("Stopping BOTH motors...");
     
     // Stop NEMA17 stepper motor
     stepperActive = false;
     setStepperEnabled(false);
     weightBasedFeeding = false;
     
-    Serial.println("Starting ESC vibration anti-jam phase...");
-    
-    // Start ESC feeding phase: vibration (4s) → ramp (6s)
-    escPhase = ESC_PHASE_VIBRATION;
-    escPhaseStartTime = millis();
-    setESCPercent(0);  // Start with ESC off, vibration logic handles pulses
-    
-    // Set target for ramp phase (capped at 34%)
-    int escSpeed = escSpeedFromPot > 0 ? min(escSpeedFromPot, ESC_MAX_PERCENT) : ESC_MAX_PERCENT;
-    targetESCPercent = escSpeed;
-    
-    // Enable ESC auto-stop monitoring (will kick in after ramp phase)
-    escAutoStopEnabled = true;
+    // Stop ESC motor
+    setESCPercent(0);
+    escPhase = ESC_PHASE_IDLE;
+    escAutoStopEnabled = false;
     escStopTimerStarted = false;
     
     // Update statistics
     totalGramsFed += currentWeight;
     
-    // feedingActive stays TRUE so ESC phase runs
-    publishStatus("nema17_stopped_vibration_started");
+    // Feeding complete
+    feedingActive = false;
     
-    Serial.println("Phase 1: Vibration anti-jam (4s) at 31% pulses");
-    Serial.println("Phase 2: Ramp 25% -> 34% (6s)");
-    Serial.println("ESC will auto-stop 3 seconds after weight < 20g");
+    Serial.print("Dispensed: "); Serial.print(currentWeight); Serial.println("g");
+    Serial.println("Both NEMA17 and ESC stopped.");
+    
+    publishStatus("feeding_stopped");
+    logFeedingEventToSupabase("feeding_stopped");
   }
 }
 

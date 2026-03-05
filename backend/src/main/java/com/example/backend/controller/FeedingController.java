@@ -370,9 +370,11 @@ public class FeedingController {
             Map<String, Object> result = supabaseService.createManualFeeding(deviceId, amount, unit, tankBefore);
 
             // Also send MQTT command to start feeding
+            // Convert amount to grams — ESP32 expects grams, frontend sends kg
+            double amountGrams = "g".equals(unit) ? amount : amount * 1000;
             Map<String, Object> commandData = new java.util.HashMap<>();
             commandData.put("action", "start");
-            commandData.put("targetWeight", amount);
+            commandData.put("targetWeight", amountGrams);
             mqttService.sendFeedingCommand(deviceId, "feeding", commandData);
             System.out.println("[ManualFeed] ✅ Started: " + amount + unit + " from tank at " + tankBefore);
 

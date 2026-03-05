@@ -111,6 +111,7 @@ const ManualFeeding: React.FC = () => {
   const [history, setHistory] = useState<ManualFeedingRow[]>([]);
   const [deviceOnline, setDeviceOnline] = useState(false);
   const [lastUpdate, setLastUpdate] = useState('');
+  const [elapsedStr, setElapsedStr] = useState('0s');
 
   const feedingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -192,6 +193,21 @@ const ManualFeeding: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tankLevel, isFeeding]);
+
+  /* ── Real-time elapsed timer (updates every second) ── */
+  useEffect(() => {
+    if (!isFeeding || !startTime) {
+      setElapsedStr('0s');
+      return;
+    }
+    const tick = () => {
+      const s = Math.round((Date.now() - startTime) / 1000);
+      setElapsedStr(s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isFeeding, startTime]);
 
   /* ── start feeding ── */
   const handleStart = async () => {
@@ -297,23 +313,72 @@ const ManualFeeding: React.FC = () => {
 
             {/* Feeding progress bar (visible only when feeding) */}
             {isFeeding && (
-              <div className="bg-blue-50 rounded-xl p-4 border border-blue-200 animate-fadeIn">
-                <div className="flex justify-between text-sm mb-2">
-                  <span className="font-semibold text-blue-700">
-                    <i className="fas fa-spinner fa-spin mr-1.5" />
-                    Dispensing…
+              <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-cyan-50 rounded-2xl p-5 border-2 border-blue-300 animate-dispense-pulse animate-fadeIn">
+                {/* Motor status indicators */}
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="flex items-center gap-2 bg-white/80 rounded-xl px-3 py-2 shadow-sm">
+                    <span className="animate-motor-spin text-blue-600 text-lg">⚙</span>
+                    <div>
+                      <span className="text-[10px] text-gray-500 block leading-none">NEMA 17</span>
+                      <span className="text-xs font-bold text-blue-700">RUNNING</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white/80 rounded-xl px-3 py-2 shadow-sm">
+                    <span className="animate-motor-spin text-purple-600 text-lg">⚙</span>
+                    <div>
+                      <span className="text-[10px] text-gray-500 block leading-none">ESC</span>
+                      <span className="text-xs font-bold text-purple-700">SPINNING</span>
+                    </div>
+                  </div>
+                  <div className="flex-1" />
+                  <div className="animate-shake bg-white/80 rounded-xl px-3 py-2 shadow-sm">
+                    <span className="text-xs font-bold text-orange-600">
+                      <i className="fas fa-clock mr-1" />
+                      {elapsedStr}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dispensing title + values */}
+                <div className="flex justify-between items-end mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative w-6 h-10 overflow-hidden">
+                      <span className="absolute animate-feed-drop1 text-amber-500 text-sm left-1">●</span>
+                      <span className="absolute animate-feed-drop2 text-amber-400 text-xs left-3">●</span>
+                      <span className="absolute animate-feed-drop3 text-amber-600 text-sm left-0">●</span>
+                    </div>
+                    <span className="font-bold text-blue-800 text-base">Dispensing…</span>
+                  </div>
+                  <span className="text-xl font-mono font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
+                    {dispensed.toFixed(2)} <span className="text-sm text-gray-400">/</span> {amountInKg().toFixed(2)} kg
                   </span>
-                  <span className="text-blue-600 font-mono">{dispensed.toFixed(2)} / {amountInKg().toFixed(2)} kg</span>
                 </div>
-                <div className="h-3 bg-blue-200 rounded-full overflow-hidden">
+
+                {/* Animated 3D progress bar */}
+                <div className="relative h-6 bg-blue-200/60 rounded-full overflow-hidden shadow-inner">
                   <div
-                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500"
-                    style={{ width: `${progressPct}%` }}
+                    className="h-full rounded-full transition-all duration-500 ease-out animate-progress-glow animate-stripes"
+                    style={{ width: `${Math.max(progressPct, 2)}%` }}
                   />
+                  {/* Percentage overlay */}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-xs font-extrabold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+                      {progressPct.toFixed(1)}%
+                    </span>
+                  </div>
                 </div>
-                <p className="text-xs text-blue-500 mt-1.5">
-                  Auto-stop at {amountInKg().toFixed(2)} kg • Elapsed {fmtDuration(Date.now() - startTime)}
-                </p>
+
+                {/* Bottom info */}
+                <div className="flex justify-between items-center mt-2.5">
+                  <p className="text-xs text-blue-500 flex items-center gap-1">
+                    <i className="fas fa-bullseye text-blue-400" />
+                    Auto-stop at {amountInKg().toFixed(2)} kg
+                  </p>
+                  <p className="text-xs text-indigo-500 flex items-center gap-1">
+                    <i className="fas fa-cog animate-motor-spin text-indigo-400" />
+                    Both motors active
+                  </p>
+                </div>
               </div>
             )}
           </div>
