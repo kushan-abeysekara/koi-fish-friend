@@ -1,6 +1,6 @@
 package com.example.backend.controller;
 
-import com.example.backend.service.SimpleMqttService;
+import com.example.backend.service.MqttService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -12,18 +12,18 @@ import java.util.Map;
 public class TestController {
 
     @Autowired(required = false)
-    private SimpleMqttService simpleMqttService;
+    private MqttService mqttService;
 
     @GetMapping("/mqtt-status")
     public Map<String, Object> getMqttStatus() {
         Map<String, Object> status = new HashMap<>();
         
-        if (simpleMqttService == null) {
-            status.put("error", "SimpleMqttService not found");
+        if (mqttService == null) {
+            status.put("error", "MqttService not found");
             status.put("running", false);
         } else {
             status.put("running", true);
-            status.put("message", "SimpleMqttService is loaded");
+            status.put("message", "MqttService is loaded (EMQX broker)");
         }
         
         return status;
@@ -33,16 +33,14 @@ public class TestController {
     public Map<String, Object> publishTest() {
         Map<String, Object> result = new HashMap<>();
         
-        if (simpleMqttService == null) {
+        if (mqttService == null) {
             result.put("success", false);
-            result.put("error", "SimpleMqttService not available");
+            result.put("error", "MqttService not available");
         } else {
             try {
-                String topic = "koi/devices/feed_device_001/feeding/test";
-                String payload = "{\"test\":true,\"timestamp\":" + System.currentTimeMillis() + "}";
-                simpleMqttService.publishMessage(topic, payload);
+                mqttService.sendCommand("feed_device_001", "test", Map.of("timestamp", System.currentTimeMillis()));
                 result.put("success", true);
-                result.put("message", "Test message published");
+                result.put("message", "Test message published via EMQX");
             } catch (Exception e) {
                 result.put("success", false);
                 result.put("error", e.getMessage());
