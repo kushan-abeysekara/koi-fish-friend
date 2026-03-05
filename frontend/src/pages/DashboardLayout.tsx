@@ -26,6 +26,7 @@ import FeedTankHistory from '../components/FeedTankHistory';
 import BudgetForecasting from '../components/BudgetForecasting';
 import PowerManagement from '../components/PowerManagement';
 import SystemStatus from '../components/SystemStatus';
+import PondProfitLoss from '../components/PondProfitLoss';
 
 /* ── Error Boundary to prevent a single page crash from blanking everything ── */
 class RouteErrorBoundary extends React.Component<
@@ -96,6 +97,7 @@ const Dashboard: React.FC = () => {
     '/dashboard/inventory': { title: 'Inventory', subtitle: 'Manage stock & supplies' },
     '/dashboard/profit-loss': { title: 'Profit & Loss', subtitle: 'Financial overview' },
     '/dashboard/budget-forecasting': { title: 'Budget Forecasting', subtitle: 'Financial projections' },
+    '/dashboard/pond-profit-loss': { title: 'Pond Profit & Loss', subtitle: 'Per-pond revenue, expenses, ROI & fish sales' },
     '/dashboard/energy-monitor': { title: 'Energy Monitor', subtitle: 'Power consumption tracking' },
     '/dashboard/power-control': { title: 'Power Management', subtitle: 'Device power control' },
     '/dashboard/power-schedules': { title: 'Power Schedules', subtitle: 'Automated power scheduling' },
@@ -203,6 +205,7 @@ const Dashboard: React.FC = () => {
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profit-loss" element={<ProfitLoss />} />
             <Route path="/budget-forecasting" element={<BudgetForecasting />} />
+            <Route path="/pond-profit-loss" element={<PondProfitLoss />} />
             <Route path="/energy-monitor" element={<EnergyMonitor />} />
             <Route path="/power-control" element={<PowerManagement />} />
             <Route path="/power-schedules" element={<PowerManagement />} />

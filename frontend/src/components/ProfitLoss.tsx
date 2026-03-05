@@ -1,27 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { pondApi, revenueApi, profitLossApi, fishCountApi, type Revenue, type Pond, type ProfitLossReport, type FishCount } from '../services/api';
+import { pondApi, revenueApi, fishCountApi, type Revenue, type Pond, type FishCount } from '../services/api';
 
 const ProfitLoss: React.FC = () => {
   const [ponds, setPonds] = useState<Pond[]>([]);
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [fishCounts, setFishCounts] = useState<FishCount[]>([]);
   const [selectedPond, setSelectedPond] = useState<number | 'all'>('all');
-  const [activeTab, setActiveTab] = useState<'revenues' | 'profitloss'>('revenues');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingRevenue, setEditingRevenue] = useState<Revenue | null>(null);
-  const [profitLossReport, setProfitLossReport] = useState<ProfitLossReport | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
-  
-  // Date range for P&L report
-  const [reportStartDate, setReportStartDate] = useState(() => {
-    const date = new Date();
-    date.setMonth(date.getMonth() - 1);
-    return date.toISOString().split('T')[0];
-  });
-  const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -51,13 +41,6 @@ const ProfitLoss: React.FC = () => {
     loadRevenues();
     loadFishCounts();
   }, []);
-
-  useEffect(() => {
-    if (activeTab === 'profitloss') {
-      loadProfitLossReport();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, selectedPond, reportStartDate, reportEndDate]);
 
   const loadPonds = async () => {
     try {
@@ -104,22 +87,6 @@ const ProfitLoss: React.FC = () => {
   const getMaxSellableQuantity = (pondId: number): number => {
     if (!pondId) return 0;
     return getLatestFishCount(pondId);
-  };
-
-  const loadProfitLossReport = async () => {
-    try {
-      let response;
-      if (selectedPond === 'all') {
-        response = await profitLossApi.getOverallReport(reportStartDate, reportEndDate);
-      } else {
-        response = await profitLossApi.getReportByPond(selectedPond, reportStartDate, reportEndDate);
-      }
-      if (response.success && response.data) {
-        setProfitLossReport(response.data);
-      }
-    } catch (error) {
-      console.error('Error loading P&L report:', error);
-    }
   };
 
   const handleAddRevenue = async () => {
@@ -287,31 +254,6 @@ const ProfitLoss: React.FC = () => {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-4 mb-6 border-b border-gray-200">
-        <button
-          onClick={() => setActiveTab('revenues')}
-          className={`px-6 py-3 font-semibold transition-all ${
-            activeTab === 'revenues'
-              ? 'text-green-600 border-b-2 border-green-600'
-              : 'text-gray-600 hover:text-gray-800'
-          }`}
-        >
-          <i className="fas fa-dollar-sign mr-2"></i>
-          Revenue Management
-        </button>
-        <button
-          onClick={() => setActiveTab('profitloss')}
-          className={`px-6 py-3 font-semibold transition-all ${
-            activeTab === 'profitloss'
-              ? 'text-purple-600 border-b-2 border-purple-600'
-              : 'text-gray-600 hover:text-gray-800'
-          }`}
-        >
-          <i className="fas fa-chart-pie mr-2"></i>
-          P&L Report
-        </button>
-      </div>
 
       {/* Pond Filter */}
       <div className="bg-white rounded-xl shadow-md p-6 mb-6">
@@ -332,9 +274,8 @@ const ProfitLoss: React.FC = () => {
         </select>
       </div>
 
-      {/* Revenue Management Tab */}
-      {activeTab === 'revenues' && (
-        <>
+      {/* Revenue Management */}
+
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
             <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl shadow-lg p-6 text-white">
@@ -450,117 +391,6 @@ const ProfitLoss: React.FC = () => {
               </table>
             </div>
           </div>
-        </>
-      )}
-
-      {/* Profit & Loss Report Tab */}
-      {activeTab === 'profitloss' && profitLossReport && (
-        <>
-          {/* Date Range Selector */}
-          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Start Date</label>
-                <input
-                  type="date"
-                  value={reportStartDate}
-                  onChange={(e) => setReportStartDate(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">End Date</label>
-                <input
-                  type="date"
-                  value={reportEndDate}
-                  onChange={(e) => setReportEndDate(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Key Metrics */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-            <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl shadow-lg p-6 text-white">
-              <div className="text-green-100 text-sm mb-2">Total Revenue</div>
-              <div className="text-2xl font-bold">{formatCurrency(profitLossReport.totalRevenue)}</div>
-            </div>
-
-            <div className="bg-gradient-to-br from-red-500 to-pink-600 rounded-xl shadow-lg p-6 text-white">
-              <div className="text-red-100 text-sm mb-2">Total Expenses</div>
-              <div className="text-2xl font-bold">{formatCurrency(profitLossReport.totalExpenses)}</div>
-            </div>
-
-            <div className={`bg-gradient-to-br ${profitLossReport.netProfit >= 0 ? 'from-blue-500 to-cyan-600' : 'from-gray-500 to-gray-600'} rounded-xl shadow-lg p-6 text-white`}>
-              <div className="text-blue-100 text-sm mb-2">Net Profit</div>
-              <div className="text-2xl font-bold">{formatCurrency(profitLossReport.netProfit)}</div>
-              <div className="text-xs mt-1">Margin: {profitLossReport.profitMargin.toFixed(2)}%</div>
-            </div>
-
-            <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl shadow-lg p-6 text-white">
-              <div className="text-purple-100 text-sm mb-2">ROI</div>
-              <div className="text-2xl font-bold">{profitLossReport.roi.toFixed(2)}%</div>
-              <div className="text-xs mt-1">{profitLossReport.roiPeriodDays} days</div>
-            </div>
-          </div>
-
-          {/* Break-Even Status */}
-          <div className={`bg-gradient-to-r ${profitLossReport.isBreakEven ? 'from-green-50 to-emerald-50 border-green-200' : 'from-orange-50 to-red-50 border-orange-200'} border-2 rounded-xl p-6 mb-6`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className={`text-lg font-bold ${profitLossReport.isBreakEven ? 'text-green-700' : 'text-orange-700'}`}>
-                  {profitLossReport.isBreakEven ? '✅ Break-Even Achieved!' : '⚠️ Not Yet Break-Even'}
-                </h3>
-                <p className="text-gray-600 mt-1">
-                  {profitLossReport.isBreakEven
-                    ? `You've covered all expenses and achieved profitability!`
-                    : `Need ${formatCurrency(profitLossReport.remainingToBreakEven)} more revenue to break even.`}
-                </p>
-              </div>
-              <div className="text-right">
-                <div className="text-sm text-gray-600">Break-Even Revenue</div>
-                <div className="text-2xl font-bold text-gray-800">{formatCurrency(profitLossReport.breakEvenRevenue)}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Revenue & Expense Breakdown */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Revenue by Source */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">
-                <i className="fas fa-chart-pie text-green-600 mr-2"></i>
-                Revenue by Source
-              </h3>
-              <div className="space-y-3">
-                {Object.entries(profitLossReport.revenueBySource).map(([source, amount]) => (
-                  <div key={source} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium text-gray-700">{source}</span>
-                    <span className="font-bold text-green-600">{formatCurrency(amount as number)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Expenses by Category */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">
-                <i className="fas fa-chart-bar text-red-600 mr-2"></i>
-                Expenses by Category
-              </h3>
-              <div className="space-y-3">
-                {Object.entries(profitLossReport.expensesByCategory).map(([category, amount]) => (
-                  <div key={category} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium text-gray-700">{category}</span>
-                    <span className="font-bold text-red-600">{formatCurrency(amount as number)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </>
-      )}
 
       {/* Add Revenue Modal */}
       {isModalOpen && (

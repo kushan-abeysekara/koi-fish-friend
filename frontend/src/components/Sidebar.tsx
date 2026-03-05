@@ -82,7 +82,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
     location.pathname.includes('/energy-monitor') ||
     location.pathname.includes('/realtime-current') ||
     location.pathname.includes('/calculate-kwh') ||
-    location.pathname.includes('/budget-forecasting')
+    location.pathname.includes('/budget-forecasting') ||
+    location.pathname.includes('/pond-profit-loss')
   );
 
   const [isWaterQualityExpanded, setIsWaterQualityExpanded] = useState(
@@ -401,6 +402,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
                 label="Budget Forecasting"
                 path="/dashboard/budget-forecasting"
                 active={location.pathname === '/dashboard/budget-forecasting'}
+                onNavigate={onClose}
+              />
+              <SubNavItem
+                icon={<i className="fas fa-balance-scale"></i>}
+                label="Pond P&L Tracking"
+                path="/dashboard/pond-profit-loss"
+                active={location.pathname === '/dashboard/pond-profit-loss'}
                 onNavigate={onClose}
               />
             </div>

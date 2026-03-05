@@ -57,7 +57,7 @@ String commandTopic = "";
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// Forward declarations
+// Forward declarations 523
 void publishStatus();
 void publishStatusWithPond();
 
