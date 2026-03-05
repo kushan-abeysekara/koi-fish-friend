@@ -151,7 +151,7 @@ const int stepsPerRevolution = 200; // NEMA 17 typical (1.8° per step)
 
 // Feeding State Variables
 bool feedingActive = false;
-bool stepperActive = false;
+volatile bool stepperActive = false;  // volatile: accessed by hardware timer ISR
 int stepperSpeed = 500; // Delay in microseconds
 int currentESCPercent = 0;
 int targetESCPercent = 25;
@@ -181,8 +181,15 @@ const float weightThreshold = 20.0;   // Stop ESC when weight < 20g
 const unsigned long escStopDelay = 3000; // 3 seconds delay
 
 // Homing Variables
-long currentStepPosition = 0; // Track current position
-bool isHoming = false; // Flag for homing mode
+volatile long currentStepPosition = 0; // Track current position (ISR-accessed)
+volatile bool isHoming = false; // Flag for homing mode (ISR-accessed)
+volatile bool homingJustCompleted = false; // Set by ISR, handled in main loop
+
+// Hardware Timer for NEMA 17 Stepper Motor
+// Uses ESP32 hardware timer interrupt for precise step timing at 2000 Hz
+// This ensures smooth rotation even when main loop is blocked by
+// HX711 reads (~200ms) or Supabase HTTPS calls (~2-5s)
+hw_timer_t *stepperTimer = NULL;
 
 // Display update
 unsigned long lastDisplayUpdate = 0;
@@ -263,30 +270,40 @@ float calculateStepperRPM(int delayMicros) {
   return rpm;
 }
 
-// Continuous stepper rotation (non-blocking)
-void runStepperContinuous() {
-  static unsigned long lastStepTime = 0;
-  
-  if (stepperActive && (micros() - lastStepTime >= stepperSpeed)) {
+// ==================== Hardware Timer ISR for NEMA 17 ====================
+// Fires every 500µs (2000 steps/second = 600 RPM) regardless of main loop speed.
+// The main loop can be blocked by HX711 reads or HTTP calls for seconds,
+// but the stepper keeps rotating smoothly via this interrupt.
+void IRAM_ATTR onStepperTimer() {
+  if (stepperActive) {
+    // Generate step pulse (A4988 needs ≥1µs HIGH pulse)
     digitalWrite(stepPin, HIGH);
     delayMicroseconds(2);
     digitalWrite(stepPin, LOW);
-    lastStepTime = micros();
     
-    // Track position
+    // Track position for homing
     currentStepPosition++;
     if (currentStepPosition >= stepsPerRevolution) {
-      currentStepPosition = 0; // Reset after full rotation
+      currentStepPosition = 0;
     }
     
-    // Check if homing is complete
+    // Check homing target (can't call Serial/MQTT from ISR, use flag)
     if (isHoming && currentStepPosition == 187) {
       stepperActive = false;
       isHoming = false;
-      setStepperEnabled(false);
-      Serial.println("Homing complete - at position 187");
-      publishStatus("homing_complete");
+      homingJustCompleted = true;
     }
+  }
+}
+
+// Handle homing completion actions that can't run inside ISR
+// (Serial print, MQTT publish, driver sleep)
+void runStepperContinuous() {
+  if (homingJustCompleted) {
+    homingJustCompleted = false;
+    setStepperEnabled(false);
+    Serial.println("Homing complete - at position 187");
+    publishStatus("homing_complete");
   }
 }
 
@@ -717,6 +734,14 @@ void setup() {
   
   Serial.println("NEMA 17 Ready (Sleep Mode) ✓");
 
+  // ===== Stepper Hardware Timer Interrupt =====
+  Serial.println("\n[Stepper Timer Setup]");
+  stepperTimer = timerBegin(1000000);  // 1 MHz base frequency
+  timerAttachInterrupt(stepperTimer, &onStepperTimer);
+  timerAlarm(stepperTimer, 500, true, 0);  // Fire every 500µs = 2000 steps/s
+  Serial.println("Hardware timer: 500µs interval (2000 Hz / 600 RPM) ✓");
+  Serial.println("Stepper now runs via ISR — immune to loop blocking!");
+
   // ===== WiFi Setup =====
   Serial.println("\n[WiFi Setup]");
   setup_wifi();
@@ -829,6 +854,16 @@ void loop() {
   if (feedingActive) {
     // Run stepper continuously (only when not in weight-based mode or when weight not reached)
     runStepperContinuous();
+    
+    // Re-apply ESC speed every 2s during weight-based feeding
+    // Guards against hardware glitches or PWM channel resets
+    if (weightBasedFeeding) {
+      static unsigned long lastESCRefresh = 0;
+      if (millis() - lastESCRefresh > 2000) {
+        setESCPercent(targetESCPercent);
+        lastESCRefresh = millis();
+      }
+    }
     
     // ESC ramp control (ONLY run ESC when NOT in weight-based mode)
     // In weight-based mode, ESC uses the phase state machine (vibration→ramp)
