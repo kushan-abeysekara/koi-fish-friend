@@ -2,9 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
 // Self-hosted Supabase instance (kept for optional real-time subscriptions)
-// MUST be http:// (not https://) — self-hosted instance has no TLS.
-// This makes the Supabase JS client use ws:// instead of wss:// for Realtime.
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'http://superbase.koifishfriend.online';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://superbase.koifishfriend.online';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY';
 

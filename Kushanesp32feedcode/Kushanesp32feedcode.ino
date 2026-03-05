@@ -20,6 +20,7 @@
 #include <Adafruit_SSD1306.h>
 #include <HX711.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -44,8 +45,8 @@ PubSubClient mqttClient(espClient);
 
 // ─── Supabase Direct HTTP Configuration ───
 // ESP32 sends sensor data directly to Supabase (faster than MQTT for heavy data)
-const char* supabase_url = "http://superbase.koifishfriend.online/pg/query";
-const char* supabase_rest_url = "http://superbase.koifishfriend.online/rest/v1";
+const char* supabase_url = "https://superbase.koifishfriend.online/pg/query";
+const char* supabase_rest_url = "https://superbase.koifishfriend.online/rest/v1";
 const char* supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY";
 const char* supabase_service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q";
 unsigned long lastSupabaseUpdate = 0;
@@ -1192,8 +1193,11 @@ void checkESCAutoStop() {
 void executeSupabaseQuery(String sql) {
   if (WiFi.status() != WL_CONNECTED) return;
   
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();  // Skip certificate validation for self-hosted Supabase
+  
   HTTPClient http;
-  http.begin(supabase_url);
+  http.begin(secureClient, supabase_url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", supabase_service_key);
   http.addHeader("Authorization", String("Bearer ") + supabase_service_key);
