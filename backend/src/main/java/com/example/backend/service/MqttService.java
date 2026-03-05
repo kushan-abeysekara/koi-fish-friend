@@ -1,12 +1,9 @@
 package com.example.backend.service;
 
-import com.example.backend.entity.Pond;
 import com.example.backend.entity.SensorDevice;
 import com.example.backend.entity.SensorData;
 import com.example.backend.entity.FeedingHistory;
-import com.example.backend.repository.PondRepository;
 import com.example.backend.repository.SensorDeviceRepository;
-import com.example.backend.repository.SensorDataRepository;
 import com.example.backend.repository.FeedingHistoryRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,19 +30,10 @@ public class MqttService {
     private SensorDeviceRepository deviceRepository;
 
     @Autowired
-    private SensorDataRepository dataRepository;
-
-    @Autowired
-    private PondRepository pondRepository;
-
-    @Autowired
     private MessageChannel mqttOutboundChannel;
 
     @Autowired
     private FeedingWebSocketHandler feedingWebSocketHandler;
-
-    @Autowired
-    private com.example.backend.websocket.PowerWebSocketHandler powerWebSocketHandler;
 
     @Autowired
     private SupabaseService supabaseService;

@@ -2,7 +2,6 @@ package com.example.backend.service;
 
 import com.example.backend.entity.SensorDevice;
 import com.example.backend.repository.SensorDeviceRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;

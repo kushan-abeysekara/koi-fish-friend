@@ -16,7 +16,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -202,7 +201,7 @@ public class SupabaseService {
             if (arr.isArray()) {
                 for (JsonNode node : arr) {
                     Map<String, Object> row = new HashMap<>();
-                    node.fields().forEachRemaining(e -> {
+                    node.properties().forEach(e -> {
                         if (e.getValue().isNumber())
                             row.put(e.getKey(), e.getValue().numberValue());
                         else if (e.getValue().isBoolean())
@@ -448,10 +447,6 @@ public class SupabaseService {
 
     private int getIntOrDefault(JsonNode node, String field, int defaultVal) {
         return node.has(field) && !node.get(field).isNull() ? node.get(field).asInt() : defaultVal;
-    }
-
-    private long getLongOrDefault(JsonNode node, String field, long defaultVal) {
-        return node.has(field) && !node.get(field).isNull() ? node.get(field).asLong() : defaultVal;
     }
 
     private boolean getBoolOrDefault(JsonNode node, String field, boolean defaultVal) {

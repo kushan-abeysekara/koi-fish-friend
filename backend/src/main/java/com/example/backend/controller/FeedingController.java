@@ -1,9 +1,7 @@
 package com.example.backend.controller;
 
 import com.example.backend.dto.ApiResponse;
-import com.example.backend.entity.FeedingHistory;
 import com.example.backend.entity.SensorDevice;
-import com.example.backend.repository.FeedingHistoryRepository;
 import com.example.backend.repository.SensorDeviceRepository;
 import com.example.backend.service.MqttService;
 import com.example.backend.service.SupabaseService;
@@ -23,9 +21,6 @@ public class FeedingController {
 
     @Autowired
     private MqttService mqttService;
-
-    @Autowired
-    private FeedingHistoryRepository feedingHistoryRepository;
 
     @Autowired
     private SensorDeviceRepository sensorDeviceRepository;
