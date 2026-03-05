@@ -186,10 +186,18 @@ volatile bool isHoming = false; // Flag for homing mode (ISR-accessed)
 volatile bool homingJustCompleted = false; // Set by ISR, handled in main loop
 
 // Hardware Timer for NEMA 17 Stepper Motor
-// Uses ESP32 hardware timer interrupt for precise step timing at 2000 Hz
+// Uses 100µs base tick + software prescaler for smooth acceleration.
+// Motor starts slow (150 RPM) and ramps to full speed (~600 RPM).
 // This ensures smooth rotation even when main loop is blocked by
-// HX711 reads (~200ms) or Supabase HTTPS calls (~2-5s)
+// HX711 reads (~200ms) or Supabase HTTPS calls (~2-5s).
 hw_timer_t *stepperTimer = NULL;
+#define STEPPER_TIMER_US 100            // Base timer: 100µs (10 kHz)
+#define ACCEL_EVERY_N_STEPS 15          // Speed up every 15 steps
+#define START_TICKS_PER_STEP 20         // Start: 20×100µs = 2000µs/step = 150 RPM
+volatile unsigned int stepTimerTicks = 0;       // Counts timer ticks since last step
+volatile unsigned int ticksPerStep = START_TICKS_PER_STEP;  // Current speed
+volatile unsigned int targetTicksPerStep = 5;   // Target: 5×100µs = 500µs/step = 600 RPM
+volatile unsigned int accelStepCount = 0;       // Counts steps for acceleration ramp
 
 // Display update
 unsigned long lastDisplayUpdate = 0;
@@ -271,28 +279,43 @@ float calculateStepperRPM(int delayMicros) {
 }
 
 // ==================== Hardware Timer ISR for NEMA 17 ====================
-// Fires every 500µs (2000 steps/second = 600 RPM) regardless of main loop speed.
-// The main loop can be blocked by HX711 reads or HTTP calls for seconds,
-// but the stepper keeps rotating smoothly via this interrupt.
+// Base timer fires every 100µs (10 kHz). Software prescaler controls actual step rate.
+// ACCELERATION: starts at 150 RPM (safe from standstill) and ramps to ~600 RPM.
+// Without acceleration the motor stalls and vibrates instead of rotating.
 void IRAM_ATTR onStepperTimer() {
-  if (stepperActive) {
-    // Generate step pulse (A4988 needs ≥1µs HIGH pulse)
-    digitalWrite(stepPin, HIGH);
-    delayMicroseconds(2);
-    digitalWrite(stepPin, LOW);
-    
-    // Track position for homing
-    currentStepPosition++;
-    if (currentStepPosition >= stepsPerRevolution) {
-      currentStepPosition = 0;
+  if (!stepperActive) return;
+  
+  stepTimerTicks++;
+  if (stepTimerTicks < ticksPerStep) return;  // Not time to step yet
+  stepTimerTicks = 0;
+  
+  // Generate step pulse (A4988 needs ≥1µs HIGH pulse)
+  digitalWrite(stepPin, HIGH);
+  delayMicroseconds(2);
+  digitalWrite(stepPin, LOW);
+  
+  // Track position for homing
+  currentStepPosition++;
+  if (currentStepPosition >= stepsPerRevolution) {
+    currentStepPosition = 0;
+  }
+  
+  // ── Smooth acceleration ──
+  // Decrease ticksPerStep by 1 every ACCEL_EVERY_N_STEPS steps
+  // From 20→5 = 15 decrements × 15 steps = 225 steps (~0.2s) to full speed
+  if (ticksPerStep > targetTicksPerStep) {
+    accelStepCount++;
+    if (accelStepCount >= ACCEL_EVERY_N_STEPS) {
+      accelStepCount = 0;
+      ticksPerStep--;
     }
-    
-    // Check homing target (can't call Serial/MQTT from ISR, use flag)
-    if (isHoming && currentStepPosition == 187) {
-      stepperActive = false;
-      isHoming = false;
-      homingJustCompleted = true;
-    }
+  }
+  
+  // Check homing target (can't call Serial/MQTT from ISR, use flag)
+  if (isHoming && currentStepPosition == 187) {
+    stepperActive = false;
+    isHoming = false;
+    homingJustCompleted = true;
   }
 }
 
@@ -444,11 +467,15 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         if (targetESCPercent > ESC_MAX_PERCENT) targetESCPercent = ESC_MAX_PERCENT;  // Safety cap
         escRampDuration = data.containsKey("escRampTimeSeconds") ? data["escRampTimeSeconds"].as<int>() * 1000 : 8000;
         
-        // Enable stepper motor
+        // Enable stepper motor with smooth acceleration
         setStepperEnabled(true);
         digitalWrite(dirPin, HIGH); // Set direction
-        stepperActive = true;
         isHoming = false; // Not in homing mode
+        targetTicksPerStep = max(3, (int)(stepperSpeed / STEPPER_TIMER_US));
+        ticksPerStep = START_TICKS_PER_STEP;
+        accelStepCount = 0;
+        stepTimerTicks = 0;
+        stepperActive = true;  // ISR starts stepping
         
         // Start ESC ramp
         setESCPercent(escStart);
@@ -499,8 +526,12 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       stepperSpeed = speed;
       setStepperEnabled(true);
       digitalWrite(dirPin, HIGH);
-      stepperActive = true;
       isHoming = false;
+      targetTicksPerStep = max(3, (int)(speed / STEPPER_TIMER_US));
+      ticksPerStep = START_TICKS_PER_STEP;
+      accelStepCount = 0;
+      stepTimerTicks = 0;
+      stepperActive = true;
       Serial.println("[DIAG] Stepper ON, speed=" + String(speed));
       publishStatus("diag_stepper_on");
     }
@@ -738,9 +769,12 @@ void setup() {
   Serial.println("\n[Stepper Timer Setup]");
   stepperTimer = timerBegin(1000000);  // 1 MHz base frequency
   timerAttachInterrupt(stepperTimer, &onStepperTimer);
-  timerAlarm(stepperTimer, 500, true, 0);  // Fire every 500µs = 2000 steps/s
-  Serial.println("Hardware timer: 500µs interval (2000 Hz / 600 RPM) ✓");
-  Serial.println("Stepper now runs via ISR — immune to loop blocking!");
+  timerAlarm(stepperTimer, STEPPER_TIMER_US, true, 0);  // Fire every 100µs (10 kHz base)
+  Serial.println("Hardware timer: 100µs base (10 kHz) with software prescaler ✓");
+  Serial.print("  Start speed: "); Serial.print(START_TICKS_PER_STEP * STEPPER_TIMER_US);
+  Serial.println("µs/step (150 RPM)");
+  Serial.println("  Accelerates to full speed over ~225 steps (~0.2s)");
+  Serial.println("Stepper ISR immune to loop blocking!");
 
   // ===== WiFi Setup =====
   Serial.println("\n[WiFi Setup]");
@@ -1059,13 +1093,19 @@ void startWeightBasedFeeding(float targetGrams) {
   
   // ── Start BOTH motors simultaneously ──
   // NEMA 17 stepper: pushes feed out of hopper
-  stepperActive = true;
   setStepperEnabled(true);
   digitalWrite(dirPin, HIGH);
   isHoming = false;
+  // Reset acceleration: start slow, ramp to full speed
+  targetTicksPerStep = max(3, (int)(stepperSpeed / STEPPER_TIMER_US));
+  ticksPerStep = START_TICKS_PER_STEP;  // 150 RPM start
+  accelStepCount = 0;
+  stepTimerTicks = 0;
+  stepperActive = true;  // ISR starts stepping NOW
   
   // ESC motor: spins distribution plate at the same time
   int escSpeed = escSpeedFromPot > 0 ? min(escSpeedFromPot, ESC_MAX_PERCENT) : 25;
+  escSpeed = max(escSpeed, 20);  // Floor: minimum 20% to guarantee ESC spins
   targetESCPercent = escSpeed;
   setESCPercent(escSpeed);
   maxEscDuringFeeding = escSpeed;
