@@ -180,6 +180,13 @@ bool escStopTimerStarted = false;     // Flag to track if timer has started
 const float weightThreshold = 20.0;   // Stop ESC when weight < 20g
 const unsigned long escStopDelay = 3000; // 3 seconds delay
 
+// ESC Wind-Down: ESC keeps running 10s after NEMA 17 stops
+// This distributes any remaining feed on the plate
+bool escWindDownActive = false;       // True when ESC is in wind-down phase
+unsigned long escWindDownStart = 0;   // millis() when wind-down started
+const unsigned long ESC_WINDDOWN_DURATION = 10000;  // 10 seconds after NEMA stops
+int escWindDownPercent = 28;          // ESC speed during wind-down (28%)
+
 // Homing Variables
 volatile long currentStepPosition = 0; // Track current position (ISR-accessed)
 volatile bool isHoming = false; // Flag for homing mode (ISR-accessed)
@@ -244,6 +251,7 @@ void startWeightBasedFeeding(float targetGrams);
 void checkWeightAndControl();
 void stopBothMotors(String reason);
 void runESCFeedingPhase();
+void checkESCWindDown();
 
 // Supabase direct HTTP functions
 void updateSupabaseFeeddb();
@@ -497,6 +505,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       escPhase = ESC_PHASE_IDLE;
       escAutoStopEnabled = false;
       escStopTimerStarted = false;
+      escWindDownActive = false;  // Cancel wind-down too
       
       // Stop ESC immediately
       setESCPercent(0);
@@ -565,6 +574,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       escPhase = ESC_PHASE_IDLE;
       escAutoStopEnabled = false;
       escStopTimerStarted = false;
+      escWindDownActive = false;  // Cancel wind-down
       setESCPercent(0);
       setStepperEnabled(false);
       digitalWrite(resetSleepPin, LOW);
@@ -872,6 +882,9 @@ void loop() {
   // ===== Check ESC Auto-Stop (after ESC phase completes) =====
   checkESCAutoStop();
   
+  // ===== Check ESC Wind-Down (10s after NEMA stops) =====
+  checkESCWindDown();
+  
   // ===== Check Scheduled Feedings =====
   checkScheduledFeedings();
   
@@ -880,11 +893,11 @@ void loop() {
     // Run stepper continuously (only when not in weight-based mode or when weight not reached)
     runStepperContinuous();
     
-    // Re-apply ESC speed every 2s during weight-based feeding
-    // Guards against hardware glitches or PWM channel resets
-    if (weightBasedFeeding) {
+    // Re-apply ESC speed every 500ms during weight-based feeding
+    // Frequent refresh prevents intermittent ESC stopping
+    if (weightBasedFeeding && !escWindDownActive) {
       static unsigned long lastESCRefresh = 0;
-      if (millis() - lastESCRefresh > 2000) {
+      if (millis() - lastESCRefresh > 500) {
         setESCPercent(targetESCPercent);
         lastESCRefresh = millis();
       }
@@ -1077,6 +1090,7 @@ void startWeightBasedFeeding(float targetGrams) {
   escAutoStopEnabled = false;
   escStopTimerStarted = false;
   escPhase = ESC_PHASE_IDLE;
+  escWindDownActive = false;  // Cancel any previous wind-down
   
   // Tare the scale to start from zero
   scale.tare();
@@ -1165,17 +1179,26 @@ void checkWeightAndControl() {
 }
 
 // ==================== Stop Both Motors ====================
+// NEMA 17 stops immediately, ESC keeps running 10 more seconds
+// to distribute any remaining feed on the distribution plate.
 void stopBothMotors(String reason) {
-  Serial.println("Stopping BOTH motors...");
+  Serial.println("\n============================================");
+  Serial.println("   STOPPING NEMA 17 — ESC WIND-DOWN START");
+  Serial.println("============================================");
   Serial.print("Reason: "); Serial.println(reason);
   
-  // Stop NEMA17 stepper motor
+  // Stop NEMA17 stepper motor IMMEDIATELY
   stepperActive = false;
   setStepperEnabled(false);
   weightBasedFeeding = false;
   
-  // Stop ESC motor
-  setESCPercent(0);
+  // DON'T stop ESC — start 10-second wind-down instead!
+  // ESC keeps spinning to distribute remaining feed on plate
+  escWindDownActive = true;
+  escWindDownStart = millis();
+  escWindDownPercent = max(currentESCPercent, 28);  // At least 28%
+  setESCPercent(escWindDownPercent);
+  
   escPhase = ESC_PHASE_IDLE;
   escAutoStopEnabled = false;
   escStopTimerStarted = false;
@@ -1183,16 +1206,55 @@ void stopBothMotors(String reason) {
   // Update statistics
   totalGramsFed += currentWeight;
   
-  // Feeding complete
-  feedingActive = false;
+  // Keep feedingActive TRUE during wind-down (so ESC refresh keeps running)
+  // feedingActive will be set to false in checkESCWindDown()
   
   unsigned long duration = millis() - feedingStartTime;
   Serial.print("Dispensed: "); Serial.print(currentWeight); Serial.println("g");
   Serial.print("Duration: "); Serial.print(duration / 1000); Serial.println("s");
-  Serial.println("Both NEMA17 and ESC stopped.\n");
+  Serial.println("NEMA17 stopped. ESC running for 10 more seconds...");
+  Serial.println("============================================\n");
   
-  publishStatus("feeding_stopped");
-  logFeedingEventToSupabase("feeding_stopped");
+  publishStatus("esc_winddown_started");
+  logFeedingEventToSupabase("nema17_stopped");
+}
+
+// ==================== ESC Wind-Down Check ====================
+// Called every loop iteration. After 10 seconds, fully stops ESC.
+void checkESCWindDown() {
+  if (!escWindDownActive) return;
+  
+  unsigned long elapsed = millis() - escWindDownStart;
+  
+  // Keep refreshing ESC at wind-down speed (prevents intermittent stops)
+  static unsigned long lastWindDownRefresh = 0;
+  if (millis() - lastWindDownRefresh > 500) {
+    setESCPercent(escWindDownPercent);
+    lastWindDownRefresh = millis();
+  }
+  
+  // Print progress every 2 seconds
+  static unsigned long lastWindDownLog = 0;
+  if (millis() - lastWindDownLog > 2000) {
+    Serial.print("[ESC Wind-Down] ");
+    Serial.print((ESC_WINDDOWN_DURATION - elapsed) / 1000);
+    Serial.print("s remaining at ");
+    Serial.print(escWindDownPercent);
+    Serial.println("%");
+    lastWindDownLog = millis();
+  }
+  
+  // Check if 10 seconds elapsed
+  if (elapsed >= ESC_WINDDOWN_DURATION) {
+    Serial.println("\n✓ ESC wind-down complete — stopping ESC");
+    setESCPercent(0);
+    escWindDownActive = false;
+    feedingActive = false;
+    
+    publishStatus("feeding_stopped");
+    logFeedingEventToSupabase("feeding_stopped");
+    Serial.println("Feeding cycle FULLY complete.\n");
+  }
 }
 
 // ==================== NEW FUNCTION: ESC Feeding Phase State Machine ====================
