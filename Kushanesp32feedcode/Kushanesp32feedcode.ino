@@ -187,16 +187,19 @@ volatile bool homingJustCompleted = false; // Set by ISR, handled in main loop
 
 // Hardware Timer for NEMA 17 Stepper Motor
 // Uses 100µs base tick + software prescaler for smooth acceleration.
-// Motor starts slow (150 RPM) and ramps to full speed (~600 RPM).
+// Motor starts slow (150 RPM) and ramps to max safe speed (375 RPM).
+// 600 RPM causes NEMA 17 to lose steps under load after ~7 seconds!
 // This ensures smooth rotation even when main loop is blocked by
 // HX711 reads (~200ms) or Supabase HTTPS calls (~2-5s).
 hw_timer_t *stepperTimer = NULL;
 #define STEPPER_TIMER_US 100            // Base timer: 100µs (10 kHz)
 #define ACCEL_EVERY_N_STEPS 15          // Speed up every 15 steps
 #define START_TICKS_PER_STEP 20         // Start: 20×100µs = 2000µs/step = 150 RPM
+#define MIN_TICKS_PER_STEP 8            // Max safe speed: 8×100µs = 800µs/step = 375 RPM
+                                        // NEMA 17 loses torque above ~400 RPM under load!
 volatile unsigned int stepTimerTicks = 0;       // Counts timer ticks since last step
 volatile unsigned int ticksPerStep = START_TICKS_PER_STEP;  // Current speed
-volatile unsigned int targetTicksPerStep = 5;   // Target: 5×100µs = 500µs/step = 600 RPM
+volatile unsigned int targetTicksPerStep = MIN_TICKS_PER_STEP;  // Target: 375 RPM (safe under load)
 volatile unsigned int accelStepCount = 0;       // Counts steps for acceleration ramp
 
 // Display update
@@ -471,7 +474,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         setStepperEnabled(true);
         digitalWrite(dirPin, HIGH); // Set direction
         isHoming = false; // Not in homing mode
-        targetTicksPerStep = max(3, (int)(stepperSpeed / STEPPER_TIMER_US));
+        targetTicksPerStep = max((int)MIN_TICKS_PER_STEP, (int)(stepperSpeed / STEPPER_TIMER_US));
         ticksPerStep = START_TICKS_PER_STEP;
         accelStepCount = 0;
         stepTimerTicks = 0;
@@ -527,7 +530,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       setStepperEnabled(true);
       digitalWrite(dirPin, HIGH);
       isHoming = false;
-      targetTicksPerStep = max(3, (int)(speed / STEPPER_TIMER_US));
+      targetTicksPerStep = max((int)MIN_TICKS_PER_STEP, (int)(speed / STEPPER_TIMER_US));
       ticksPerStep = START_TICKS_PER_STEP;
       accelStepCount = 0;
       stepTimerTicks = 0;
@@ -773,7 +776,9 @@ void setup() {
   Serial.println("Hardware timer: 100µs base (10 kHz) with software prescaler ✓");
   Serial.print("  Start speed: "); Serial.print(START_TICKS_PER_STEP * STEPPER_TIMER_US);
   Serial.println("µs/step (150 RPM)");
-  Serial.println("  Accelerates to full speed over ~225 steps (~0.2s)");
+  Serial.print("  Max speed: "); Serial.print(MIN_TICKS_PER_STEP * STEPPER_TIMER_US);
+  Serial.println("µs/step (375 RPM) — safe for loaded NEMA 17");
+  Serial.println("  Accelerates over ~180 steps (~0.15s)");
   Serial.println("Stepper ISR immune to loop blocking!");
 
   // ===== WiFi Setup =====
@@ -813,39 +818,25 @@ void loop() {
     Serial.println("========== HX711 READINGS ==========");
     
     // Read HX711 #1 - Feed output weight
+    // Single sample (not 3) to minimize interrupt blocking during stepper ISR
     if (scale.is_ready()) {
-      long rawValue1 = scale.read();
-      currentWeight = scale.get_units(3);
+      currentWeight = scale.get_units(1);
       if (currentWeight < 0) currentWeight = 0;
       Serial.print("HX711 #1 [Feed Output 1kg]: ");
       Serial.print(currentWeight, 2);
-      Serial.print(" g (Raw: ");
-      Serial.print(rawValue1);
-      Serial.println(")");
+      Serial.println(" g");
     } else {
       Serial.println("HX711 #1 [Feed Output]: NOT READY");
     }
     
     // Read HX711 #2 - Tank sensor A (FOUR 5kg cells)
+    // Single sample (not 3) to minimize interrupt blocking during stepper ISR
     if (scaleTankA.is_ready()) {
-      long rawValue2 = scaleTankA.read();
-      tankWeightA = scaleTankA.get_units(3);
+      tankWeightA = scaleTankA.get_units(1);
       if (tankWeightA < 0) tankWeightA = 0;
       Serial.print("HX711 #2 [Tank A - FOUR 5kg cells]: ");
       Serial.print(tankWeightA, 2);
-      Serial.print(" g (Raw: ");
-      Serial.print(rawValue2);
-      Serial.println(")");
-      
-      // DIAGNOSTIC: Warn if reading is suspiciously low
-      if (rawValue2 > -100000 && rawValue2 < 100000) {
-        Serial.println("  ⚠ WARNING: Raw value too low! Check wiring:");
-        Serial.println("  - Are ALL FOUR load cells connected?");
-        Serial.println("  - Are ALL RED wires (4 cells) connected to E+?");
-        Serial.println("  - Are ALL BLACK wires (4 cells) connected to E-?");
-        Serial.println("  - Are ALL WHITE wires (4 cells) connected to A+?");
-        Serial.println("  - Are ALL GREEN wires (4 cells) connected to A-?");
-      }
+      Serial.println(" g");
     } else {
       Serial.println("HX711 #2 [Tank A]: NOT READY");
     }
@@ -1096,9 +1087,9 @@ void startWeightBasedFeeding(float targetGrams) {
   setStepperEnabled(true);
   digitalWrite(dirPin, HIGH);
   isHoming = false;
-  // Reset acceleration: start slow, ramp to full speed
-  targetTicksPerStep = max(3, (int)(stepperSpeed / STEPPER_TIMER_US));
-  ticksPerStep = START_TICKS_PER_STEP;  // 150 RPM start
+  // Reset acceleration: start slow, ramp to safe max speed
+  targetTicksPerStep = max((int)MIN_TICKS_PER_STEP, (int)(stepperSpeed / STEPPER_TIMER_US));
+  ticksPerStep = START_TICKS_PER_STEP;  // 150 RPM start → ramps to 375 RPM
   accelStepCount = 0;
   stepTimerTicks = 0;
   stepperActive = true;  // ISR starts stepping NOW
