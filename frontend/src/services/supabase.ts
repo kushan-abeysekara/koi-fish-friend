@@ -10,8 +10,11 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 // ─── Supabase pg/query — direct SQL access (same endpoint ESP32 uses to write) ───
-// This is the most reliable path: ESP32 → pg/query (write) → pg/query (read) → Frontend
-const SUPABASE_PG_URL = SUPABASE_URL + '/pg/query';
+// In dev: routed through Vite proxy (/supabase-pg → https://superbase.koifishfriend.online/pg/query)
+// In prod: direct HTTPS call to Supabase pg/query
+const SUPABASE_PG_URL = import.meta.env.DEV
+  ? '/supabase-pg'
+  : SUPABASE_URL + '/pg/query';
 const SUPABASE_SERVICE_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q';
 
