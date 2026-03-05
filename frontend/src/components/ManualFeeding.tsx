@@ -154,16 +154,74 @@ const ManualFeeding: React.FC = () => {
     }
   }, []);
 
-  /* ── initial load + 2s Backend polling (Backend reads MySQL sensor_devices) ── */
+  /* ── initial load + WebSocket (primary ~1s) + 5s HTTP polling fallback ── */
   useEffect(() => {
+    let isMounted = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Derive WebSocket URL from API URL (http→ws, https→wss)
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+    const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws/feeding';
+
+    // ── Process raw ESP32 MQTT JSON (WebSocket — fields use ESP32 naming, values in grams) ──
+    const processWsMessage = (data: Record<string, unknown>) => {
+      if (!isMounted) return;
+      if (data.deviceId !== DEVICE_ID) return;
+
+      const rawLevel = ((data.hopperLevel as number) ?? 0) / 1000; // grams → kg
+      const rawCap = ((data.hopperCapacity as number) ?? 20000) / 1000;
+      if (isMounted) {
+        setTankLevel(Math.min(Math.max(smoothLevel.current.update(rawLevel), 0), rawCap));
+        setTankCapacity(smoothCap.current.update(rawCap));
+        // Reset staleness
+        staleCountRef.current = 0;
+        lastUpdatedAtRef.current = new Date().toISOString();
+        setDeviceOnline(true);
+        setLastUpdate(new Date().toLocaleTimeString());
+      }
+    };
+
+    // ── WebSocket connection with auto-reconnect ──
+    const connectWs = () => {
+      if (!isMounted) return;
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          console.log('[ManualFeeding] WebSocket connected to', wsUrl);
+        };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            processWsMessage(data);
+          } catch (e) {
+            console.error('[ManualFeeding] WS parse error:', e);
+          }
+        };
+        ws.onclose = () => {
+          console.log('[ManualFeeding] WebSocket closed, reconnecting in 3s...');
+          if (isMounted) reconnectTimer = setTimeout(connectWs, 3000);
+        };
+        ws.onerror = (err) => {
+          console.error('[ManualFeeding] WebSocket error:', err);
+          ws?.close();
+        };
+      } catch {
+        if (isMounted) reconnectTimer = setTimeout(connectWs, 3000);
+      }
+    };
+
     // Bootstrap: fetch current state + history
     refreshDeviceStatus();
     fetchManualFeedingHistory(DEVICE_ID, 20).then(setHistory).catch(() => {});
 
-    // Poll device status every 2s via Backend API
+    // Start WebSocket (real-time ~1s)
+    connectWs();
+
+    // HTTP polling fallback every 5s (backup when WebSocket is down)
     const pollInterval = setInterval(() => {
       refreshDeviceStatus();
-    }, 2000);
+    }, 5000);
 
     // Poll feeding history every 10s (lightweight)
     const historyPollInterval = setInterval(() => {
@@ -171,6 +229,9 @@ const ManualFeeding: React.FC = () => {
     }, 10000);
 
     return () => {
+      isMounted = false;
+      ws?.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (feedingPollRef.current) clearInterval(feedingPollRef.current);
       clearInterval(pollInterval);
       clearInterval(historyPollInterval);

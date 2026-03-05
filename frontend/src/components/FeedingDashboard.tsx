@@ -136,18 +136,126 @@ const FeedingDashboard: React.FC = () => {
   // Show values if online OR if we have cached stale data
   const hasData = isOnline || isStale;
 
-  // (All data now flows through Backend API → Supabase pg/query — no direct browser-to-Supabase connection)
+  // (All data now flows through Backend API — WebSocket for real-time, HTTP polling as fallback)
 
-  // ─── Backend polling: fetch device status every 2s (Backend reads MySQL sensor_devices, updated by MQTT) ───
+  // ─── WebSocket (primary, ~1s real-time) + HTTP polling fallback (5s) ───
   useEffect(() => {
     let isMounted = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+    // Derive WebSocket URL from API URL (http→ws, https→wss)
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+    const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws/feeding';
+
+    // ── Process raw ESP32 MQTT JSON (from WebSocket — fields use ESP32 naming) ──
+    const processWsMessage = (data: Record<string, unknown>) => {
+      if (!isMounted) return;
+      if (data.deviceId !== DEVICE_ID) return;
+
+      const cap = (data.hopperCapacity as number) ?? 20000;
+      const sHopper = Math.min(Math.max(smoothHopper.current.update((data.hopperLevel as number) ?? 0), 0), cap);
+      const sWeight = Math.min(Math.max(smoothWeight.current.update((data.weight as number) ?? 0), 0), 20000);
+      const sPct = Math.min(Math.max(smoothPct.current.update((data.hopperPercentage as number) ?? 0), 0), 100);
+
+      // Reset staleness — fresh data via WebSocket
+      staleCountRef.current = 0;
+      lastUpdatedAtRef.current = new Date().toISOString();
+
+      setDevice(prev => {
+        const updated: DeviceData = {
+          ...prev,
+          status: 'online',
+          currentWeight: sWeight,
+          hopperLevel: sHopper,
+          hopperCapacity: cap,
+          hopperPercentage: sPct,
+          motorStatus: (data.motorStatus as string) || prev.motorStatus,
+          plateSpeed: (data.plateSpeed as number) ?? prev.plateSpeed,
+          escPercent: (data.escPercent as number) ?? prev.escPercent,
+          feedingActive: (data.feedingActive as boolean) ?? prev.feedingActive,
+          feedCount: (data.feedCount as number) ?? prev.feedCount,
+          totalGramsFed: (data.totalGrams as number) ?? prev.totalGramsFed,
+          targetWeight: (data.targetWeight as number) ?? prev.targetWeight,
+          rssi: (data.rssi as number) ?? prev.rssi,
+          ipAddress: (data.ipAddress as string) || prev.ipAddress,
+          uptimeMs: (data.uptimeMs as number) ?? prev.uptimeMs,
+          lastSeen: new Date().toISOString(),
+        };
+        cacheDevice(updated);
+        return updated;
+      });
+      setIsStale(false);
+      setRtStatus('connected');
+      setLastRtMsg(new Date());
+
+      // Track feeding state
+      setFeedingInProgress(!!(data.feedingActive));
+
+      // Feed events tracking
+      const newFeedCount = (data.feedCount as number) ?? 0;
+      if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
+        setFeedEvents(prev => {
+          const next = [...prev, {
+            time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            amount: ((data.totalGrams as number) ?? 0) / 1000,
+          }];
+          return next.slice(-10);
+        });
+      }
+      prevFeedCount.current = newFeedCount;
+
+      // Weight history chart
+      const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      setWeightHistory(prev => {
+        const last = prev[prev.length - 1];
+        if (last && last.time === timeStr) return prev;
+        const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
+        return next.slice(-120);
+      });
+    };
+
+    // ── WebSocket connection with auto-reconnect ──
+    const connectWs = () => {
+      if (!isMounted) return;
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          console.log('[FeedingDashboard] WebSocket connected to', wsUrl);
+          if (isMounted) setRtStatus('connected');
+        };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            processWsMessage(data);
+          } catch (e) {
+            console.error('[FeedingDashboard] WS parse error:', e);
+          }
+        };
+        ws.onclose = () => {
+          console.log('[FeedingDashboard] WebSocket closed, reconnecting in 3s...');
+          if (isMounted) {
+            setRtStatus('connecting');
+            reconnectTimer = setTimeout(connectWs, 3000);
+          }
+        };
+        ws.onerror = (err) => {
+          console.error('[FeedingDashboard] WebSocket error:', err);
+          ws?.close();
+        };
+      } catch {
+        console.error('[FeedingDashboard] WS connect failed, retrying in 3s...');
+        if (isMounted) reconnectTimer = setTimeout(connectWs, 3000);
+      }
+    };
+
+    // ── HTTP polling fallback (5s — backup when WebSocket is down) ──
     const pollDevice = async () => {
       try {
         const fbData = await fetchDeviceStatus(DEVICE_ID);
         if (!isMounted) return;
         if (fbData && fbData.device_id) {
-          // Client-side staleness: track if updated_at changes between polls
           const currentUpdatedAt = fbData.updated_at || '';
           if (currentUpdatedAt && currentUpdatedAt !== lastUpdatedAtRef.current) {
             lastUpdatedAtRef.current = currentUpdatedAt;
@@ -155,13 +263,11 @@ const FeedingDashboard: React.FC = () => {
           } else {
             staleCountRef.current++;
           }
-          // Device is online only if BOTH backend says online AND data is fresh
           const backendSaysOnline = fbData.status === 'online';
           const dataIsFresh = staleCountRef.current < STALE_THRESHOLD;
           const deviceIsOnline = backendSaysOnline && dataIsFresh;
 
           const cap = fbData.tank_capacity ?? 20000;
-          // Smooth + hard-clamp: hopper ≤ capacity, weight ≤ 20 kg, pct 0-100
           const sHopper = Math.min(Math.max(smoothHopper.current.update(fbData.tank_level ?? 0), 0), cap);
           const sWeight = Math.min(Math.max(smoothWeight.current.update(fbData.weight ?? 0), 0), 20000);
           const sPct = Math.min(Math.max(smoothPct.current.update(fbData.tank_percentage ?? 0), 0), 100);
@@ -190,14 +296,12 @@ const FeedingDashboard: React.FC = () => {
             return updated;
           });
           setIsStale(!deviceIsOnline);
-          setRtStatus('connected');
+          setRtStatus(prev => prev === 'error' ? 'connected' : prev);
           setLastRtMsg(new Date());
 
-          // Track feeding state
           if (fbData.feeding_active) setFeedingInProgress(true);
           else setFeedingInProgress(false);
 
-          // Feed events tracking (only when online)
           if (deviceIsOnline) {
             const newFeedCount = fbData.feed_count ?? 0;
             if (newFeedCount > prevFeedCount.current && prevFeedCount.current > 0) {
@@ -210,15 +314,6 @@ const FeedingDashboard: React.FC = () => {
               });
             }
             prevFeedCount.current = newFeedCount;
-
-            // Feed weight history chart
-            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-            setWeightHistory(prev => {
-              const last = prev[prev.length - 1];
-              if (last && last.time === timeStr) return prev;
-              const next = [...prev, { time: timeStr, weight: sWeight, hopper: sHopper / 1000 }];
-              return next.slice(-120);
-            });
           }
         }
       } catch {
@@ -226,14 +321,16 @@ const FeedingDashboard: React.FC = () => {
       }
     };
 
-    // Initial fetch immediately
-    pollDevice();
-    // Then poll every 2s (Backend reads MySQL updated by MQTT every ~1s)
-    const interval = setInterval(pollDevice, 2000);
+    // Start both: WebSocket (real-time ~1s) + HTTP polling (fallback every 5s)
+    connectWs();
+    pollDevice(); // Initial fetch immediately
+    pollTimer = setInterval(pollDevice, 5000);
 
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      ws?.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
