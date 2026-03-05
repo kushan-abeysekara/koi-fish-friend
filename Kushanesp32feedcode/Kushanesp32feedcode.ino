@@ -125,6 +125,8 @@ float targetWeight = 0.0;           // Target weight in grams
 bool weightBasedFeeding = false;    // Enable weight-based feeding mode
 unsigned long lastWeightCheck = 0;
 const unsigned long weightCheckInterval = 500; // Check weight every 500ms
+const unsigned long FEEDING_MAX_DURATION = 300000; // 5-minute safety timeout
+const unsigned long FEEDING_SETTLE_TIME = 2000;    // 2s settle after tare
 
 // ESC Motor Pins (Feed Distribution)
 const int escPin = 25;   // ESC signal
@@ -222,6 +224,7 @@ void checkScheduledFeedings();
 void readESCSpeedFromPotentiometer();
 void startWeightBasedFeeding(float targetGrams);
 void checkWeightAndControl();
+void stopBothMotors(String reason);
 void runESCFeedingPhase();
 
 // Supabase direct HTTP functions
@@ -995,9 +998,10 @@ void readESCSpeedFromPotentiometer() {
 
 // ==================== NEW FUNCTION: Weight-Based Feeding ====================
 void startWeightBasedFeeding(float targetGrams) {
-  Serial.print("Starting weight-based feeding: ");
-  Serial.print(targetGrams);
-  Serial.println("g");
+  Serial.println("\n============================================");
+  Serial.println("   STARTING WEIGHT-BASED FEEDING");
+  Serial.println("============================================");
+  Serial.print("Target: "); Serial.print(targetGrams); Serial.println("g");
 
   targetWeight = targetGrams;
   weightBasedFeeding = true;
@@ -1008,6 +1012,11 @@ void startWeightBasedFeeding(float targetGrams) {
   tankLevelBeforeFeeding = totalTankWeight;
   feedingStartTime = millis();
   maxEscDuringFeeding = 0.0;
+  
+  // Reset any lingering auto-stop state
+  escAutoStopEnabled = false;
+  escStopTimerStarted = false;
+  escPhase = ESC_PHASE_IDLE;
   
   // Tare the scale to start from zero
   scale.tare();
@@ -1026,15 +1035,21 @@ void startWeightBasedFeeding(float targetGrams) {
   setESCPercent(escSpeed);
   maxEscDuringFeeding = escSpeed;
   
+  Serial.println("--------------------------------------------");
   Serial.println("BOTH motors started simultaneously!");
-  Serial.print("  NEMA17: RUNNING at speed "); Serial.println(stepperSpeed);
+  Serial.print("  NEMA17: RUNNING | stepPin="); Serial.print(stepPin);
+  Serial.print(" dirPin="); Serial.print(dirPin);
+  Serial.print(" speed="); Serial.print(stepperSpeed); Serial.println("us");
   Serial.print("  ESC: RUNNING at "); Serial.print(escSpeed); Serial.println("%");
+  Serial.print("  Safety timeout: "); Serial.print(FEEDING_MAX_DURATION / 1000); Serial.println("s");
+  Serial.println("  Motors will run until: target reached / MQTT stop / timeout");
+  Serial.println("============================================\n");
   
   publishStatus("weight_feeding_started");
   logFeedingEventToSupabase("feeding_started");
 }
 
-// ==================== NEW FUNCTION: Check Weight and Stop ====================
+// ==================== Check Weight and Stop (with safety timeout) ====================
 void checkWeightAndControl() {
   // Check weight every 500ms
   if (millis() - lastWeightCheck < weightCheckInterval) {
@@ -1042,41 +1057,76 @@ void checkWeightAndControl() {
   }
   lastWeightCheck = millis();
   
-  // Real-time Serial print of load cell value
-  Serial.print("Load Cell: ");
-  Serial.print(currentWeight, 2);
-  Serial.print("g / Target: ");
-  Serial.print(targetWeight, 2);
-  Serial.println("g");
+  unsigned long elapsed = millis() - feedingStartTime;
+  
+  // Skip first 2 seconds to let tare settle
+  if (elapsed < FEEDING_SETTLE_TIME) {
+    Serial.print("[Settling] "); Serial.print(FEEDING_SETTLE_TIME - elapsed);
+    Serial.println("ms remaining...");
+    return;
+  }
+  
+  // Real-time Serial print of load cell value + elapsed time
+  Serial.print("[Feeding "); Serial.print(elapsed / 1000); Serial.print("s] ");
+  Serial.print("Load Cell: "); Serial.print(currentWeight, 2);
+  Serial.print("g / Target: "); Serial.print(targetWeight, 2);
+  Serial.print("g | NEMA17: "); Serial.print(stepperActive ? "ON" : "OFF");
+  Serial.print(" | ESC: "); Serial.print(currentESCPercent); Serial.println("%");
+  
+  // Warn if HX711 reads 0 (possible hardware issue)
+  if (currentWeight <= 0.1 && elapsed > 5000) {
+    static unsigned long lastHX711Warn = 0;
+    if (millis() - lastHX711Warn > 10000) {  // Warn every 10s
+      Serial.println("⚠ HX711 reads ~0g — possible sensor wiring issue!");
+      Serial.println("  Motors will keep running until MQTT stop or timeout.");
+      lastHX711Warn = millis();
+    }
+  }
 
   // Check if target weight reached
   if (currentWeight >= targetWeight) {
-    Serial.println("✓✓✓ TARGET WEIGHT REACHED! ✓✓✓");
-    Serial.println("Stopping BOTH motors...");
-    
-    // Stop NEMA17 stepper motor
-    stepperActive = false;
-    setStepperEnabled(false);
-    weightBasedFeeding = false;
-    
-    // Stop ESC motor
-    setESCPercent(0);
-    escPhase = ESC_PHASE_IDLE;
-    escAutoStopEnabled = false;
-    escStopTimerStarted = false;
-    
-    // Update statistics
-    totalGramsFed += currentWeight;
-    
-    // Feeding complete
-    feedingActive = false;
-    
-    Serial.print("Dispensed: "); Serial.print(currentWeight); Serial.println("g");
-    Serial.println("Both NEMA17 and ESC stopped.");
-    
-    publishStatus("feeding_stopped");
-    logFeedingEventToSupabase("feeding_stopped");
+    Serial.println("\n✓✓✓ TARGET WEIGHT REACHED! ✓✓✓");
+    stopBothMotors("target_reached");
+    return;
   }
+  
+  // Safety timeout — prevent motors from running forever
+  if (elapsed >= FEEDING_MAX_DURATION) {
+    Serial.println("\n⚠ SAFETY TIMEOUT! 5 minutes elapsed.");
+    stopBothMotors("safety_timeout");
+    return;
+  }
+}
+
+// ==================== Stop Both Motors ====================
+void stopBothMotors(String reason) {
+  Serial.println("Stopping BOTH motors...");
+  Serial.print("Reason: "); Serial.println(reason);
+  
+  // Stop NEMA17 stepper motor
+  stepperActive = false;
+  setStepperEnabled(false);
+  weightBasedFeeding = false;
+  
+  // Stop ESC motor
+  setESCPercent(0);
+  escPhase = ESC_PHASE_IDLE;
+  escAutoStopEnabled = false;
+  escStopTimerStarted = false;
+  
+  // Update statistics
+  totalGramsFed += currentWeight;
+  
+  // Feeding complete
+  feedingActive = false;
+  
+  unsigned long duration = millis() - feedingStartTime;
+  Serial.print("Dispensed: "); Serial.print(currentWeight); Serial.println("g");
+  Serial.print("Duration: "); Serial.print(duration / 1000); Serial.println("s");
+  Serial.println("Both NEMA17 and ESC stopped.\n");
+  
+  publishStatus("feeding_stopped");
+  logFeedingEventToSupabase("feeding_stopped");
 }
 
 // ==================== NEW FUNCTION: ESC Feeding Phase State Machine ====================
