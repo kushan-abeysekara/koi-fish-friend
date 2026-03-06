@@ -347,3 +347,42 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     asyncio.run(main(args.pi_url))
+
+The frontend is connected to LiveKit and waiting for the Pi camera feed. The VPS side is ready.
+
+The missing piece is the Raspberry Pi publisher. You need to run livekit_bridge.py on the Pi.
+
+SSH to Pi and run:
+ssh koi@192.168.8.101
+
+# Create directory & setup
+mkdir -p ~/livekit-camera && cd ~/livekit-camera
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install livekit livekit-api python-socketio[client] opencv-python-headless Pillow
+
+# Create .env
+cat > .env << 'EOF'
+LIVEKIT_URL=wss://livekit.koifishfriend.online
+LIVEKIT_API_KEY=APIhfro22ogg9c3
+LIVEKIT_API_SECRET=5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc
+PI_CAMERA_URL=http://192.168.8.101:5000
+LIVEKIT_ROOM=boat-navigation
+LIVEKIT_IDENTITY=boat-camera-pi
+LIVEKIT_NAME=Boat Camera (RPi + YOLOv8)
+EOF
+
+# Copy the bridge script from your repo (from your PC)
+# OR use SCP from another terminal on your Windows PC:
+#   scp d:\GITHUB\koi-fish-friendn\raspberry-pi\livekit_bridge.py koi@192.168.8.101:~/livekit-camera/
+
+# Load env vars and run
+set -a && source .env && set +a
+python3 livekit_bridge.py
+Make sure your Flask camera server is also running on the Pi (http://192.168.8.101:5000). The bridge connects to it and forwards the frames to LiveKit.
+
+Once the bridge is running, you'll see the live feed appear in the dashboard immediately.
