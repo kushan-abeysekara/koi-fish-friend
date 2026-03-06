@@ -35,8 +35,8 @@ PowerSchedule schedules[MAX_SCHEDULES];
 int scheduleCount = 0;
 
 // ===================== WiFi & MQTT CONFIG =====================
-const char *ssid = "Dulshan Dialog 4G 643";
-const char *password = "Chuki000";
+const char *ssid = "KoiFishFriend";
+const char *password = "FiberTarget255";
 
 // Self-hosted EMQX Broker on VPS
 const char *mqtt_server = "187.77.189.5";
