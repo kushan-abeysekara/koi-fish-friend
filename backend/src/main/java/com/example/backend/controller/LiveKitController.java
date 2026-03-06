@@ -31,7 +31,7 @@ public class LiveKitController {
     @Value("${livekit.api.secret:5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc}")
     private String apiSecret;
 
-    @Value("${livekit.url:wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me}")
+    @Value("${livekit.url:wss://livekit.koifishfriend.online}")
     private String livekitUrl;
 
     /**

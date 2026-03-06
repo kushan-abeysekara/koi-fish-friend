@@ -54,7 +54,7 @@ logger = logging.getLogger("livekit-bridge")
 # ─────────────────────────────────────────
 LIVEKIT_URL = os.getenv(
     "LIVEKIT_URL",
-    "wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me"
+    "wss://livekit.koifishfriend.online"
 )
 API_KEY = os.getenv("LIVEKIT_API_KEY", "APIhfro22ogg9c3")
 API_SECRET = os.getenv(

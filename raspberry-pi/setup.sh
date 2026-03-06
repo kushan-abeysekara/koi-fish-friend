@@ -34,7 +34,7 @@ pip install livekit livekit-api python-socketio[client] Pillow
 echo ""
 echo "📝 Creating .env config..."
 cat > .env << 'EOF'
-LIVEKIT_URL=wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me
+LIVEKIT_URL=wss://livekit.koifishfriend.online
 LIVEKIT_API_KEY=APIhfro22ogg9c3
 LIVEKIT_API_SECRET=5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc
 LIVEKIT_ROOM=boat-navigation

@@ -11,7 +11,7 @@ import { Video, VideoOff, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 // ─── Configuration ───
 const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL ||
-  'wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me';
+  'wss://livekit.koifishfriend.online';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 // ─── Inner: Video renderer (must be inside LiveKitRoom) ───

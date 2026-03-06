@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger("livekit-camera")
 
 # Configuration
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://livekit.koifishfriend.online")
 API_KEY = os.getenv("LIVEKIT_API_KEY", "APIhfro22ogg9c3")
 API_SECRET = os.getenv("LIVEKIT_API_SECRET", "5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc")
 ROOM_NAME = os.getenv("LIVEKIT_ROOM", "boat-navigation")
