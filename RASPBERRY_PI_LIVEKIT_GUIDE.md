@@ -1,32 +1,47 @@
-# Raspberry Pi LiveKit Camera Publisher - Setup Guide
+﻿# Raspberry Pi LiveKit Camera Publisher - Setup Guide
 
 ## Overview
 
-This guide sets up your Raspberry Pi to **publish a live camera feed** to your self-hosted **LiveKit server** on the VPS. The feed will be available from **any network** — your local network, VPS dashboard, or mobile browser.
+This guide sets up your Raspberry Pi to **publish its live camera feed** (with YOLOv8 fish detection overlays) to your self-hosted **LiveKit server** on the VPS. The feed will be available from **any network**.
+
+### Your Current Setup
+- Pi at `192.168.8.101:5000` runs Flask/Socket.IO with YOLOv8 fish detection
+- Only accessible from **local network**
+- The **LiveKit Bridge** connects to your existing server and re-publishes to LiveKit on VPS
 
 ### Architecture
 
 ```
-┌─────────────────────────┐                    ┌─────────────────────────────────────┐
-│   Raspberry Pi          │                    │   VPS (187.77.189.5)                │
-│   (Your Local Network)  │                    │                                     │
-│                         │   WebRTC (WSS)     │   LiveKit Server                    │
-│   camera_publisher.py  ─┼───────────────────▶│   livekit.koifish-livekit-9ae13d-   │
-│   USB Camera / Pi Cam   │                    │   187-77-189-5.traefik.me           │
-│                         │                    │                                     │
-└─────────────────────────┘                    │   EMQX (MQTT)                       │
-                                               │   Spring Boot Backend               │
-                                               └──────────────┬──────────────────────┘
-                                                              │
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   Raspberry Pi (192.168.8.101)   â”‚          â”‚   VPS (187.77.189.5)                 â”‚
+â”‚                                  â”‚          â”‚                                      â”‚
+â”‚   USB Camera / Pi Cam            â”‚          â”‚   LiveKit Server                     â”‚
+â”‚          â”‚                       â”‚          â”‚   livekit.koifish-livekit-9ae13d-    â”‚
+â”‚          â–¼                       â”‚   WSS    â”‚   187-77-189-5.traefik.me            â”‚
+â”‚   Flask + YOLOv8 (:5000)        â”‚          â”‚                                      â”‚
+â”‚   (fish detection overlays)      â”‚          â”‚   EMQX (MQTT)                        â”‚
+â”‚          â”‚ Socket.IO             â”‚          â”‚   Spring Boot Backend                â”‚
+â”‚          â–¼                       â”‚          â”‚                                      â”‚
+â”‚   livekit_bridge.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶   â”‚   LiveKit Room: boat-navigation      â”‚
+â”‚   (reads frames, publishes       â”‚          â”‚                                      â”‚
+â”‚    to LiveKit with detections)   â”‚          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                          â”‚
                                                     WebRTC (WSS Subscribe)
-                                                              │
-                                        ┌─────────────────────┼────────────────────┐
-                                        │                     │                    │
-                               ┌────────▼───────┐  ┌─────────▼──────┐   ┌─────────▼─────┐
-                               │ localhost:5173  │  │ VPS Dashboard  │   │ Mobile/Any    │
-                               │ (Your Dev PC)  │  │ (Production)   │   │ Browser       │
-                               └────────────────┘  └────────────────┘   └───────────────┘
+                                                              â”‚
+                                        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                                        â”‚                     â”‚                    â”‚
+                               â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”
+                               â”‚ localhost:5173  â”‚  â”‚ VPS Dashboard  â”‚   â”‚ Mobile/Any    â”‚
+                               â”‚ (Your Dev PC)  â”‚  â”‚ (Production)   â”‚   â”‚ Browser       â”‚
+                               â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
+
+### Two Scripts Available
+
+| Script | Purpose |
+|--------|---------|
+| **`livekit_bridge.py`** (Recommended) | Connects to your existing Flask/SocketIO server, preserves YOLOv8 fish detection overlays |
+| **`camera_publisher.py`** | Direct camera â†’ LiveKit (no fish detection, use if Flask server isn't running) |
 
 ---
 
@@ -93,10 +108,11 @@ source venv/bin/activate
 
 ```bash
 pip install --upgrade pip
-pip install livekit livekit-api opencv-python-headless
+pip install livekit livekit-api python-socketio[client] Pillow opencv-python-headless
 ```
 
-> **Note:** We use `opencv-python-headless` (no GUI) since the Pi runs headless.
+> **Note:** `python-socketio[client]` is needed for the bridge to connect to your Flask server.
+> We use `opencv-python-headless` (no GUI) since the Pi runs headless.
 
 If `opencv-python-headless` has issues on Pi, use the system package:
 
@@ -108,269 +124,49 @@ pip install livekit livekit-api
 
 ---
 
-## Step 3: Camera Publisher Script
+## Step 3: LiveKit Bridge Script (Recommended)
 
-### Create the publisher
+The bridge connects to your **existing** Flask/Socket.IO camera server (`192.168.8.101:5000`) and re-publishes the processed frames (with YOLOv8 fish detection overlays) to LiveKit.
+
+### Copy from this repo
 
 ```bash
-nano ~/livekit-camera/camera_publisher.py
+# From your dev machine (Windows), copy the scripts to the Pi:
+scp raspberry-pi/livekit_bridge.py koi@192.168.8.101:~/livekit-camera/
+scp raspberry-pi/camera_publisher.py koi@192.168.8.101:~/livekit-camera/
+scp raspberry-pi/livekit-camera.service koi@192.168.8.101:~/livekit-camera/
 ```
 
-Paste the following:
+Or create the file manually on the Pi:
 
-```python
-#!/usr/bin/env python3
-"""
-LiveKit Camera Publisher for Raspberry Pi
-Streams camera feed to LiveKit server on VPS.
-Works from any network (local WiFi, different network, behind NAT).
+### Create the bridge script
 
-Usage:
-    python3 camera_publisher.py
-    python3 camera_publisher.py --camera 0 --fps 15 --width 640 --height 480
-
-Environment Variables (override defaults):
-    LIVEKIT_URL       - LiveKit server URL
-    LIVEKIT_API_KEY   - API key
-    LIVEKIT_API_SECRET - API secret
-    CAMERA_INDEX      - Camera device index (default: 0)
-"""
-
-import asyncio
-import cv2
-import signal
-import sys
-import os
-import argparse
-import logging
-import time
-from datetime import datetime
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger("livekit-camera")
-
-# ─────────────────────────────────────────
-# Configuration (edit these or use env vars)
-# ─────────────────────────────────────────
-LIVEKIT_URL = os.getenv(
-    "LIVEKIT_URL",
-    "wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me"
-)
-API_KEY = os.getenv("LIVEKIT_API_KEY", "APIhfro22ogg9c3")
-API_SECRET = os.getenv(
-    "LIVEKIT_API_SECRET",
-    "5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc"
-)
-
-ROOM_NAME = os.getenv("LIVEKIT_ROOM", "boat-navigation")
-PARTICIPANT_IDENTITY = os.getenv("LIVEKIT_IDENTITY", "boat-camera-pi")
-PARTICIPANT_NAME = os.getenv("LIVEKIT_NAME", "Boat Camera (RPi)")
-
-# Shutdown event
-shutdown_event = asyncio.Event()
-
-
-def signal_handler(sig, frame):
-    logger.info("Received shutdown signal (%s)", signal.Signals(sig).name)
-    shutdown_event.set()
-
-
-async def open_camera(index: int, width: int, height: int, fps: int):
-    """Open the camera with the given settings."""
-    logger.info(f"Opening camera {index} ({width}x{height} @ {fps}fps)...")
-
-    cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
-        # Try alternative backends on Pi
-        for backend in [cv2.CAP_V4L2, cv2.CAP_GSTREAMER]:
-            cap = cv2.VideoCapture(index, backend)
-            if cap.isOpened():
-                logger.info(f"Opened with backend: {backend}")
-                break
-
-    if not cap.isOpened():
-        logger.error(f"❌ Cannot open camera at index {index}")
-        logger.error("Troubleshooting:")
-        logger.error("  1. Check: ls /dev/video*")
-        logger.error("  2. Try: v4l2-ctl --device=/dev/video0 --all")
-        logger.error("  3. For Pi Camera: sudo raspi-config → Interface → Camera → Enable")
-        return None
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
-
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    logger.info(f"📷 Camera opened: {actual_w}x{actual_h} @ {actual_fps}fps")
-
-    return cap, actual_w, actual_h
-
-
-async def publish_camera(camera_index: int, width: int, height: int, fps: int):
-    """Connect to LiveKit and publish camera frames."""
-
-    # Import LiveKit SDK
-    from livekit import rtc
-    from livekit.api import AccessToken, VideoGrants
-
-    # ─── Generate Access Token ───
-    logger.info(f"Generating token for room: {ROOM_NAME}")
-    token = AccessToken(API_KEY, API_SECRET)
-    token.with_identity(PARTICIPANT_IDENTITY)
-    token.with_name(PARTICIPANT_NAME)
-    token.with_grants(VideoGrants(
-        room_join=True,
-        room=ROOM_NAME,
-        can_publish=True,
-        can_subscribe=False,  # Camera only publishes
-    ))
-    jwt_token = token.to_jwt()
-
-    # ─── Connect to LiveKit Room ───
-    room = rtc.Room()
-    logger.info(f"Connecting to LiveKit: {LIVEKIT_URL}")
-
-    try:
-        await room.connect(LIVEKIT_URL, jwt_token)
-    except Exception as e:
-        logger.error(f"❌ Failed to connect: {e}")
-        logger.error("Check:")
-        logger.error(f"  1. LiveKit server is running at {LIVEKIT_URL}")
-        logger.error("  2. SSL certificates are valid (HTTPS)")
-        logger.error("  3. API key/secret match the server config")
-        logger.error("  4. Pi has internet access: ping google.com")
-        return
-
-    logger.info(f"✅ Connected to LiveKit room: {ROOM_NAME}")
-
-    # ─── Open Camera ───
-    result = await open_camera(camera_index, width, height, fps)
-    if result is None:
-        await room.disconnect()
-        return
-
-    cap, actual_w, actual_h = result
-
-    # ─── Create and Publish Video Track ───
-    source = rtc.VideoSource(actual_w, actual_h)
-    track = rtc.LocalVideoTrack.create_video_track("boat-cam", source)
-
-    options = rtc.TrackPublishOptions()
-    options.source = rtc.TrackSource.SOURCE_CAMERA
-    publication = await room.local_participant.publish_track(track, options)
-    logger.info(f"✅ Video track published (SID: {publication.sid})")
-
-    # ─── Frame Publishing Loop ───
-    frame_interval = 1.0 / fps
-    frame_count = 0
-    start_time = time.time()
-    fps_counter = 0
-    fps_timer = time.time()
-
-    logger.info(f"🎬 Streaming at target {fps} FPS...")
-    logger.info("Press Ctrl+C to stop")
-    logger.info("-" * 50)
-
-    while not shutdown_event.is_set():
-        ret, frame = cap.read()
-        if not ret:
-            logger.warning("Failed to read frame, skipping...")
-            await asyncio.sleep(0.05)
-            continue
-
-        # Convert BGR (OpenCV) → RGBA (LiveKit)
-        frame_rgba = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-
-        # Create and publish LiveKit video frame
-        video_frame = rtc.VideoFrame(
-            actual_w,
-            actual_h,
-            rtc.VideoBufferType.RGBA,
-            frame_rgba.tobytes()
-        )
-        source.capture_frame(video_frame)
-
-        frame_count += 1
-        fps_counter += 1
-
-        # Calculate and log actual FPS every 10 seconds
-        now = time.time()
-        if now - fps_timer >= 10.0:
-            actual_fps = fps_counter / (now - fps_timer)
-            elapsed = now - start_time
-            logger.info(
-                f"📡 Frames: {frame_count} | "
-                f"FPS: {actual_fps:.1f} | "
-                f"Uptime: {int(elapsed)}s | "
-                f"Time: {datetime.now().strftime('%H:%M:%S')}"
-            )
-            fps_counter = 0
-            fps_timer = now
-
-        await asyncio.sleep(frame_interval)
-
-    # ─── Cleanup ───
-    logger.info("Shutting down camera...")
-    cap.release()
-    await room.disconnect()
-    total_time = time.time() - start_time
-    logger.info(f"✅ Done. Published {frame_count} frames in {total_time:.0f}s")
-
-
-async def main(args):
-    """Main entry with automatic reconnection."""
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    logger.info("=" * 50)
-    logger.info("🐟 Koi Fish LiveKit Camera Publisher")
-    logger.info("=" * 50)
-    logger.info(f"LiveKit URL:  {LIVEKIT_URL}")
-    logger.info(f"Room:         {ROOM_NAME}")
-    logger.info(f"Identity:     {PARTICIPANT_IDENTITY}")
-    logger.info(f"Camera:       /dev/video{args.camera}")
-    logger.info(f"Resolution:   {args.width}x{args.height}")
-    logger.info(f"Target FPS:   {args.fps}")
-    logger.info("=" * 50)
-
-    attempt = 0
-    while not shutdown_event.is_set():
-        attempt += 1
-        logger.info(f"Connection attempt #{attempt}...")
-
-        try:
-            await publish_camera(args.camera, args.width, args.height, args.fps)
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-
-        if not shutdown_event.is_set():
-            wait_time = min(5 * attempt, 30)  # Back off up to 30s
-            logger.info(f"Reconnecting in {wait_time}s...")
-            await asyncio.sleep(wait_time)
-            # Reset attempt counter after successful reconnect
-            if attempt > 5:
-                attempt = 0
-
-    logger.info("👋 Camera publisher stopped")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LiveKit Camera Publisher for Raspberry Pi")
-    parser.add_argument("--camera", type=int, default=0, help="Camera device index (default: 0)")
-    parser.add_argument("--width", type=int, default=640, help="Frame width (default: 640)")
-    parser.add_argument("--height", type=int, default=480, help="Frame height (default: 480)")
-    parser.add_argument("--fps", type=int, default=15, help="Target FPS (default: 15)")
-    args = parser.parse_args()
-
-    asyncio.run(main(args))
+```bash
+nano ~/livekit-camera/livekit_bridge.py
 ```
+
+Paste the contents of `raspberry-pi/livekit_bridge.py` from this repo.
+
+The bridge does:
+1. Connects to `http://192.168.8.101:5000` via Socket.IO
+2. Receives processed frames (with fish detection bounding boxes)
+3. Converts them to RGBA format
+4. Publishes to LiveKit room `boat-navigation` on VPS
+
+### How it works
+
+```
+Pi Flask Server (:5000)          livekit_bridge.py              LiveKit (VPS)
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Camera            â”‚ Socket.IO  â”‚ Receive      â”‚  WebRTC      â”‚ Room:       â”‚
+â”‚ YOLOv8 Detection â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚ JPEG frames  â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚ boat-nav    â”‚
+â”‚ Health Analysis   â”‚            â”‚ Convert RGBA â”‚              â”‚             â”‚
+â”‚ Bounding Boxes    â”‚            â”‚ Publish      â”‚              â”‚ â†’ Viewers   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜            â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜              â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+```
+
+> **Full source code**: See [`raspberry-pi/livekit_bridge.py`](raspberry-pi/livekit_bridge.py) in this repo.
+> **Alternative (no fish detection)**: See [`raspberry-pi/camera_publisher.py`](raspberry-pi/camera_publisher.py) for direct camera feed.
 
 ---
 
@@ -447,7 +243,7 @@ python3 camera_publisher.py --width 480 --height 360 --fps 10
 
 ```
 ==================================================
-🐟 Koi Fish LiveKit Camera Publisher
+ðŸŸ Koi Fish LiveKit Camera Publisher
 ==================================================
 LiveKit URL:  wss://livekit.koifish-livekit-9ae13d-187-77-189-5.traefik.me
 Room:         boat-navigation
@@ -459,14 +255,14 @@ Target FPS:   15
 Connection attempt #1...
 Generating token for room: boat-navigation
 Connecting to LiveKit: wss://livekit.koifish-livekit-...
-✅ Connected to LiveKit room: boat-navigation
-📷 Camera opened: 640x480 @ 15.0fps
-✅ Video track published (SID: TR_xxx)
-🎬 Streaming at target 15 FPS...
+âœ… Connected to LiveKit room: boat-navigation
+ðŸ“· Camera opened: 640x480 @ 15.0fps
+âœ… Video track published (SID: TR_xxx)
+ðŸŽ¬ Streaming at target 15 FPS...
 Press Ctrl+C to stop
 --------------------------------------------------
-📡 Frames: 150 | FPS: 14.8 | Uptime: 10s | Time: 14:30:25
-📡 Frames: 300 | FPS: 15.0 | Uptime: 20s | Time: 14:30:35
+ðŸ“¡ Frames: 150 | FPS: 14.8 | Uptime: 10s | Time: 14:30:25
+ðŸ“¡ Frames: 300 | FPS: 15.0 | Uptime: 20s | Time: 14:30:35
 ```
 
 ---
@@ -563,7 +359,7 @@ v4l2-ctl --list-devices
 
 # For Pi Camera Module, enable in config
 sudo raspi-config
-# → Interface Options → Camera → Enable
+# â†’ Interface Options â†’ Camera â†’ Enable
 sudo reboot
 
 # Test camera manually
@@ -660,11 +456,11 @@ frame_rgba = cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA)
 
 | Port | Protocol | Direction | Purpose |
 |------|----------|-----------|---------|
-| 7880 | TCP (WSS) | Pi → VPS | LiveKit signaling |
-| 7881 | TCP | Pi → VPS | LiveKit RTC (TCP fallback) |
-| 7882 | UDP | Pi ↔ VPS | WebRTC media (preferred) |
-| 3478 | UDP | Pi → VPS | TURN server (NAT traversal) |
-| 5349 | TCP | Pi → VPS | TURN over TLS |
+| 7880 | TCP (WSS) | Pi â†’ VPS | LiveKit signaling |
+| 7881 | TCP | Pi â†’ VPS | LiveKit RTC (TCP fallback) |
+| 7882 | UDP | Pi â†” VPS | WebRTC media (preferred) |
+| 3478 | UDP | Pi â†’ VPS | TURN server (NAT traversal) |
+| 5349 | TCP | Pi â†’ VPS | TURN over TLS |
 
 > **Note:** If your Pi is behind a strict NAT/firewall, the TURN server handles the relay automatically. No port forwarding needed on the Pi's router.
 

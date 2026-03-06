@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video, VideoOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video } from 'lucide-react';
 import mqtt from 'mqtt';
 import LiveKitCameraFeed from '../components/LiveKitCameraFeed';
 
