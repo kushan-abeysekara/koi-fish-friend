@@ -1,62 +1,179 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { aiApi, weatherApi, type AIPrediction, type WeatherSummary } from '../services/api';
+import { fetchDeviceStatusDirect, type FeeddbRow } from '../services/supabase';
 
 interface DashboardHomeProps {
   username: string;
 }
 
 const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
+  const navigate = useNavigate();
+  const [weather, setWeather] = useState<WeatherSummary | null>(null);
+  const [prediction, setPrediction] = useState<AIPrediction | null>(null);
+  const [device, setDevice] = useState<FeeddbRow | null>(null);
+  const [loadingWeather, setLoadingWeather] = useState(true);
+  const [loadingAI, setLoadingAI] = useState(true);
+
+  useEffect(() => {
+    // Fetch all dashboard data in parallel
+    weatherApi.getSummary()
+      .then(setWeather)
+      .catch(() => {})
+      .finally(() => setLoadingWeather(false));
+
+    aiApi.getPrediction()
+      .then(setPrediction)
+      .catch(() => {})
+      .finally(() => setLoadingAI(false));
+
+    fetchDeviceStatusDirect()
+      .then(setDevice)
+      .catch(() => {});
+  }, []);
+
+  const getHealthColor = (score: number) => {
+    if (score >= 80) return 'text-green-500';
+    if (score >= 60) return 'text-yellow-500';
+    return 'text-red-500';
+  };
+
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
       <div className="bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl shadow-lg p-8 text-white">
-        <h2 className="text-3xl font-bold mb-2">Welcome back, {username}! 👋</h2>
-        <p className="text-cyan-100">Here's what's happening with your account today.</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-bold mb-2">Welcome back, {username}! 👋</h2>
+            <p className="text-cyan-100">Here's what's happening with your fish farm today.</p>
+          </div>
+          {weather && (
+            <div className="hidden md:flex items-center gap-3 bg-white/15 rounded-xl px-5 py-3 backdrop-blur-sm">
+              <span className="text-4xl">{weather.weatherIcon}</span>
+              <div>
+                <p className="text-2xl font-bold">{weather.temperature}°C</p>
+                <p className="text-sm text-cyan-100">{weather.weatherDescription}</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100 hover:shadow-md transition">
+      {/* Live Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Farm Health */}
+        <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500 mb-1">Total Users</p>
-              <p className="text-3xl font-bold text-gray-800">1</p>
-              <p className="text-xs text-green-600 mt-1">Active</p>
+              <p className="text-sm text-gray-500 mb-1">Farm Health</p>
+              {loadingAI ? (
+                <div className="h-9 w-16 bg-gray-100 rounded animate-pulse"></div>
+              ) : (
+                <>
+                  <p className={`text-3xl font-bold ${prediction ? getHealthColor(prediction.healthScore) : 'text-gray-400'}`}>
+                    {prediction?.healthScore ?? '--'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {prediction?.healthScore && prediction.healthScore >= 80 ? 'Excellent' :
+                     prediction?.healthScore && prediction.healthScore >= 60 ? 'Good' : 'Needs attention'}
+                  </p>
+                </>
+              )}
             </div>
-            <div className="w-14 h-14 bg-blue-100 rounded-xl flex items-center justify-center">
-              <i className="fas fa-users text-blue-600 text-2xl"></i>
+            <div className="w-14 h-14 bg-purple-100 rounded-xl flex items-center justify-center">
+              <i className="fas fa-heartbeat text-purple-600 text-2xl"></i>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100 hover:shadow-md transition">
+        {/* Device Status */}
+        <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500 mb-1">Active Sessions</p>
-              <p className="text-3xl font-bold text-gray-800">1</p>
-              <p className="text-xs text-green-600 mt-1">
-                <i className="fas fa-circle text-green-500 text-xs mr-1 animate-pulse"></i>
-                Online now
+              <p className="text-sm text-gray-500 mb-1">Feed Device</p>
+              <p className="text-3xl font-bold text-gray-800">
+                {device?.status === 'online' ? (
+                  <span className="text-green-500">Online</span>
+                ) : (
+                  <span className="text-gray-400">Offline</span>
+                )}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {device ? `Tank: ${(device.tank_percentage ?? 0).toFixed(1)}%` : 'No data'}
               </p>
             </div>
             <div className="w-14 h-14 bg-green-100 rounded-xl flex items-center justify-center">
-              <i className="fas fa-check-circle text-green-600 text-2xl"></i>
+              <i className={`fas fa-microchip text-2xl ${device?.status === 'online' ? 'text-green-600' : 'text-gray-400'}`}></i>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100 hover:shadow-md transition">
+        {/* Weather */}
+        <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-500 mb-1">Last Login</p>
-              <p className="text-xl font-bold text-gray-800">Just now</p>
-              <p className="text-xs text-gray-500 mt-1">{new Date().toLocaleString()}</p>
+              <p className="text-sm text-gray-500 mb-1">Temperature</p>
+              {loadingWeather ? (
+                <div className="h-9 w-20 bg-gray-100 rounded animate-pulse"></div>
+              ) : (
+                <>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {weather?.temperature ?? '--'}<span className="text-lg text-gray-400">°C</span>
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Rain: {weather?.rainProbabilityNext6h ?? 0}% next 6h
+                  </p>
+                </>
+              )}
             </div>
-            <div className="w-14 h-14 bg-purple-100 rounded-xl flex items-center justify-center">
-              <i className="fas fa-clock text-purple-600 text-2xl"></i>
+            <div className="w-14 h-14 bg-blue-100 rounded-xl flex items-center justify-center">
+              <i className="fas fa-cloud-sun text-blue-500 text-2xl"></i>
+            </div>
+          </div>
+        </div>
+
+        {/* Next Feeding */}
+        <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500 mb-1">Next Feeding</p>
+              {loadingAI ? (
+                <div className="h-9 w-24 bg-gray-100 rounded animate-pulse"></div>
+              ) : (
+                <p className="text-lg font-bold text-gray-800 leading-snug">
+                  {prediction?.nextFeedingTime ?? 'Check schedule'}
+                </p>
+              )}
+            </div>
+            <div className="w-14 h-14 bg-cyan-100 rounded-xl flex items-center justify-center">
+              <i className="fas fa-clock text-cyan-600 text-2xl"></i>
             </div>
           </div>
         </div>
       </div>
+
+      {/* AI Recommendations Banner */}
+      {prediction && prediction.recommendations && prediction.recommendations.length > 0 && (
+        <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl p-5 border border-purple-100">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center">
+              <i className="fas fa-brain text-white text-sm"></i>
+            </div>
+            <h3 className="font-bold text-purple-800">AI Recommendations</h3>
+            <span className="text-xs bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">
+              {prediction.source === 'flowise' ? 'AI Powered' : 'Rule-based'}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {prediction.recommendations.slice(0, 4).map((rec, idx) => (
+              <div key={idx} className="flex items-start gap-2 text-sm text-gray-700">
+                <i className="fas fa-check-circle text-purple-400 mt-0.5"></i>
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
@@ -64,44 +181,56 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           <i className="fas fa-bolt text-yellow-500"></i>
           Quick Actions
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <button className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <button
+            onClick={() => navigate('/dashboard/feeding-dashboard')}
+            className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left"
+          >
             <div className="w-12 h-12 bg-cyan-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-user-edit text-cyan-600 text-xl"></i>
+              <i className="fas fa-utensils text-cyan-600 text-xl"></i>
             </div>
             <div>
-              <p className="font-semibold text-gray-800">Update Credentials</p>
-              <p className="text-sm text-gray-500">Change your username or password</p>
+              <p className="font-semibold text-gray-800">Feeding Dashboard</p>
+              <p className="text-sm text-gray-500">Monitor & control feeding</p>
             </div>
           </button>
 
-          <button className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left">
+          <button
+            onClick={() => navigate('/dashboard/boat-navigation')}
+            className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left"
+          >
             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-user-circle text-blue-600 text-xl"></i>
+              <i className="fas fa-ship text-blue-600 text-xl"></i>
             </div>
             <div>
-              <p className="font-semibold text-gray-800">View Profile</p>
-              <p className="text-sm text-gray-500">Check your account information</p>
+              <p className="font-semibold text-gray-800">Live Camera</p>
+              <p className="text-sm text-gray-500">View boat & fish feed</p>
             </div>
           </button>
 
-          <button className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left">
+          <button
+            onClick={() => navigate('/dashboard/water-quality-dashboard')}
+            className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left"
+          >
+            <div className="w-12 h-12 bg-teal-100 rounded-lg flex items-center justify-center">
+              <i className="fas fa-tint text-teal-600 text-xl"></i>
+            </div>
+            <div>
+              <p className="font-semibold text-gray-800">Water Quality</p>
+              <p className="text-sm text-gray-500">pH, turbidity, DO</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => navigate('/dashboard/ai-predictions')}
+            className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left"
+          >
             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-cog text-purple-600 text-xl"></i>
+              <i className="fas fa-brain text-purple-600 text-xl"></i>
             </div>
             <div>
-              <p className="font-semibold text-gray-800">Settings</p>
-              <p className="text-sm text-gray-500">Configure your preferences</p>
-            </div>
-          </button>
-
-          <button className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition text-left">
-            <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
-              <i className="fas fa-shield-alt text-orange-600 text-xl"></i>
-            </div>
-            <div>
-              <p className="font-semibold text-gray-800">Security</p>
-              <p className="text-sm text-gray-500">Manage security settings</p>
+              <p className="font-semibold text-gray-800">AI Predictions</p>
+              <p className="text-sm text-gray-500">Smart farm insights</p>
             </div>
           </button>
         </div>
@@ -113,7 +242,7 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           <i className="fas fa-server text-green-500"></i>
           System Status
         </h3>
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
             <div className="flex items-center gap-3">
               <i className="fas fa-check-circle text-green-600"></i>
@@ -124,16 +253,45 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
             <div className="flex items-center gap-3">
               <i className="fas fa-database text-green-600"></i>
-              <span className="font-medium text-gray-800">Database</span>
+              <span className="font-medium text-gray-800">Supabase DB</span>
+            </div>
+            <span className="text-sm text-green-600 font-semibold">Connected</span>
+          </div>
+          <div className={`flex items-center justify-between p-3 rounded-lg ${
+            device?.status === 'online' ? 'bg-green-50' : 'bg-yellow-50'
+          }`}>
+            <div className="flex items-center gap-3">
+              <i className={`fas fa-microchip ${device?.status === 'online' ? 'text-green-600' : 'text-yellow-600'}`}></i>
+              <span className="font-medium text-gray-800">ESP32 Device</span>
+            </div>
+            <span className={`text-sm font-semibold ${
+              device?.status === 'online' ? 'text-green-600' : 'text-yellow-600'
+            }`}>
+              {device?.status === 'online' ? 'Online' : 'Offline'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+            <div className="flex items-center gap-3">
+              <i className="fas fa-video text-green-600"></i>
+              <span className="font-medium text-gray-800">LiveKit Camera</span>
+            </div>
+            <span className="text-sm text-green-600 font-semibold">Ready</span>
+          </div>
+          <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+            <div className="flex items-center gap-3">
+              <i className="fas fa-broadcast-tower text-green-600"></i>
+              <span className="font-medium text-gray-800">MQTT Broker</span>
             </div>
             <span className="text-sm text-green-600 font-semibold">Connected</span>
           </div>
           <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
             <div className="flex items-center gap-3">
-              <i className="fas fa-shield-alt text-green-600"></i>
-              <span className="font-medium text-gray-800">Security</span>
+              <i className="fas fa-brain text-green-600"></i>
+              <span className="font-medium text-gray-800">AI Engine</span>
             </div>
-            <span className="text-sm text-green-600 font-semibold">Protected</span>
+            <span className="text-sm text-green-600 font-semibold">
+              {prediction?.source === 'flowise' ? 'Flowise' : 'Rule Engine'}
+            </span>
           </div>
         </div>
       </div>

@@ -416,6 +416,22 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUsername, onLogout, isOpen, on
         </div>
 
         <NavItem
+          icon={<i className="fas fa-brain"></i>}
+          label="AI Predictions"
+          path="/dashboard/ai-predictions"
+          active={location.pathname === '/dashboard/ai-predictions'}
+          onNavigate={onClose}
+        />
+
+        <NavItem
+          icon={<i className="fas fa-cloud-sun"></i>}
+          label="Weather Forecast"
+          path="/dashboard/weather"
+          active={location.pathname === '/dashboard/weather'}
+          onNavigate={onClose}
+        />
+
+        <NavItem
           icon={<i className="fas fa-user-edit"></i>}
           label="Update Credentials"
           path="/dashboard/credentials"
