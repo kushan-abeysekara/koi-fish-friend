@@ -30,7 +30,12 @@ const BoatNavigation: React.FC = () => {
   useEffect(() => {
     // MQTT: Always connect - runs in background
     // Self-hosted EMQX on VPS — never fall back to HiveMQ
-    const mqttUrl = import.meta.env.VITE_MQTT_WS_URL || 'ws://187.77.189.5:8083/mqtt';
+    // Auto-upgrade ws:// → wss:// when page is served over HTTPS (mixed content fix)
+    const isHttps = window.location.protocol === 'https:';
+    const rawMqttUrl = import.meta.env.VITE_MQTT_WS_URL || 'ws://187.77.189.5:8083/mqtt';
+    const mqttUrl = isHttps
+      ? rawMqttUrl.replace(/^ws:\/\//, 'wss://').replace(/:8083/, '')
+      : rawMqttUrl;
     const client = mqtt.connect(mqttUrl, {
       clientId: 'BoatControl_' + Math.random().toString(16).substr(2, 8),
       clean: true,
@@ -124,7 +129,12 @@ const BoatNavigation: React.FC = () => {
     }, 5000);
     
     // WebSocket: Try to connect to local ESP32 (Priority connection)
+    // Skip on HTTPS pages — direct ws:// to local ESP32 is blocked by browsers
     const connectWebSocket = () => {
+      if (isHttps) {
+        console.log('🔒 HTTPS page — skipping insecure ESP32 WebSocket, using MQTT only');
+        return;
+      }
       const wsUrl = 'ws://192.168.8.100:81';
       console.log('🔌 Attempting WebSocket:', wsUrl);
       

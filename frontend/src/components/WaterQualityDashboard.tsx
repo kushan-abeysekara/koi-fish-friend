@@ -10,7 +10,7 @@ import { Wifi, WifiOff } from 'lucide-react';
 //      (backend is connected to EMQX via TCP 1883 which always works)
 const MQTT_DIRECT_URL: string =
   (import.meta.env.VITE_MQTT_WS_URL as string) ||
-  'ws://mqtt.koifishfriend.online:8083/mqtt';
+  'wss://mqtt.koifishfriend.online/mqtt';
 const MQTT_USER     = 'admin';
 const MQTT_PASSWORD = 'admin1234';
 
