@@ -27,8 +27,8 @@
 #include <time.h>
 
 // WiFi Credentials
-const char* ssid = "Dulshan Dialog 4G 643";
-const char* password = "Chuki000";
+const char* ssid = "KoiFishFriend";
+const char* password = "FiberTarget255";
 
 // MQTT Configuration - Self-hosted EMQX on VPS
 const char* mqtt_server = "187.77.189.5";
