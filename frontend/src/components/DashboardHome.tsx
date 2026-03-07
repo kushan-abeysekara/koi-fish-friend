@@ -273,7 +273,7 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
             <div className="flex items-center gap-3">
               <i className="fas fa-video text-green-600"></i>
-              <span className="font-medium text-gray-800">LiveKit Camera</span>
+              <span className="font-medium text-gray-800">MediaMTX Camera</span>
             </div>
             <span className="text-sm text-green-600 font-semibold">Ready</span>
           </div>

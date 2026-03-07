@@ -379,7 +379,7 @@ const BoatNavigation: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Live Camera Feed - LiveKit WebRTC */}
+        {/* Live Camera Feed - MediaMTX HLS */}
         <div className="lg:col-span-2">
           <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
             <div className="bg-gray-700 px-4 py-3 flex items-center justify-between">
