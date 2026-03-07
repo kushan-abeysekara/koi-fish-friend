@@ -8,10 +8,10 @@ Write-Host ""
 
 # Check MQTT broker connectivity
 Write-Host "1. Testing MQTT Broker Connection..." -ForegroundColor Yellow
-$brokerTest = Test-NetConnection -ComputerName broker.hivemq.com -Port 1883 -WarningAction SilentlyContinue
+$brokerTest = Test-NetConnection -ComputerName 187.77.189.5 -Port 1883 -WarningAction SilentlyContinue
 
 if ($brokerTest.TcpTestSucceeded) {
-    Write-Host "   ✓ MQTT Broker (broker.hivemq.com:1883) is REACHABLE" -ForegroundColor Green
+    Write-Host "   ✓ MQTT Broker (EMQX @ 187.77.189.5:1883) is REACHABLE" -ForegroundColor Green
 } else {
     Write-Host "   ✗ MQTT Broker is NOT REACHABLE" -ForegroundColor Red
     Write-Host "   Check your internet connection" -ForegroundColor Red
@@ -52,7 +52,7 @@ if ($mosquittoPath) {
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
     
-    & mosquitto_sub -h broker.hivemq.com -t "koifish/boat/#" -v
+    & mosquitto_sub -h 187.77.189.5 -t "koifish/boat/#" -v
 } else {
     Write-Host "   ✗ mosquitto_sub not found" -ForegroundColor Red
     Write-Host ""
@@ -64,9 +64,9 @@ if ($mosquittoPath) {
     Write-Host "      http://mqtt-explorer.com/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "   3. Or use online MQTT client:" -ForegroundColor White
-    Write-Host "      http://www.hivemq.com/demos/websocket-client/" -ForegroundColor Cyan
-    Write-Host "      Host: broker.hivemq.com" -ForegroundColor Gray
-    Write-Host "      Port: 8000" -ForegroundColor Gray
+    Write-Host "      http://mqtt-explorer.com/ (or any MQTT client)" -ForegroundColor Cyan
+    Write-Host "      Host: 187.77.189.5" -ForegroundColor Gray
+    Write-Host "      Port: 1883 (TCP) or 8083 (WebSocket)" -ForegroundColor Gray
     Write-Host "      Subscribe to: koifish/boat/#" -ForegroundColor Gray
     Write-Host ""
 }

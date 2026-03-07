@@ -1,0 +1,20 @@
+[Unit]
+Description=Koi Fish MediaMTX Camera Streamer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=koi
+WorkingDirectory=/home/koi/mediamtx-camera
+Environment=RTMP_URL=rtmp://187.77.189.5:1935/live/camera
+Environment=PI_CAMERA_URL=http://192.168.8.101:5000
+Environment=STREAM_WIDTH=640
+Environment=STREAM_HEIGHT=360
+Environment=STREAM_FPS=15
+ExecStart=/home/koi/mediamtx-camera/venv/bin/python3 /home/koi/mediamtx-camera/mediamtx_streamer.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -20,7 +20,7 @@ echo.
 REM Try using mosquitto_sub if available
 where mosquitto_sub >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
-    mosquitto_sub -h broker.hivemq.com -t "koifish/boat/#" -v
+    mosquitto_sub -h 187.77.189.5 -t "koifish/boat/#" -v
 ) else (
     echo mosquitto_sub not found!
     echo.

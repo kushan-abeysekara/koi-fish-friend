@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video } from 'lucide-react';
 import mqtt from 'mqtt';
-import LiveKitCameraFeed from '../components/LiveKitCameraFeed';
+import MediaMTXCameraFeed from '../components/MediaMTXCameraFeed';
 
 const BoatNavigation: React.FC = () => {
   const [speed, setSpeed] = useState(150); // Default 150 for good motor response
@@ -29,7 +29,8 @@ const BoatNavigation: React.FC = () => {
 
   useEffect(() => {
     // MQTT: Always connect - runs in background
-    const mqttUrl = import.meta.env.VITE_MQTT_WS_URL || 'ws://broker.hivemq.com:8000/mqtt';
+    // Self-hosted EMQX on VPS — never fall back to HiveMQ
+    const mqttUrl = import.meta.env.VITE_MQTT_WS_URL || 'ws://187.77.189.5:8083/mqtt';
     const client = mqtt.connect(mqttUrl, {
       clientId: 'BoatControl_' + Math.random().toString(16).substr(2, 8),
       clean: true,
@@ -384,7 +385,7 @@ const BoatNavigation: React.FC = () => {
             <div className="bg-gray-700 px-4 py-3 flex items-center justify-between">
               <div>
                 <h2 className="text-white font-semibold">Live Camera Feed</h2>
-                <p className="text-gray-400 text-sm">Boat POV Camera via LiveKit WebRTC</p>
+                <p className="text-gray-400 text-sm">Boat POV Camera via MediaMTX HLS</p>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
@@ -392,8 +393,7 @@ const BoatNavigation: React.FC = () => {
               </div>
             </div>
             <div className="aspect-video">
-              <LiveKitCameraFeed 
-                room="boat-navigation" 
+              <MediaMTXCameraFeed 
                 className="w-full h-full"
                 showStatus={true}
               />
@@ -402,7 +402,7 @@ const BoatNavigation: React.FC = () => {
               <div className="flex items-center justify-center gap-4 text-gray-300">
                 <span className="flex items-center gap-2">
                   <Video size={14} className="text-cyan-400" />
-                  <span>WebRTC Stream (Works from VPS &amp; Local)</span>
+                  <span>HLS Stream (Works from Anywhere)</span>
                 </span>
                 <span>|</span>
                 <span>⌨️ Arrow Keys or WASD + Space to Stop</span>

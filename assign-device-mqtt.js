@@ -1,6 +1,6 @@
 const mqtt = require('mqtt');
 
-const broker = 'mqtt://broker.hivemq.com:1883';
+const broker = 'mqtt://187.77.189.5:1883'; // Self-hosted EMQX on VPS
 const topic = 'koi/sensors/WQ_000/command';
 const message = JSON.stringify({
   command: 'assign',

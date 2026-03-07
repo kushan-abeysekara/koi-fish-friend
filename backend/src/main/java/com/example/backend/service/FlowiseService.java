@@ -229,7 +229,7 @@ public class FlowiseService {
 
         // Tank empty estimate
         double avgPerDay = feedCount > 0 ? totalGramsFed / Math.max(feedCount, 1) * 3 : 450;
-        double daysRemaining = tankLevel / Math.max(avgPerDay, 1);
+        double daysRemaining = (tankLevel / tankCapacity) * tankLevel / Math.max(avgPerDay, 1);
         if (daysRemaining < 1) {
             result.put("tankEmptyEstimate", "Less than 1 day — REFILL NOW");
         } else if (daysRemaining < 3) {

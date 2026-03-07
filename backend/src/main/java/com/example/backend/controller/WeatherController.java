@@ -35,8 +35,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class WeatherController {
 
     private static final String OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast";
-    private static final double DEFAULT_LAT = 6.9271;
-    private static final double DEFAULT_LON = 79.8612;
+    private static final String DEFAULT_LAT = "6.9271";
+    private static final String DEFAULT_LON = "79.8612";
     private static final long CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -56,8 +56,8 @@ public class WeatherController {
      */
     @GetMapping("/current")
     public ResponseEntity<Map<String, Object>> getCurrentWeather(
-            @RequestParam(defaultValue = "6.9271") double latitude,
-            @RequestParam(defaultValue = "79.8612") double longitude) {
+            @RequestParam(defaultValue = DEFAULT_LAT) double latitude,
+            @RequestParam(defaultValue = DEFAULT_LON) double longitude) {
 
         String cacheKey = "current-" + latitude + "-" + longitude;
         CachedResponse cached = cache.get(cacheKey);
@@ -109,8 +109,8 @@ public class WeatherController {
      */
     @GetMapping("/forecast")
     public ResponseEntity<Map<String, Object>> getForecast(
-            @RequestParam(defaultValue = "6.9271") double latitude,
-            @RequestParam(defaultValue = "79.8612") double longitude) {
+            @RequestParam(defaultValue = DEFAULT_LAT) double latitude,
+            @RequestParam(defaultValue = DEFAULT_LON) double longitude) {
 
         String cacheKey = "forecast-" + latitude + "-" + longitude;
         CachedResponse cached = cache.get(cacheKey);
@@ -181,8 +181,8 @@ public class WeatherController {
      */
     @GetMapping("/summary")
     public ResponseEntity<Map<String, Object>> getWeatherSummary(
-            @RequestParam(defaultValue = "6.9271") double latitude,
-            @RequestParam(defaultValue = "79.8612") double longitude) {
+            @RequestParam(defaultValue = DEFAULT_LAT) double latitude,
+            @RequestParam(defaultValue = DEFAULT_LON) double longitude) {
 
         String cacheKey = "summary-" + latitude + "-" + longitude;
         CachedResponse cached = cache.get(cacheKey);

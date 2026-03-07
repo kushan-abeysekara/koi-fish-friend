@@ -23,8 +23,8 @@ if "%ERRORLEVEL%"=="0" (
 )
 echo.
 
-echo [3/5] Testing connection to MQTT broker...
-powershell -Command "try { $result = Test-NetConnection -ComputerName broker.hivemq.com -Port 1883 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($result) { Write-Host '    ✓ MQTT broker reachable (broker.hivemq.com:1883)' } else { Write-Host '    ✗ Cannot reach MQTT broker' } } catch { Write-Host '    ✗ Error testing MQTT broker connection' }"
+echo [3/5] Testing connection to MQTT broker (EMQX)...
+powershell -Command "try { $result = Test-NetConnection -ComputerName 187.77.189.5 -Port 1883 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($result) { Write-Host '    ✓ MQTT broker reachable (EMQX @ 187.77.189.5:1883)' } else { Write-Host '    ✗ Cannot reach MQTT broker' } } catch { Write-Host '    ✗ Error testing MQTT broker connection' }"
 echo.
 
 echo [4/5] Pinging ESP32 Water Quality Device...

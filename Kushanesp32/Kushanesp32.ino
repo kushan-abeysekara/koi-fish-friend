@@ -25,7 +25,7 @@
 // ==================== PIN DEFINITIONS ====================
 
 // Voltage Sensor
-#define VOLTAGE_SENSOR_PIN 34  // Analog pin for voltage sensor
+#define VOLTAGE_SENSOR_PIN 34  // Analog pin for voltage sensorrun live streem 
 
 // Relay Module
 #define RELAY_PIN 13           // G13 for relay control
