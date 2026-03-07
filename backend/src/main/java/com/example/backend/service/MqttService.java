@@ -86,11 +86,17 @@ public class MqttService {
                     detectFeedingEvent(deviceId, jsonNode);
                 } else if (deviceId.startsWith("BM_")) {
                     feedingWebSocketHandler.broadcast(payload);
+                } else if (deviceId.startsWith("WQ_")) {
+                    feedingWebSocketHandler.broadcast(payload);
                 }
             } else if (topic.contains("/data")) {
                 handleSensorData(deviceId, jsonNode);
                 // Energy/sensor data from BM_ devices broadcasted for EnergyMonitor
                 if (deviceId.startsWith("BM_")) {
+                    feedingWebSocketHandler.broadcast(payload);
+                }
+                // Water quality data from WQ_ devices broadcasted for WaterQualityDashboard
+                if (deviceId.startsWith("WQ_")) {
                     feedingWebSocketHandler.broadcast(payload);
                 }
             }

@@ -1,7 +1,28 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { sensorDataApi } from '../services/api';
-import type { Pond, SensorData } from '../services/api';
+import mqtt from 'mqtt';
+import type { SensorData } from '../services/api';
 import { Wifi, WifiOff } from 'lucide-react';
+
+// ===================== MQTT / BACKEND WS CONFIG =====================
+// Strategy:
+//   1. Try direct MQTT via mqtt.js  (requires port 8083 published in EMQX Docker compose)
+//   2. If that fails within 10s → fall back to backend WebSocket relay /ws/feeding
+//      (backend is connected to EMQX via TCP 1883 which always works)
+const MQTT_DIRECT_URL: string =
+  (import.meta.env.VITE_MQTT_WS_URL as string) ||
+  'ws://mqtt.koifishfriend.online:8083/mqtt';
+const MQTT_USER     = 'admin';
+const MQTT_PASSWORD = 'admin1234';
+
+// Backend WebSocket relay — derives from VITE_API_URL automatically
+const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
+const BACKEND_WS_URL: string = API_BASE
+  .replace('https://', 'wss://')
+  .replace('http://', 'ws://') + '/ws/feeding';
+
+// Subscribe to all water-quality sensor data & status topics
+const DATA_TOPIC   = 'koi/sensors/+/data';
+const STATUS_TOPIC = 'koi/sensors/+/status';
 
 interface WaterParameter {
   id: string;
@@ -15,7 +36,7 @@ interface WaterParameter {
   lastUpdated: Date;
 }
 
-interface WebSocketData {
+interface MqttSensorData {
   deviceId: string;
   pondId: number;
   phValue: number;
@@ -24,340 +45,198 @@ interface WebSocketData {
   ammonia: number;
   dissolvedOxygen?: number;
   waterQualityStatus: string;
-  timestamp: number;
-  rssi: number;
+  timestamp?: number;
+  rssi?: number;
 }
 
 const WaterQualityDashboard: React.FC = () => {
-  const [, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('disconnected');
-  const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
-  const [deviceIP] = useState('192.168.8.102');
+  const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
+  const [connectionMode, setConnectionMode] = useState<'mqtt' | 'relay' | 'none'>('none');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
-  const [selectedPond] = useState<number | null>(3);
-  const [ponds] = useState<Pond[]>([{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }]);
   const [latestData, setLatestData] = useState<SensorData | null>(null);
-  const [, setLoading] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const WEBSOCKET_URL = 'ws://192.168.8.102:81';
-  const selectedPondRef = useRef<number | null>(3);
-  const pondsRef = useRef<Pond[]>([{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }]);
-  
-  // Keep refs updated
-  useEffect(() => {
-    selectedPondRef.current = selectedPond;
-    pondsRef.current = ponds;
-  }, [selectedPond, ponds]);
+  const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
+  const backendWsRef  = useRef<WebSocket | null>(null);
+  const mqttTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectedRef  = useRef(false); // tracks live connection for timeout callback
 
-  // Function to save sensor data to database via REST API
-  const saveSensorDataToDatabase = async (data: WebSocketData) => {
-    try {
-      console.log('💾 Saving sensor data to database:', data);
-      const response = await sensorDataApi.saveFromWebSocket({
-        deviceId: data.deviceId,
-        pondId: data.pondId,
-        phValue: data.phValue,
-        turbidity: data.turbidity,
-        dissolvedOxygen: data.dissolvedOxygen ?? 0,
-        waterQualityStatus: data.waterQualityStatus
-      });
-      
-      if (response.success) {
-        console.log('✅ Data saved successfully to database');
-      } else {
-        console.error('❌ Failed to save data:', response.message);
-      }
-    } catch (error) {
-      console.error('❌ Error saving sensor data:', error);
+  // ===================== SHARED DATA HANDLER =====================
+  const handleSensorPayload = React.useCallback((raw: unknown) => {
+    const data = raw as MqttSensorData;
+    if (data.phValue === undefined || data.phValue === null) {
+      if (data.rssi !== undefined) setSignalStrength(data.rssi);
+      return;
     }
-  };
+    if (data.rssi !== undefined) setSignalStrength(data.rssi);
+    const sensorData: SensorData = {
+      id: Date.now(),
+      device: {
+        id: 0,
+        deviceId: data.deviceId,
+        deviceType: 'WATER_QUALITY',
+        pond: null,
+        status: 'online',
+        ipAddress: '',
+        rssi: data.rssi || 0,
+        energyWh: 0,
+        lastSeen: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      pond: null,
+      voltage: 0, current: 0, power: 0, energyWh: 0,
+      phValue: data.phValue,
+      turbidity: data.turbidity,
+      co2Level: data.co2Level,
+      ammonia: data.ammonia,
+      waterQualityStatus: data.waterQualityStatus,
+      status: 'active',
+      timestamp: new Date().toISOString(), // ESP32 sends millis() not Unix time, use current time
+    };
+    setLatestData(sensorData);
+    setLastSync(new Date());
+    // Supabase storage is handled by backend MqttService via the same MQTT message
+  }, []);
 
-  // WebSocket connection for real-time data (connect IMMEDIATELY - don't wait for backend)dddrrr
-  useEffect(() => {
-    let isSubscribed = true;
-    let connectionTimeout: NodeJS.Timeout | null = null;
-    let connectionAttempts = 0;
-    // Force update refs on mount
-    selectedPondRef.current = 3;
-    pondsRef.current = [{ id: 3, name: 'Pond 3', color: '#3B82F6', capacity: 1000, currentFishCount: 0 }];
-    
-    console.log('🚀 [WATER QUALITY] Starting WebSocket connection manager...');
-    console.log('   Target:', WEBSOCKET_URL);
-    console.log('   Page URL:', window.location.href);
-    console.log('   Protocol:', window.location.protocol);
-    console.log('   Timestamp:', new Date().toISOString());
-    
-    // 🚀 BOAT NAVIGATION PATTERN: 1-second delay before WebSocket init
-    const startConnection = setTimeout(() => {
-      console.log('✅ [WATER QUALITY] Starting WebSocket after 1-second delay (boat navigation pattern)');
-      connectWebSocket();
-    }, 1000); // 1000ms delay - SAME AS BOAT NAVIGATION (proven to work)
-    
-    const connectWebSocket = () => {
-      if (!isSubscribed) return;
-      
-      connectionAttempts++;
-      console.log(`🔌 [WATER QUALITY] Attempt #${connectionAttempts} connecting to:`, WEBSOCKET_URL);
-      setConnectionStatus('reconnecting');
-      setWsConnected(false);
-      
+  // ===================== BACKEND WS RELAY (fallback) =====================
+  const connectBackendRelay = React.useCallback(() => {
+    if (backendWsRef.current) {
+      backendWsRef.current.close();
+      backendWsRef.current = null;
+    }
+    console.log('🔌 [WATER QUALITY] Connecting to backend WS relay:', BACKEND_WS_URL);
+    setMqttStatus('connecting');
+
+    const ws = new WebSocket(BACKEND_WS_URL);
+    backendWsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('✅ [WATER QUALITY] Backend WS relay connected');
+      connectedRef.current = true;
+      setMqttConnected(true);
+      setMqttStatus('connected');
+      setConnectionMode('relay');
+    };
+
+    ws.onmessage = (event) => {
       try {
-        // Check if WebSocket is supported
-        if (typeof WebSocket === 'undefined') {
-          console.error('❌ WebSocket not supported in this browser!');
+        const raw = JSON.parse(event.data as string);
+        // Only handle WQ_ device messages
+        if (raw.deviceId && !String(raw.deviceId).startsWith('WQ_')) return;
+        handleSensorPayload(raw);
+      } catch { /* ignore parse errors */ }
+    };
+
+    ws.onclose = () => {
+      console.warn('🔌 [WATER QUALITY] Backend WS relay disconnected, retrying in 5s...');
+      connectedRef.current = false;
+      setMqttConnected(false);
+      setMqttStatus('disconnected');
+      setConnectionMode('none');
+      setTimeout(connectBackendRelay, 5000);
+    };
+
+    ws.onerror = (err) => {
+      console.error('❌ [WATER QUALITY] Backend WS relay error:', err);
+      setMqttStatus('error');
+    };
+  }, [handleSensorPayload]);
+
+  // ===================== MQTT DIRECT CONNECTION (primary) =====================
+  useEffect(() => {
+    // If page is HTTPS and MQTT URL is ws://, skip direct MQTT and go straight to relay
+    const isHttps = window.location.protocol === 'https:';
+    const isMqttInsecure = MQTT_DIRECT_URL.startsWith('ws://');
+    if (isHttps && isMqttInsecure) {
+      console.log('🔒 Page is HTTPS — skipping insecure ws:// MQTT, using backend relay');
+      connectBackendRelay();
+      return () => {
+        if (backendWsRef.current) backendWsRef.current.close();
+        clearTimeout(mqttTimeoutRef.current ?? undefined);
+      };
+    }
+
+    console.log('🌐 [WATER QUALITY] Trying direct MQTT:', MQTT_DIRECT_URL);
+    setMqttStatus('connecting');
+
+    const client = mqtt.connect(MQTT_DIRECT_URL, {
+      username: MQTT_USER,
+      password: MQTT_PASSWORD,
+      clientId: `wq-dashboard-${Math.random().toString(16).slice(2, 8)}`,
+      clean: true,
+      reconnectPeriod: 0,    // Disable auto-reconnect — we handle it manually with fallback
+      connectTimeout: 10000,
+      keepalive: 30,
+    });
+
+    mqttClientRef.current = client;
+
+    // If no CONNACK within 10 seconds → kill MQTT, fall back to backend relay
+    mqttTimeoutRef.current = setTimeout(() => {
+      if (!connectedRef.current) {
+        console.warn('⏱️ [WATER QUALITY] MQTT direct timeout — switching to backend WS relay');
+        client.end(true);
+        mqttClientRef.current = null;
+        connectBackendRelay();
+      }
+    }, 10000);
+
+    client.on('connect', () => {
+      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
+      console.log('✅ [WATER QUALITY] Direct MQTT connected');
+      connectedRef.current = true;
+      setMqttConnected(true);
+      setMqttStatus('connected');
+      setConnectionMode('mqtt');
+
+      client.subscribe([DATA_TOPIC, STATUS_TOPIC], { qos: 1 }, (err) => {
+        if (err) console.error('❌ MQTT subscribe error:', err);
+        else console.log('📡 Subscribed to:', DATA_TOPIC, STATUS_TOPIC);
+      });
+    });
+
+    client.on('message', (topic: string, payload: Buffer) => {
+      try {
+        const raw = JSON.parse(payload.toString());
+        if (topic.endsWith('/status')) {
+          if (raw.rssi !== undefined) setSignalStrength(raw.rssi);
           return;
         }
-        
-        console.log('   Creating WebSocket instance...');
-        const ws = new WebSocket(WEBSOCKET_URL);
-        console.log('   WebSocket created, readyState:', ws.readyState);
-        
-        // Set connection timeout (5 seconds - give it more time)
-        connectionTimeout = setTimeout(() => {
-          console.warn('⏱️ [WATER QUALITY] Connection timeout after 5s');
-          if (ws.readyState !== WebSocket.OPEN) {
-            console.log('   WebSocket readyState:', ws.readyState, '(0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
-            console.log('   Closing and retrying...');
-            ws.close();
-          }
-        }, 5000);
-        
-        ws.onopen = () => {
-          if (!isSubscribed) {
-            ws.close();
-            return;
-          }
-          
-          // Clear connection timeout
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
-          }
-          
-          console.log('✅✅✅ [WATER QUALITY] WebSocket CONNECTED successfully! ✅✅✅');
-          console.log('   readyState:', ws.readyState);
-          console.log('   Connection attempt:', connectionAttempts);
-          setWsConnected(true);
-          setConnectionStatus('connected');
-          wsRef.current = ws;
-          
-          // 🚀 BOAT NAVIGATION PATTERN: Send PING every 2 seconds to keep connection alive
-          const pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send('PING');
-              console.log('💓 [WATER QUALITY] Ping sent');
-            } else {
-              clearInterval(pingInterval);
-            }
-          }, 2000); // 2-second ping - SAME AS BOAT NAVIGATION
-        };
-        
-        ws.onmessage = (event) => {
-          try {
-            const data: WebSocketData = JSON.parse(event.data);
-            console.log('📊 Real-time water quality data:', data);
-            
-            // Update signal strength
-            if (data.rssi) {
-              setSignalStrength(data.rssi);
-            }
-            
-            // Convert WebSocket data to SensorData format — accept from the single WATER_QUALITY device
-            const sensorData: SensorData = {
-              id: Date.now(),
-              device: {
-                id: 0,
-                deviceId: data.deviceId,
-                deviceType: 'WATER_QUALITY',
-                pond: null,
-                status: 'online',
-                ipAddress: '',
-                rssi: data.rssi || 0,
-                energyWh: 0,
-                lastSeen: new Date().toISOString(),
-                createdAt: new Date().toISOString()
-              },
-              pond: null,
-              voltage: 0,
-              current: 0,
-              power: 0,
-              energyWh: 0,
-              phValue: data.phValue,
-              turbidity: data.turbidity,
-              co2Level: data.co2Level,
-              ammonia: data.ammonia,
-              waterQualityStatus: data.waterQualityStatus,
-              status: 'active',
-              timestamp: new Date(data.timestamp || Date.now()).toISOString()
-            };
-
-            setLatestData(sensorData);
-            setLastSync(new Date());
-            setMqttConnected(true); // Device is also using MQTT
-
-            // Save to database via REST API (bypass MQTT)
-            saveSensorDataToDatabase(data).catch(error => {
-              console.error('Failed to save sensor data:', error);
-            });
-          } catch (error) {
-            console.error('Error parsing WebSocket data:', error);
-          }
-        };
-        
-        ws.onerror = (error) => {
-          console.error('❌❌❌ [WATER QUALITY] WebSocket ERROR ❌❌❌');
-          console.error('   Error event:', error);
-          console.error('   WebSocket readyState:', ws.readyState);
-          console.error('   WebSocket URL:', WEBSOCKET_URL);
-          console.error('   Error type:', error.type);
-          console.error('   Connection attempt:', connectionAttempts);
-          console.error('   Browser:', navigator.userAgent);
-          console.error('   Page URL:', window.location.href);
-          
-          // Check for common issues
-          if (window.location.protocol === 'https:') {
-            console.error('');
-            console.error('🚨🚨🚨 FOUND THE PROBLEM! 🚨🚨🚨');
-            console.error('   Your page is HTTPS but WebSocket is WS://');
-            console.error('   Browser blocks insecure WebSocket from secure page!');
-            console.error('');
-            console.error('💡 SOLUTION: Use HTTP instead:');
-            console.error('   http://localhost:5173/dashboard/water-quality-dashboard');
-            console.error('');
-          }
-          
-          setWsConnected(false);
-        };
-        
-        ws.onclose = () => {
-          console.log('🔌 [WATER QUALITY] WebSocket disconnected/closed');
-          console.log('   Close event received');
-          console.log('   Will retry in 1 second...');
-          setWsConnected(false);
-          setConnectionStatus('reconnecting');
-          wsRef.current = null;
-          
-          // Clear connection timeout if exists
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
-          }
-          
-          // 🚀 BOAT NAVIGATION PATTERN: Reconnect after 10 seconds (stable, not aggressive)
-          if (isSubscribed) {
-            console.log('⏭️ [WATER QUALITY] Scheduling reconnect in 10 seconds');
-            reconnectTimeoutRef.current = setTimeout(connectWebSocket, 10000); // 10s - SAME AS BOAT
-          }
-        };
-        
-      } catch (error) {
-        console.error('[WATER QUALITY] Failed to create WebSocket:', error);
-        setWsConnected(false);
-        setConnectionStatus('disconnected');
-        
-        // Clear connection timeout if exists
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
-        }
-        
-        // Fast retry after 1 second
-        if (isSubscribed) {
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 1000);
-        }
+        handleSensorPayload(raw);
+      } catch (err) {
+        console.error('❌ Failed to parse MQTT message:', err);
       }
-    };
-    
-    // Connect IMMEDIATELY (no delay) - just like boat navigation
-    connectWebSocket();
-    
-    // Cleanup only on component unmount
+    });
+
+    client.on('reconnect', () => {
+      setMqttConnected(false);
+      setMqttStatus('connecting');
+    });
+
+    client.on('offline', () => {
+      console.warn('📴 [WATER QUALITY] MQTT offline');
+      connectedRef.current = false;
+      setMqttConnected(false);
+      setMqttStatus('disconnected');
+      setConnectionMode('none');
+      // Offline after being connected — fall back to relay
+      client.end(true);
+      mqttClientRef.current = null;
+      connectBackendRelay();
+    });
+
+    client.on('error', (err) => {
+      console.error('❌ [WATER QUALITY] MQTT error:', err.message);
+      setMqttStatus('error');
+    });
+
     return () => {
-      console.log('🧹 [WATER QUALITY] Cleaning up WebSocket connection...');
-      isSubscribed = false;
-      
-      // Clear startup delay
-      if (startConnection) {
-        clearTimeout(startConnection);
-      }
-      
-      if (connectionTimeout) {
-        clearTimeout(connectionTimeout);
-        connectionTimeout = null;
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
+      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
+      client.end(true);
+      mqttClientRef.current = null;
+      if (backendWsRef.current) backendWsRef.current.close();
     };
-  }, []); // Empty deps - connect once on mount
-
-  // Fetch sensor data for WATER_QUALITY device (backup/fallback to REST API)
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Only fetch if WebSocket is not connected (fallback mode)
-        if (!wsConnected) {
-          setLoading(true);
-          const response = await sensorDataApi.getLatestWaterQuality();
-        
-        console.log('🔍 Water Quality API Response:', {
-          success: response.success,
-          message: response.message,
-          hasData: !!response.data,
-          data: response.data
-        });
-        
-        if (response.success && response.data) {
-          console.log('✅ Received water quality data:', {
-            deviceId: response.data.device?.deviceId,
-            deviceType: response.data.device?.deviceType,
-            pH: response.data.phValue,
-            turbidity: response.data.turbidity,
-            dissolvedOxygen: response.data.dissolvedOxygen || 0,
-            timestamp: response.data.timestamp
-          });
-          
-          setLatestData(response.data);
-          setConnectionStatus('connected');
-          setLastSync(new Date());
-        } else {
-          console.warn('⚠️ No water quality data available:', response.message);
-          if (!wsConnected) {
-            setConnectionStatus('disconnected');
-          }
-        }
-        } else {
-          // WebSocket is connected, just mark as not loading
-          setLoading(false);
-        }
-      } catch (error) {
-        console.error('❌ Error fetching sensor data:', error);
-        // Clear data on error to prevent showing stale/wrong data
-        if (!wsConnected) {
-          setLatestData(null);
-          setConnectionStatus('disconnected');
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-    // Fallback polling every 5 seconds (only if WebSocket not connected)
-    const interval = setInterval(() => {
-      if (!wsConnected) {
-        fetchData();
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [wsConnected]);
+  }, [connectBackendRelay, handleSensorPayload]);
 
   // Check if we have real data
   const hasRealData = latestData && latestData.phValue !== undefined && latestData.phValue !== null;
@@ -438,52 +317,22 @@ const WaterQualityDashboard: React.FC = () => {
   };
 
   const getConnectionStatusBadge = () => {
-    // Show WebSocket + MQTT status
+    const statusConfig = {
+      connected:    { icon: <Wifi className="text-green-500 w-4 h-4" />,  label: connectionMode === 'relay' ? '🔗 Backend Relay' : '🌐 MQTT Direct', sub: connectionMode === 'relay' ? 'via backend /ws/feeding' : 'EMQX Self-Hosted', color: 'text-green-600' },
+      connecting:   { icon: <Wifi className="text-yellow-500 w-4 h-4 animate-pulse" />, label: '⏳ Connecting…', sub: 'trying MQTT → relay fallback', color: 'text-yellow-600' },
+      disconnected: { icon: <WifiOff className="text-gray-400 w-4 h-4" />, label: '📴 Disconnected', sub: 'Retrying…',                color: 'text-gray-500' },
+      error:        { icon: <WifiOff className="text-red-500 w-4 h-4" />,  label: '❌ Error',        sub: 'Check broker or backend', color: 'text-red-600' },
+    };
+    const cfg = statusConfig[mqttStatus];
     return (
       <div className="flex flex-col gap-2">
-        {/* WebSocket Status */}
         <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-          {wsConnected ? (
-            <>
-              <Wifi className="text-green-500 w-4 h-4" />
-              <div className="text-right">
-                <div className="text-green-600 font-semibold text-xs">⚡ Live</div>
-                <div className="text-xs text-gray-600">ESP32: {deviceIP}</div>
-              </div>
-            </>
-          ) : (
-            <>
-              <WifiOff className="text-orange-500 w-4 h-4 animate-pulse" />
-              <div className="text-right">
-                <div className="text-orange-600 font-semibold text-xs">⚡ Connecting</div>
-                <div className="text-xs text-orange-400">{deviceIP}:81</div>
-              </div>
-            </>
-          )}
+          {cfg.icon}
+          <div className="text-right">
+            <div className={`font-semibold text-xs ${cfg.color}`}>{cfg.label}</div>
+            <div className="text-xs text-gray-500">{cfg.sub}</div>
+          </div>
         </div>
-        
-        {/* MQTT Status */}
-        <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-          {mqttConnected ? (
-            <>
-              <Wifi className="text-blue-500 w-4 h-4" />
-              <div className="text-right">
-                <div className="text-blue-600 font-semibold text-xs">🌐 MQTT Active</div>
-                <div className="text-xs text-gray-600">EMQX (VPS)</div>
-              </div>
-            </>
-          ) : (
-            <>
-              <WifiOff className="text-gray-400 w-4 h-4" />
-              <div className="text-right">
-                <div className="text-gray-600 font-semibold text-xs">📡 MQTT Standby</div>
-                <div className="text-xs text-gray-500">Backend Required</div>
-              </div>
-            </>
-          )}
-        </div>
-        
-        {/* Signal Strength */}
         {signalStrength !== 0 && (
           <div className="text-right text-xs">
             <span className={`font-semibold ${
@@ -543,16 +392,18 @@ const WaterQualityDashboard: React.FC = () => {
         <div className="flex-1">
           <p className="text-sm text-blue-800">
             <span className="font-semibold">Last updated:</span> {formatTimestamp(lastSync)}
-            {wsConnected && <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-semibold">LIVE</span>}
+            {mqttConnected && <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-semibold">LIVE</span>}
           </p>
           <p className="text-xs text-blue-600 mt-1">
-            {wsConnected 
-              ? '⚡ Real-time WebSocket updates (instant)' 
-              : '🔄 Fallback mode - refreshing every 5 seconds'
+            {mqttConnected
+              ? connectionMode === 'mqtt'
+                ? '⚡ Direct MQTT — EMQX Self-Hosted (Supabase stored via backend)'
+                : '🔗 Backend relay — ESP32 → EMQX → Backend → Browser (Supabase stored)'
+              : '⏳ Waiting for connection… (trying MQTT direct, then backend relay)'
             }
           </p>
         </div>
-        {wsConnected && (
+        {mqttConnected && (
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-xs font-semibold text-green-700">STREAMING</span>

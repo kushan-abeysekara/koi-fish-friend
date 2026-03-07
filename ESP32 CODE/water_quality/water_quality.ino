@@ -1,6 +1,5 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <WebSocketsServer.h>
 #include <ArduinoJson.h>
 
 // ===================== WiFi & MQTT CONFIG =====================
@@ -32,10 +31,8 @@ String commandTopic = "";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-WebSocketsServer wsServer(81); // WebSocket on port 81 (same as boat)
 
 // Connection tracking
-int wsConnectedClients = 0;
 bool mqttConnected = false;
 String lastCommandSource = "none";
 unsigned long lastWiFiCheck = 0;
@@ -47,8 +44,6 @@ const unsigned long WIFI_CHECK_INTERVAL = 5000; // Check WiFi every 5 seconds
 // Forward declarations
 void publishStatus();
 void publishStatusWithPond();
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length);
-void broadcastDataToWebSocket();
 void processCommand(String message);
 
 // ===================== PIN MAPPING =====================
@@ -288,39 +283,40 @@ void publishSensorData()
     doc["ammonia"] = ammonia;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["status"] = "normal";
+    doc["rssi"] = WiFi.RSSI();
+    doc["timestamp"] = millis(); // ms since boot — frontend uses Date.now() as fallback
 
     String json;
     serializeJson(doc, json);
 
-    // Publish via MQTT (only if connected)
+    // Publish via MQTT
     if (mqttConnected && client.connected())
     {
         bool published = client.publish(dataTopic.c_str(), json.c_str());
-        if (!published)
+        if (ENABLE_SERIAL)
         {
-            Serial.println("❌ MQTT publish failed!");
+            if (published)
+            {
+                Serial.print("✓ MQTT data published: pH=");
+                Serial.print(phValue, 2);
+                Serial.print(" Turb=");
+                Serial.print(turbidity, 1);
+                Serial.print(" CO2=");
+                Serial.print(co2Level, 0);
+                Serial.print(" NH3=");
+                Serial.println(ammonia, 2);
+            }
+            else
+            {
+                Serial.println("❌ MQTT publish failed!");
+            }
         }
     }
-
-    // Also broadcast via WebSocket for real-time dashboard
-    broadcastDataToWebSocket();
-
-    Serial.println("=====================================");
-    Serial.println("✓ Data Published (MQTT + WebSocket):");
-    Serial.print("  MQTT: ");
-    Serial.print(mqttConnected ? "✅" : "❌");
-    Serial.print(" | WS Clients: ");
-    Serial.println(wsConnectedClients);
-    Serial.print("  pH: ");
-    Serial.print(phValue, 2);
-    Serial.print(" | Turbidity: ");
-    Serial.print(turbidity, 1);
-    Serial.print(" NTU | CO2: ");
-    Serial.print(co2Level, 0);
-    Serial.print(" PPM | NH3: ");
-    Serial.print(ammonia, 2);
-    Serial.println(" PPM");
-    Serial.println("=====================================");
+    else
+    {
+        if (ENABLE_SERIAL)
+            Serial.println("⚠️ MQTT not connected, data not published");
+    }
 }
 
 // ===============================================================
@@ -567,113 +563,8 @@ String evaluateWaterQuality(float ph, float turb, float co2, float nh3)
 }
 
 // ===============================================================
-//                    WEBSOCKET FUNCTIONS
+//                    COMMAND PROCESSOR (MQTT only)
 // ===============================================================
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
-{
-    switch (type)
-    {
-    case WStype_DISCONNECTED:
-        Serial.printf("[WS] Client #%u disconnected\n", num);
-        wsConnectedClients = max(0, wsConnectedClients - 1);
-        Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
-        break;
-
-    case WStype_PING:
-        // WebSocket ping received, respond with pong automatically
-        Serial.printf("[WS] Ping from #%u\n", num);
-        break;
-
-    case WStype_PONG:
-        // WebSocket pong received
-        Serial.printf("[WS] Pong from #%u\n", num);
-        break;
-
-    case WStype_CONNECTED:
-    {
-        IPAddress ip = wsServer.remoteIP(num);
-        Serial.printf("[WS] ⚡ Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-        wsConnectedClients++;
-        Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
-
-        // Send initial status immediately
-        String status = "{\"status\":\"connected\",\"deviceId\":\"" + deviceId +
-                        "\",\"ip\":\"" + WiFi.localIP().toString() +
-                        "\",\"pondId\":" + String(assignedPondId) + "}";
-        wsServer.sendTXT(num, status);
-
-        // Send current sensor data immediately so dashboard shows data instantly
-        StaticJsonDocument<400> doc;
-        doc["deviceId"] = deviceId;
-        doc["pondId"] = assignedPondId;
-        doc["phValue"] = phValue;
-        doc["turbidity"] = turbidity;
-        doc["co2Level"] = co2Level;
-        doc["ammonia"] = ammonia;
-        doc["waterQualityStatus"] = waterQualityStatus;
-        doc["timestamp"] = millis();
-        doc["rssi"] = WiFi.RSSI();
-
-        String json;
-        serializeJson(doc, json);
-        wsServer.sendTXT(num, json);
-
-        Serial.println("✅ Sent initial data to new client");
-        break;
-    }
-
-    case WStype_TEXT:
-    {
-        String message = String((char *)payload);
-        Serial.printf("[WS] Command from #%u: %s\n", num, message.c_str());
-
-        // Mark command source
-        lastCommandSource = "websocket";
-
-        // Process command
-        processCommand(message);
-
-        // Send acknowledgment
-        String ack = "{\"ack\":true,\"deviceId\":\"" + deviceId + "\"}";
-        wsServer.sendTXT(num, ack);
-        break;
-    }
-    }
-}
-
-void broadcastDataToWebSocket()
-{
-    // Always broadcast - even if no WebSocket clients (they might connect anytime)
-
-    // Check for valid data before broadcasting
-    if (isnan(phValue) || isnan(turbidity) || isnan(co2Level) || isnan(ammonia))
-    {
-        Serial.println("⚠️ Invalid sensor data, skipping WebSocket broadcast");
-        return;
-    }
-
-    StaticJsonDocument<400> doc;
-    doc["deviceId"] = deviceId;
-    doc["pondId"] = assignedPondId;
-    doc["phValue"] = phValue;
-    doc["turbidity"] = turbidity;
-    doc["co2Level"] = co2Level;
-    doc["ammonia"] = ammonia;
-    doc["waterQualityStatus"] = waterQualityStatus;
-    doc["timestamp"] = millis();
-    doc["rssi"] = WiFi.RSSI();
-
-    String json;
-    serializeJson(doc, json);
-
-    // Only broadcast if we have clients and JSON is valid
-    if (wsConnectedClients > 0 && json.length() > 0)
-    {
-        wsServer.broadcastTXT(json);
-    }
-}
-
-// Unified command processor for both MQTT and WebSocket
 void processCommand(String message)
 {
     StaticJsonDocument<200> doc;
@@ -711,30 +602,19 @@ void processCommand(String message)
 
         // Send status with pond info immediately for confirmation
         publishStatusWithPond();
-
-        // Also broadcast to WebSocket clients
-        if (wsConnectedClients > 0)
-        {
-            String response = "{\"status\":\"assigned\",\"pondId\":" + String(assignedPondId) + "}";
-            wsServer.broadcastTXT(response);
-        }
     }
     else if (strcmp(command, "unassign") == 0)
     {
         assignedPondId = 0;
-        Serial.print("✓ Unassigned from pond [");
-        Serial.print(lastCommandSource);
-        Serial.println("]");
+        if (ENABLE_SERIAL)
+        {
+            Serial.print("✓ Unassigned from pond [");
+            Serial.print(lastCommandSource);
+            Serial.println("]");
+        }
 
         // Send status with pondId=0 immediately for confirmation
         publishStatusWithPond();
-
-        // Also broadcast to WebSocket clients
-        if (wsConnectedClients > 0)
-        {
-            String response = "{\"status\":\"unassigned\",\"pondId\":0}";
-            wsServer.broadcastTXT(response);
-        }
     }
     else
     {
@@ -808,18 +688,13 @@ void setup()
     client.setBufferSize(512);
     client.setKeepAlive(15); // Send MQTT keepalive every 15 seconds
 
-    // Initialize WebSocket Server
-    wsServer.begin();
-    wsServer.onEvent(webSocketEvent);
-    Serial.println("✅ WebSocket server started on port 81");
-    Serial.print("   Connect at: ws://");
-    Serial.print(WiFi.localIP());
-    Serial.println(":81");
-
-    Serial.println("\n========================================");
-    Serial.println("✅ Setup complete! Hybrid Mode Active");
-    Serial.println("   MQTT + WebSocket for real-time data");
-    Serial.println("========================================");
+    if (ENABLE_SERIAL)
+    {
+        Serial.println("\n========================================");
+        Serial.println("✅ Setup complete! MQTT Mode Active");
+        Serial.println("   Publishing to EMQX broker via MQTT");
+        Serial.println("========================================");
+    }
 }
 
 // ===============================================================
@@ -828,9 +703,6 @@ void setup()
 void loop()
 {
     unsigned long now = millis();
-
-    // WebSocket server loop - handle local connections
-    wsServer.loop();
 
     // Maintain WiFi connection with periodic checks
     if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL)
@@ -875,9 +747,7 @@ void loop()
             // Connection Status Display
             Serial.print("📡 MQTT: ");
             Serial.print(mqttConnected ? "✅" : "❌");
-            Serial.print(" | ⚡ WS: ");
-            Serial.print(wsConnectedClients);
-            Serial.print(" clients | 📍 IP: ");
+            Serial.print(" | 📍 IP: ");
             Serial.print(WiFi.localIP());
             Serial.print(" | Signal: ");
             Serial.print(WiFi.RSSI());
@@ -914,5 +784,5 @@ void loop()
         publishStatus();
     }
 
-    delay(50); // Ultra-fast loop for instant WebSocket response
+    delay(50);
 }
