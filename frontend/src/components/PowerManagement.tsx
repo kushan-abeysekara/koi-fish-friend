@@ -62,7 +62,7 @@ export default function PowerManagement() {
   // ── WebSocket connection (same pattern as FeedingDashboard) ─
   useEffect(() => {
     let isMounted = true;
-    const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
     const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding'; // shared WS channel — filter by BM_ prefix
 
     const connect = () => {

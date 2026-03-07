@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 
 const DEVICE_ID = 'feed_device_001';
-const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
 const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding';
 
 interface DeviceLive {

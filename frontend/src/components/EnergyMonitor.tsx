@@ -40,7 +40,7 @@ export default function EnergyMonitor() {
   // ── WebSocket: real-time live readings from MQTT data messages ───────────
   useEffect(() => {
     let isMounted = true;
-    const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
     const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding'; // shared WS channel — filter by BM_ prefix
 
     const connect = () => {
@@ -107,7 +107,7 @@ export default function EnergyMonitor() {
     setError(null);
     // Fetch energy history via Spring Boot proxy (HTTPS safe — no Mixed Content)
     try {
-      const API_BASE = import.meta.env.VITE_API_URL || 'https://koifish-backend-tqteaf-bae886-187-77-189-5.traefik.me';
+      const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
       const res = await fetch(`${API_BASE}/api/energy/history?hours=${selectedHours}&limit=1500`);
       if (res.ok) {
         const json = await res.json();
