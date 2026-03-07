@@ -1,58 +1,143 @@
-The situation is clear. The Raspberry Pi side is fully working — both services are running and the bridge connects to the Flask camera server perfectly. The problem is 100% on the VPS side.
+You are building a full-stack smart fish farm monitoring system.
 
-Here's the summary:
+Tech stack:
+- Backend: Spring Boot (Java)
+- Frontend: React
+- Realtime Video: LiveKit (self-hosted)
+- Database: Supabase (PostgreSQL)
+- AI Predictions: Flowise (self-hosted LLM)
+- Devices: ESP32 (camera + sensors)
 
-✅ Pi Side — Everything Working
-Component	Status
-Flask Camera Server (port 5000)	✅ Running
-LiveKit Bridge (Socket.IO → LiveKit)	✅ Running, connects to Flask
-YOLOv8 Fish Detection + Health Models	✅ Loaded
-Auto-start on boot	✅ Both services enabled
-SSL/WSS signaling to VPS	✅ Connects successfully
-❌ VPS Side — Blocking Issue
-The error wait_pc_connection timed out means:
+========================================
+🌐 SERVER ENDPOINTS
+========================================
 
-WSS signaling (TCP 7880) works ✅ — the Pi reaches the LiveKit server
-WebRTC media (UDP 50000-60000) fails ❌ — no UDP ports are exposed on the VPS Docker container
-WebRTC requires UDP ports for actual video/audio media transport. Without them, signaling completes but no media connection can be established.
+LiveKit WebSocket URL:
+wss://livekit.koifishfriend.online
 
-🔧 What You Need to Fix on VPS (Dokploy)
-You need to do one of these on your VPS:
+LiveKit RTMP Ingest:
+rtmp://livekit.koifishfriend.online:1935/x
 
-Option 1: Fix LiveKit Docker Ports (Recommended)
-In your Dokploy dashboard or docker-compose.yml for LiveKit, add:
-services:
-  livekit:
-    ports:
-      - "7880:7880"          # Already working
-      - "7881:7881/tcp"      # Already working  
-      - "50000-60000:50000-60000/udp"   # ← ADD THIS (WebRTC media)
-    environment:
-      - LIVEKIT_CONFIG=...
+LiveKit WHIP Ingest:
+https://livekit.koifishfriend.online/w
 
-      And in your livekit.yaml config on VPS, make sure:
+Flowise AI API:
+http://187.77.189.5:3000/api/v1/prediction/YOUR_CHATFLOW_ID
 
-rtc:
-  node_ip: 187.77.189.5      # Your VPS public IP
-  port_range_start: 50000
-  port_range_end: 60000
-  use_external_ip: true
-turn:
-  enabled: true
-  udp_port: 3478
-  tls_port: 5349
+Weather API (Free):
+https://api.open-meteo.com/v1/forecast?latitude=6.9271&longitude=79.8612&hourly=temperature_2m,precipitation
 
-  Option 2: Use LiveKit Cloud (Quickest Fix)
-Go to cloud.livekit.io → Create free project
-Get the URL, API Key, and API Secret
-Update .env on Pi:
+========================================
+🔐 LIVEKIT AUTH
+========================================
 
+LIVEKIT_API_KEY = APIhfro22ogg9c3
+LIVEKIT_API_SECRET = 5ejwe0usuxnlknv5afgtsyfvsgmukb1pedprwwqaxilc
 
-export LIVEKIT_URL=wss://your-project.livekit.cloud
-export LIVEKIT_API_KEY=<cloud-key>
-export LIVEKIT_API_SECRET=<cloud-secret>
+========================================
+🗄️ SUPABASE DATABASE
+========================================
 
-Restart: sudo systemctl restart livekit-bridge.service
-LiveKit Cloud handles all NAT/TURN/UDP automatically — no port issues.
+NEXT_PUBLIC_SUPABASE_URL = http://superbase.koifishfriend.online
+NEXT_PUBLIC_SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
-The Pi will auto-connect the moment the VPS is fixed — the bridge is already retrying continuously. No changes needed on Pi side.
+Database Tables:
+
+feeddb:
+- id
+- weight (float)
+- device_id (text)
+- tank_level (float)
+- tank_capacity (float)
+- tank_percentage (float)
+- motor_status (text)
+- motor_runtime (int)
+- created_at (timestamp)
+
+feeding_history
+manual_feedings
+weight_history
+
+========================================
+🤖 SYSTEM FEATURES TO IMPLEMENT
+========================================
+
+1. SPRING BOOT BACKEND
+   - REST API to receive ESP32 sensor data
+   - Save data into Supabase PostgreSQL
+   - Endpoint to fetch latest tank data
+   - Endpoint to generate LiveKit access token
+   - Endpoint to request AI predictions from Flowise
+
+2. REACT FRONTEND
+   - Live video player using LiveKit WebRTC
+   - Dashboard showing:
+     • Tank level %
+     • Weight
+     • Motor status
+     • Motor runtime
+   - Charts for:
+     • Feeding history
+     • Weight history
+     • Tank level history
+   - AI Prediction panel
+   - Weather forecast widget
+
+3. LIVE VIDEO
+   - Connect to LiveKit using WebSocket URL
+   - Join room with server-generated token
+   - Display live stream
+
+4. AI PREDICTIONS (Flowise)
+   Send feeding + tank data and get:
+   - Next feeding time
+   - Feed amount required
+   - Tank empty estimate
+   - Abnormal behavior detection
+
+5. WEATHER FORECAST
+   Fetch from Open-Meteo API and show:
+   - Temperature
+   - Rain probability
+
+6. ESP32 DEVICE API FORMAT
+   JSON POST to backend:
+
+   {
+     "weight": 138,
+     "deviceId": "feed_device_001",
+     "tankLevel": 1500,
+     "tankCapacity": 20000,
+     "tankPercentage": 7.5,
+     "motorStatus": "RUNNING",
+     "motorRuntime": 300
+   }
+
+========================================
+🎯 WHAT TO GENERATE
+========================================
+
+Generate:
+
+• Spring Boot:
+  - Entity models
+  - JPA repositories
+  - Controllers
+  - Services
+  - LiveKit token generator
+  - Flowise API client
+
+• React:
+  - Live video component
+  - Dashboard UI
+  - Charts
+  - API hooks
+  - AI prediction panel
+  - Weather widget
+
+• Axios API service layer
+
+• Clean production-ready structure
+
+========================================
+Return complete working code.

@@ -1100,4 +1100,156 @@ export const powerScheduleApi = {
   },
 };
 
+// ==================== AI Predictions (Flowise) ====================
+export interface AIPrediction {
+  nextFeedingTime: string;
+  recommendedAmount: number;
+  tankEmptyEstimate: string;
+  abnormalBehavior: string;
+  healthScore: number;
+  recommendations: string[];
+  source: 'flowise' | 'rule-engine';
+  aiInsight?: string;
+  deviceId?: string;
+  timestamp?: string;
+}
+
+export const aiApi = {
+  /** Get prediction based on latest sensor data. */
+  getPrediction: async (deviceId: string = 'feed_device_001'): Promise<AIPrediction> => {
+    const response = await api.get<AIPrediction>('/ai/prediction', { params: { deviceId } });
+    return response.data;
+  },
+
+  /** Get prediction with custom data for what-if scenarios. */
+  getPredictionWithData: async (data: Record<string, unknown>): Promise<AIPrediction> => {
+    const response = await api.post<AIPrediction>('/ai/prediction', data);
+    return response.data;
+  },
+
+  /** Ask a free-form question to the AI. */
+  askQuestion: async (question: string): Promise<{ question: string; answer: string; timestamp: string }> => {
+    const response = await api.post<{ question: string; answer: string; timestamp: string }>('/ai/ask', { question });
+    return response.data;
+  },
+
+  /** Health check for AI service. */
+  health: async (): Promise<{ status: string }> => {
+    const response = await api.get<{ status: string }>('/ai/health');
+    return response.data;
+  },
+};
+
+// ==================== Weather Forecast (Open-Meteo via backend proxy) ====================
+export interface WeatherSummary {
+  temperature: number;
+  humidity: number;
+  precipitation: number;
+  rain: number;
+  weatherCode: number;
+  weatherDescription: string;
+  weatherIcon: string;
+  windSpeed: number;
+  rainProbabilityNext6h: number;
+  totalRainNext6h: number;
+  tempMin24h: number;
+  tempMax24h: number;
+  location: string;
+  timestamp: string;
+}
+
+export interface WeatherHourly {
+  time: string;
+  temperature: number;
+  humidity: number;
+  precipitationProbability: number;
+  precipitation: number;
+  rain: number;
+  weatherCode: number;
+  windSpeed: number;
+  weatherDescription: string;
+}
+
+export interface WeatherForecast {
+  hourly: WeatherHourly[];
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+}
+
+export const weatherApi = {
+  /** Get simplified weather summary for dashboard widget. */
+  getSummary: async (lat?: number, lon?: number): Promise<WeatherSummary> => {
+    const params: Record<string, number> = {};
+    if (lat) params.latitude = lat;
+    if (lon) params.longitude = lon;
+    const response = await api.get<WeatherSummary>('/weather/summary', { params });
+    return response.data;
+  },
+
+  /** Get current weather conditions. */
+  getCurrent: async (lat?: number, lon?: number): Promise<Record<string, unknown>> => {
+    const params: Record<string, number> = {};
+    if (lat) params.latitude = lat;
+    if (lon) params.longitude = lon;
+    const response = await api.get<Record<string, unknown>>('/weather/current', { params });
+    return response.data;
+  },
+
+  /** Get hourly forecast for next 72 hours. */
+  getForecast: async (lat?: number, lon?: number): Promise<WeatherForecast> => {
+    const params: Record<string, number> = {};
+    if (lat) params.latitude = lat;
+    if (lon) params.longitude = lon;
+    const response = await api.get<WeatherForecast>('/weather/forecast', { params });
+    return response.data;
+  },
+};
+
+// ==================== ESP32 Device Data ====================
+export interface DeviceStatus {
+  device_id: string;
+  status: string;
+  weight: number;
+  tank_level: number;
+  tank_capacity: number;
+  tank_percentage: number;
+  motor_status: string;
+  motor_rpm: number;
+  feed_count: number;
+  total_grams_fed: number;
+  rssi: number;
+  ip_address: string;
+  updated_at: string;
+  lastSeenSecondsAgo: number;
+}
+
+export const deviceApi = {
+  /** Send sensor data from ESP32 (or test from frontend). */
+  sendData: async (data: {
+    weight: number;
+    deviceId: string;
+    tankLevel: number;
+    tankCapacity: number;
+    tankPercentage: number;
+    motorStatus: string;
+    motorRuntime: number;
+  }): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post<{ success: boolean; message: string }>('/device/data', data);
+    return response.data;
+  },
+
+  /** Get latest device status. */
+  getStatus: async (deviceId: string = 'feed_device_001'): Promise<DeviceStatus> => {
+    const response = await api.get<DeviceStatus>('/device/status', { params: { deviceId } });
+    return response.data;
+  },
+
+  /** Get device history for charts. */
+  getHistory: async (deviceId: string = 'feed_device_001', hours: number = 24, limit: number = 500): Promise<Record<string, unknown>[]> => {
+    const response = await api.get<Record<string, unknown>[]>('/device/history', { params: { deviceId, hours, limit } });
+    return response.data;
+  },
+};
+
 export default api;

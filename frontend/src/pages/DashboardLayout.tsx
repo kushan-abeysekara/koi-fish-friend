@@ -27,6 +27,8 @@ import BudgetForecasting from '../components/BudgetForecasting';
 import PowerManagement from '../components/PowerManagement';
 import SystemStatus from '../components/SystemStatus';
 import PondProfitLoss from '../components/PondProfitLoss';
+import AIPredictionPanel from '../components/AIPredictionPanel';
+import WeatherWidget from '../components/WeatherWidget';
 
 /* ── Error Boundary to prevent a single page crash from blanking everything ── */
 class RouteErrorBoundary extends React.Component<
@@ -107,6 +109,8 @@ const Dashboard: React.FC = () => {
     '/dashboard/profile': { title: 'Profile', subtitle: 'Your account profile' },
     '/dashboard/settings': { title: 'Settings', subtitle: 'System configuration' },
     '/dashboard/system-status': { title: 'System Status', subtitle: 'Device & service health' },
+    '/dashboard/ai-predictions': { title: 'AI Predictions', subtitle: 'Smart farm insights & recommendations' },
+    '/dashboard/weather': { title: 'Weather Forecast', subtitle: 'Weather conditions & fish farming impact' },
   }), [currentUsername]);
 
   const currentPage = pageTitles[location.pathname] ?? { title: 'Dashboard', subtitle: `Welcome back, ${currentUsername}!` };
@@ -224,6 +228,8 @@ const Dashboard: React.FC = () => {
             <Route path="/profile" element={<div className="bg-white rounded-xl shadow-sm p-8 border border-gray-100"><h2 className="text-2xl font-bold text-gray-800">Profile - Coming Soon</h2></div>} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/system-status" element={<SystemStatus />} />
+            <Route path="/ai-predictions" element={<AIPredictionPanel />} />
+            <Route path="/weather" element={<WeatherWidget />} />
           </Routes>
           </RouteErrorBoundary>
         </div>
