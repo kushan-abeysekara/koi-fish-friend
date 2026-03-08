@@ -167,7 +167,7 @@ const BoatNavigation: React.FC = () => {
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { supabase?.removeChannel(channel); };
   }, [updateSensor]);
 
   // ─── Connection status derived ───
