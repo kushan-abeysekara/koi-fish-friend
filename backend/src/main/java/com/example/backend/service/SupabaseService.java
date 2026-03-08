@@ -124,6 +124,9 @@ public class SupabaseService {
                         "  ph_value             FLOAT   DEFAULT 0," +
                         "  turbidity            FLOAT   DEFAULT 0," +
                         "  water_quality_status TEXT    DEFAULT 'normal'," +
+                        "  rain_level           FLOAT   DEFAULT 0," +
+                        "  rain_detected        BOOLEAN DEFAULT FALSE," +
+                        "  rain_status          TEXT    DEFAULT 'dry'," +
                         "  status               TEXT    DEFAULT 'normal'," +
                         "  rssi                 INT     DEFAULT 0," +
                         "  updated_at           TIMESTAMPTZ DEFAULT NOW()" +
@@ -136,6 +139,9 @@ public class SupabaseService {
                         "  ph_value             FLOAT," +
                         "  turbidity            FLOAT," +
                         "  water_quality_status TEXT    DEFAULT 'normal'," +
+                        "  rain_level           FLOAT   DEFAULT 0," +
+                        "  rain_detected        BOOLEAN DEFAULT FALSE," +
+                        "  rain_status          TEXT    DEFAULT 'dry'," +
                         "  status               TEXT    DEFAULT 'normal'," +
                         "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
                         ")",
@@ -163,7 +169,15 @@ public class SupabaseService {
                         "  connected       BOOLEAN DEFAULT TRUE," +
                         "  updated_at      TIMESTAMPTZ DEFAULT NOW()" +
                         ")",
-                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS boat_telemetry"
+                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS boat_telemetry",
+
+                // Migration: Add rain sensor columns to existing sensor_live and sensor_history tables
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_level FLOAT DEFAULT 0",
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_detected BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_level FLOAT DEFAULT 0",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_detected BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'"
         };
 
         for (String sql : ddls) {
@@ -631,19 +645,25 @@ public class SupabaseService {
                 String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
                 int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
+                double rainLevel = getDoubleOrDefault(mqttPayload, "rainLevel", 0);
+                boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
+                String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
 
-                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, status, rssi, updated_at) "
+                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, rain_level, rain_detected, rain_status, status, rssi, updated_at) "
                         +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
-                        esc(wqStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
+                        esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
+                        esc(rainStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
                         "ON CONFLICT (device_id) DO UPDATE SET " +
                         "ph_value = EXCLUDED.ph_value, turbidity = EXCLUDED.turbidity, " +
                         "water_quality_status = EXCLUDED.water_quality_status, " +
+                        "rain_level = EXCLUDED.rain_level, rain_detected = EXCLUDED.rain_detected, " +
+                        "rain_status = EXCLUDED.rain_status, " +
                         "status = EXCLUDED.status, rssi = EXCLUDED.rssi, updated_at = NOW()";
 
                 executePgQuery(sql);
                 System.out.println("[Supabase] 🌊 sensor_live upserted: " + deviceId +
-                        " pH:" + phValue + " Turb:" + turbidity);
+                        " pH:" + phValue + " Turb:" + turbidity + " Rain:" + rainLevel + "% (" + rainStatus + ")");
             } catch (Exception e) {
                 System.err.println("[Supabase] ❌ Error upserting sensor_live: " + e.getMessage());
             }
@@ -671,11 +691,15 @@ public class SupabaseService {
                 double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
                 String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
+                double rainLevel = getDoubleOrDefault(mqttPayload, "rainLevel", 0);
+                boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
+                String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
 
-                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, status, recorded_at) "
+                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, rain_level, rain_detected, rain_status, status, recorded_at) "
                         +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
-                        esc(wqStatus) + "', '" + esc(status) + "', NOW())";
+                        esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
+                        esc(rainStatus) + "', '" + esc(status) + "', NOW())";
 
                 executePgQuery(sql);
                 System.out.println("[Supabase] 🌊 sensor_history saved (1/min): " + deviceId);

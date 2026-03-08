@@ -30,6 +30,11 @@ public class SensorData {
     private Double co2Level;  // CO2 in PPM from MQ135
     private String waterQualityStatus; // normal, warning, critical
     
+    // Rain sensor parameters
+    private Double rainLevel;     // Rain intensity 0-100%
+    private Boolean rainDetected; // Digital rain detection flag
+    private String rainStatus;    // dry, light, moderate, heavy
+    
     private String status; // normal, warning, critical
 
     @Column(name = "timestamp")
@@ -147,6 +152,30 @@ public class SensorData {
 
     public void setWaterQualityStatus(String waterQualityStatus) {
         this.waterQualityStatus = waterQualityStatus;
+    }
+
+    public Double getRainLevel() {
+        return rainLevel;
+    }
+
+    public void setRainLevel(Double rainLevel) {
+        this.rainLevel = rainLevel;
+    }
+
+    public Boolean getRainDetected() {
+        return rainDetected;
+    }
+
+    public void setRainDetected(Boolean rainDetected) {
+        this.rainDetected = rainDetected;
+    }
+
+    public String getRainStatus() {
+        return rainStatus;
+    }
+
+    public void setRainStatus(String rainStatus) {
+        this.rainStatus = rainStatus;
     }
 
     public LocalDateTime getTimestamp() {

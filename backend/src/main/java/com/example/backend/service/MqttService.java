@@ -363,12 +363,19 @@ public class MqttService {
                 data.setTurbidity(json.get("turbidity").asDouble());
             if (json.has("waterQualityStatus"))
                 data.setWaterQualityStatus(json.get("waterQualityStatus").asText());
+            if (json.has("rainLevel"))
+                data.setRainLevel(json.get("rainLevel").asDouble());
+            if (json.has("rainDetected"))
+                data.setRainDetected(json.get("rainDetected").asBoolean());
+            if (json.has("rainStatus"))
+                data.setRainStatus(json.get("rainStatus").asText());
 
             // Water quality: skip MySQL, save only to Supabase
             supabaseService.storeSensorLive(deviceId, json);
             supabaseService.storeSensorHistory(deviceId, json);
             System.out.println("🌊 Water quality → Supabase: " + deviceId +
-                    " pH:" + data.getPhValue() + " Turb:" + data.getTurbidity());
+                    " pH:" + data.getPhValue() + " Turb:" + data.getTurbidity() +
+                    " Rain:" + data.getRainLevel() + "% (" + data.getRainStatus() + ")");
         } else if (device.getDeviceType() == SensorDevice.DeviceType.FEEDING_MANAGEMENT) {
             // Store feeding device status
             device.setStatus("online");

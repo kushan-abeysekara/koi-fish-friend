@@ -650,6 +650,10 @@ export interface SensorData {
   airQuality?: number;
   waterQualityStatus?: string;
   dissolvedOxygen?: number;
+  // Rain sensor parameters
+  rainLevel?: number;      // Rain intensity 0-100%
+  rainDetected?: boolean;  // Digital rain detection flag
+  rainStatus?: string;     // dry, light, moderate, heavy
   status: string;
   timestamp: string;
 }

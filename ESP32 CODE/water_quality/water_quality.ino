@@ -50,6 +50,8 @@ void processCommand(String message);
 #define PH_PIN 32        // pH sensor analog input (GPIO 32 / ADC1_CH4)
 #define MQ135_PIN 33     // MQ135 gas sensor for CO2 and NH3 (GPIO 33 / ADC1_CH5)
 #define TURBIDITY_PIN 34 // Turbidity sensor analog input (GPIO 34 / ADC1_CH6)
+#define RAIN_ANALOG_PIN 35  // Rain sensor analog input (GPIO 35 / ADC1_CH7)
+#define RAIN_DIGITAL_PIN 26 // Rain sensor digital output (GPIO 26) - HIGH = no rain, LOW = rain detected
 
 // ===================== CALIBRATION =====================
 const float ADC_MAX = 4095.0;
@@ -68,6 +70,9 @@ float phValue = 7.0;
 float turbidity = 0.0;
 float co2Level = 0.0; // CO2 in PPM (parts per million) from MQ135
 float ammonia = 0.0;  // NH3 in PPM (parts per million) from MQ135
+float rainLevel = 0.0;    // Rain intensity 0-100% (0 = dry, 100 = heavy rain)
+bool rainDetected = false; // Digital rain detection flag
+String rainStatus = "dry"; // dry, light, moderate, heavy
 String waterQualityStatus = "normal";
 
 unsigned long lastMqttPublish = 0;
@@ -274,13 +279,16 @@ void publishSensorData()
             Serial.println("ℹ️  Auto-assigned to Pond 3 (standalone mode)");
     }
 
-    StaticJsonDocument<400> doc;
+    StaticJsonDocument<512> doc;
     doc["deviceId"] = deviceId;
     doc["pondId"] = assignedPondId;
     doc["phValue"] = phValue;
     doc["turbidity"] = turbidity;
     doc["co2Level"] = co2Level;
     doc["ammonia"] = ammonia;
+    doc["rainLevel"] = rainLevel;
+    doc["rainDetected"] = rainDetected;
+    doc["rainStatus"] = rainStatus;
     doc["waterQualityStatus"] = waterQualityStatus;
     doc["status"] = "normal";
     doc["rssi"] = WiFi.RSSI();
@@ -550,6 +558,54 @@ float readAmmonia(int pin, int samples = 50)
     return ppm;
 }
 
+// ===============================================================
+//              RAIN SENSOR READ FUNCTION
+// ===============================================================
+float readRainLevel(int pin, int samples)
+{
+    unsigned long sum = 0;
+
+    for (int i = 0; i < samples; i++)
+    {
+        int reading = analogRead(pin);
+        sum += reading;
+        delay(5);
+    }
+
+    float avgReading = sum / (float)samples;
+
+    // Rain sensor: dry = high ADC value (~4095), wet = low ADC value (~0)
+    // Convert to rain intensity percentage: 0% = dry, 100% = heavy rain
+    float rainPercent = ((ADC_MAX - avgReading) / ADC_MAX) * 100.0;
+
+    // Clamp to valid range
+    if (rainPercent < 0) rainPercent = 0;
+    if (rainPercent > 100) rainPercent = 100;
+
+    // Debug output every 10 seconds
+    static unsigned long lastRainDebug = 0;
+    if (millis() - lastRainDebug > 10000)
+    {
+        lastRainDebug = millis();
+        Serial.print("🌧️ Rain Debug - Raw ADC: ");
+        Serial.print(avgReading, 0);
+        Serial.print(" | Rain Level: ");
+        Serial.print(rainPercent, 1);
+        Serial.println("%");
+    }
+
+    return rainPercent;
+}
+
+String evaluateRainStatus(float level, bool detected)
+{
+    // Evaluate rain intensity based on analog level + digital detection
+    if (!detected && level < 5.0) return "dry";
+    else if (level < 25.0) return "light";
+    else if (level < 60.0) return "moderate";
+    else return "heavy";
+}
+
 String evaluateWaterQuality(float ph, float turb, float co2, float nh3)
 {
     // Ideal koi pond: pH 7.0-8.5, turbidity < 25 NTU, CO2 < 1000 PPM, NH3 < 0.05 PPM
@@ -652,6 +708,8 @@ void setup()
     pinMode(PH_PIN, INPUT);
     pinMode(MQ135_PIN, INPUT);
     pinMode(TURBIDITY_PIN, INPUT);
+    pinMode(RAIN_ANALOG_PIN, INPUT);
+    pinMode(RAIN_DIGITAL_PIN, INPUT_PULLUP); // Rain digital pin with pull-up (LOW = rain detected)
 
     // Generate device ID with WQ prefix (Water Quality)
     uint8_t mac[6];
@@ -734,6 +792,9 @@ void loop()
     turbidity = readTurbidity(TURBIDITY_PIN, 30);
     co2Level = readCO2(MQ135_PIN, 30);
     ammonia = readAmmonia(MQ135_PIN, 30); // Fast ammonia reading for real-time response
+    rainLevel = readRainLevel(RAIN_ANALOG_PIN, 20);
+    rainDetected = (digitalRead(RAIN_DIGITAL_PIN) == LOW); // LOW = rain detected
+    rainStatus = evaluateRainStatus(rainLevel, rainDetected);
     waterQualityStatus = evaluateWaterQuality(phValue, turbidity, co2Level, ammonia);
 
     // Print to Serial Monitor with connection status (only if enabled)
@@ -764,7 +825,11 @@ void loop()
             Serial.print(co2Level, 0);
             Serial.print(" PPM | NH3: ");
             Serial.print(ammonia, 2);
-            Serial.print(" PPM | Status: ");
+            Serial.print(" PPM | Rain: ");
+            Serial.print(rainLevel, 1);
+            Serial.print("% (");
+            Serial.print(rainStatus);
+            Serial.print(") | Status: ");
             Serial.println(waterQualityStatus);
             Serial.println();
         }

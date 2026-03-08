@@ -45,6 +45,9 @@ interface MqttSensorData {
   co2Level: number;
   ammonia: number;
   dissolvedOxygen?: number;
+  rainLevel?: number;
+  rainDetected?: boolean;
+  rainStatus?: string;
   waterQualityStatus: string;
   timestamp?: number;
   rssi?: number;
@@ -91,6 +94,9 @@ const WaterQualityDashboard: React.FC = () => {
       turbidity: data.turbidity,
       co2Level: data.co2Level,
       ammonia: data.ammonia,
+      rainLevel: data.rainLevel,
+      rainDetected: data.rainDetected,
+      rainStatus: data.rainStatus,
       waterQualityStatus: data.waterQualityStatus,
       status: 'active',
       timestamp: new Date().toISOString(), // ESP32 sends millis() not Unix time, use current time
@@ -302,6 +308,17 @@ const WaterQualityDashboard: React.FC = () => {
         warningRange: { min: 0, max: 1.0 },
         lastUpdated: timestamp,
       },
+      {
+        id: 'rain',
+        name: 'Rain Level',
+        value: Number((latestData.rainLevel || 0).toFixed(1)),
+        unit: '%',
+        status: (latestData.rainLevel || 0) < 10 ? 'normal' : (latestData.rainLevel || 0) < 40 ? 'warning' : 'danger',
+        icon: '🌧️',
+        safeRange: { min: 0, max: 10 },
+        warningRange: { min: 0, max: 60 },
+        lastUpdated: timestamp,
+      },
     ];
   }, [latestData, hasRealData]);
 
@@ -413,6 +430,64 @@ const WaterQualityDashboard: React.FC = () => {
         )}
       </div>
 
+      {/* Rain Status Banner */}
+      {hasRealData && (
+        <div className={`rounded-xl p-4 flex items-center gap-4 border ${
+          (latestData?.rainLevel || 0) < 10
+            ? 'bg-green-50 border-green-200'
+            : (latestData?.rainLevel || 0) < 40
+              ? 'bg-yellow-50 border-yellow-300'
+              : 'bg-red-50 border-red-300'
+        }`}>
+          <div className="text-4xl">
+            {(latestData?.rainLevel || 0) < 10 ? '☀️' : (latestData?.rainLevel || 0) < 40 ? '🌦️' : '🌧️'}
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h4 className={`font-bold text-lg ${
+                (latestData?.rainLevel || 0) < 10 ? 'text-green-800' : (latestData?.rainLevel || 0) < 40 ? 'text-yellow-800' : 'text-red-800'
+              }`}>
+                Rain: {latestData?.rainStatus ? latestData.rainStatus.charAt(0).toUpperCase() + latestData.rainStatus.slice(1) : 'Dry'}
+              </h4>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                (latestData?.rainLevel || 0) < 10
+                  ? 'bg-green-200 text-green-700'
+                  : (latestData?.rainLevel || 0) < 40
+                    ? 'bg-yellow-200 text-yellow-700'
+                    : 'bg-red-200 text-red-700'
+              }`}>
+                {(latestData?.rainLevel || 0).toFixed(1)}%
+              </span>
+              {latestData?.rainDetected && (
+                <span className="px-2 py-0.5 bg-blue-200 text-blue-700 rounded-full text-xs font-semibold animate-pulse">
+                  🌧 RAIN DETECTED
+                </span>
+              )}
+            </div>
+            <p className="text-sm mt-1 text-gray-600">
+              {(latestData?.rainLevel || 0) < 10
+                ? 'No rain detected — ideal conditions for the pond.'
+                : (latestData?.rainLevel || 0) < 25
+                  ? 'Light rain — monitor water quality for changes.'
+                  : (latestData?.rainLevel || 0) < 60
+                    ? 'Moderate rain — check pH and turbidity levels closely.'
+                    : 'Heavy rain — high risk of water quality changes. Consider protective measures.'}
+            </p>
+          </div>
+          <div className="text-right hidden md:block">
+            <p className="text-xs text-gray-500">Intensity</p>
+            <div className="w-32 h-3 bg-gray-200 rounded-full overflow-hidden mt-1">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  (latestData?.rainLevel || 0) < 10 ? 'bg-green-500' : (latestData?.rainLevel || 0) < 40 ? 'bg-yellow-500' : 'bg-red-500'
+                }`}
+                style={{ width: `${Math.min(latestData?.rainLevel || 0, 100)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Water Quality Parameter Cards */}
       {!hasRealData ? (
         <div className="bg-white rounded-xl shadow-sm p-12 border-2 border-dashed border-gray-300 text-center">
@@ -444,7 +519,7 @@ const WaterQualityDashboard: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
           {parameters.map((param) => (
           <div
             key={param.id}

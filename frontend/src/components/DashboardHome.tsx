@@ -1,7 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import mqtt from 'mqtt';
 import { aiApi, weatherApi, type AIPrediction, type WeatherSummary } from '../services/api';
 import { fetchDeviceStatusDirect, type FeeddbRow } from '../services/supabase';
+
+// MQTT config for real-time water quality (rain) data
+const MQTT_DIRECT_URL: string =
+  (import.meta.env.VITE_MQTT_WS_URL as string) ||
+  'wss://mqtt.koifishfriend.online/mqtt';
+const MQTT_USER     = 'admin';
+const MQTT_PASSWORD = 'admin1234';
+const WQ_DATA_TOPIC = 'koi/sensors/+/data';
+
+interface WaterQualityLive {
+  rainLevel: number;
+  rainDetected: boolean;
+  rainStatus: string;
+  phValue: number;
+  turbidity: number;
+  waterQualityStatus: string;
+}
 
 interface DashboardHomeProps {
   username: string;
@@ -14,6 +32,9 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
   const [device, setDevice] = useState<FeeddbRow | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(true);
   const [loadingAI, setLoadingAI] = useState(true);
+  const [waterQuality, setWaterQuality] = useState<WaterQualityLive | null>(null);
+  const mqttRef = useRef<mqtt.MqttClient | null>(null);
+  const backendWsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     // Fetch all dashboard data in parallel
@@ -30,6 +51,75 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
     fetchDeviceStatusDirect()
       .then(setDevice)
       .catch(() => {});
+  }, []);
+
+  // Real-time MQTT connection for water quality / rain data
+  useEffect(() => {
+    const handleWqPayload = (raw: Record<string, unknown>) => {
+      // Only accept WQ_ device messages
+      if (!raw.deviceId || !String(raw.deviceId).startsWith('WQ_')) return;
+      if (raw.phValue === undefined) return;
+      setWaterQuality({
+        rainLevel: (raw.rainLevel as number) ?? 0,
+        rainDetected: (raw.rainDetected as boolean) ?? false,
+        rainStatus: (raw.rainStatus as string) ?? 'dry',
+        phValue: (raw.phValue as number) ?? 7,
+        turbidity: (raw.turbidity as number) ?? 0,
+        waterQualityStatus: (raw.waterQualityStatus as string) ?? 'normal',
+      });
+    };
+
+    // Try direct MQTT first, fall back to backend WebSocket relay
+    const isHttps = window.location.protocol === 'https:';
+    const isMqttInsecure = MQTT_DIRECT_URL.startsWith('ws://');
+
+    if (isHttps && isMqttInsecure) {
+      // Use backend WebSocket relay
+      const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
+      const wsUrl = API_BASE.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/feeding';
+      const ws = new WebSocket(wsUrl);
+      backendWsRef.current = ws;
+      ws.onmessage = (event) => {
+        try {
+          const raw = JSON.parse(event.data as string);
+          handleWqPayload(raw);
+        } catch { /* ignore */ }
+      };
+      ws.onclose = () => {
+        setTimeout(() => {
+          // Auto-reconnect
+          if (backendWsRef.current) backendWsRef.current.close();
+        }, 5000);
+      };
+    } else {
+      // Direct MQTT
+      const client = mqtt.connect(MQTT_DIRECT_URL, {
+        username: MQTT_USER,
+        password: MQTT_PASSWORD,
+        clientId: `dashboard-home-${Math.random().toString(16).slice(2, 8)}`,
+        clean: true,
+        reconnectPeriod: 5000,
+        connectTimeout: 10000,
+        keepalive: 30,
+      });
+      mqttRef.current = client;
+
+      client.on('connect', () => {
+        client.subscribe([WQ_DATA_TOPIC], { qos: 0 });
+      });
+
+      client.on('message', (_topic: string, payload: Buffer) => {
+        try {
+          const raw = JSON.parse(payload.toString());
+          handleWqPayload(raw);
+        } catch { /* ignore */ }
+      });
+    }
+
+    return () => {
+      if (mqttRef.current) { mqttRef.current.end(true); mqttRef.current = null; }
+      if (backendWsRef.current) { backendWsRef.current.close(); backendWsRef.current = null; }
+    };
   }, []);
 
   const getHealthColor = (score: number) => {
@@ -149,6 +239,118 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
               <i className="fas fa-clock text-cyan-600 text-2xl"></i>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Real-Time Water Quality & Rain Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Rain Status Card */}
+        <div className={`rounded-xl shadow-sm p-5 border transition hover:shadow-md ${
+          !waterQuality ? 'bg-white border-gray-100' :
+          waterQuality.rainLevel < 10 ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-200' :
+          waterQuality.rainLevel < 40 ? 'bg-gradient-to-br from-yellow-50 to-amber-50 border-yellow-300' :
+          'bg-gradient-to-br from-red-50 to-orange-50 border-red-300'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="text-5xl">
+                {!waterQuality ? '🌤️' : waterQuality.rainLevel < 10 ? '☀️' : waterQuality.rainLevel < 40 ? '🌦️' : '🌧️'}
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 mb-1">Rain Status <span className="text-xs">(Real-Time)</span></p>
+                {waterQuality ? (
+                  <>
+                    <p className={`text-2xl font-bold ${
+                      waterQuality.rainLevel < 10 ? 'text-green-700' :
+                      waterQuality.rainLevel < 40 ? 'text-yellow-700' : 'text-red-700'
+                    }`}>
+                      {waterQuality.rainStatus.charAt(0).toUpperCase() + waterQuality.rainStatus.slice(1)}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-gray-500">Intensity: {waterQuality.rainLevel.toFixed(1)}%</span>
+                      {waterQuality.rainDetected && (
+                        <span className="px-1.5 py-0.5 bg-blue-200 text-blue-700 rounded text-[10px] font-bold animate-pulse">
+                          RAIN
+                        </span>
+                      )}
+                      <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                      <span className="text-[10px] text-green-600 font-semibold">LIVE</span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-lg text-gray-400">Waiting for sensor...</p>
+                )}
+              </div>
+            </div>
+            {waterQuality && (
+              <div className="flex flex-col items-end gap-1">
+                <div className="w-24 h-3 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${
+                      waterQuality.rainLevel < 10 ? 'bg-green-500' :
+                      waterQuality.rainLevel < 40 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${Math.min(waterQuality.rainLevel, 100)}%` }}
+                  />
+                </div>
+                <button
+                  onClick={() => navigate('/dashboard/water-quality-dashboard')}
+                  className="text-xs text-cyan-600 hover:text-cyan-800 font-medium mt-1"
+                >
+                  View Details →
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Water Quality Quick Status */}
+        <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🌊</span>
+              <p className="text-sm font-semibold text-gray-700">Water Quality <span className="text-xs text-gray-400">(Real-Time)</span></p>
+            </div>
+            {waterQuality && (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <span className="text-[10px] text-green-600 font-semibold">LIVE</span>
+              </div>
+            )}
+          </div>
+          {waterQuality ? (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center p-2 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">pH</p>
+                <p className={`text-lg font-bold ${
+                  waterQuality.phValue >= 6.5 && waterQuality.phValue <= 8.5 ? 'text-green-600' :
+                  waterQuality.phValue >= 6.0 && waterQuality.phValue <= 9.0 ? 'text-yellow-600' : 'text-red-600'
+                }`}>{waterQuality.phValue.toFixed(1)}</p>
+              </div>
+              <div className="text-center p-2 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">Turbidity</p>
+                <p className={`text-lg font-bold ${
+                  waterQuality.turbidity <= 25 ? 'text-green-600' :
+                  waterQuality.turbidity <= 40 ? 'text-yellow-600' : 'text-red-600'
+                }`}>{waterQuality.turbidity.toFixed(0)} <span className="text-xs text-gray-400">NTU</span></p>
+              </div>
+              <div className="text-center p-2 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">Status</p>
+                <p className={`text-sm font-bold ${
+                  waterQuality.waterQualityStatus === 'normal' ? 'text-green-600' :
+                  waterQuality.waterQualityStatus === 'warning' ? 'text-yellow-600' : 'text-red-600'
+                }`}>{waterQuality.waterQualityStatus.charAt(0).toUpperCase() + waterQuality.waterQualityStatus.slice(1)}</p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 text-center py-4">Waiting for sensor data...</p>
+          )}
+          <button
+            onClick={() => navigate('/dashboard/water-quality-dashboard')}
+            className="w-full mt-3 text-xs text-center text-cyan-600 hover:text-cyan-800 font-medium py-1"
+          >
+            Open Water Quality Dashboard →
+          </button>
         </div>
       </div>
 
