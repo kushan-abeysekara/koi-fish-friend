@@ -2,21 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SensorData } from '../services/api';
 import { waterQualityLiveApi, type SupabaseSensorLiveRow } from '../services/api';
-import { supabase, supabasePgQuery } from '../services/supabase';
+import { supabasePgQuery } from '../services/supabase';
 import { Wifi, WifiOff } from 'lucide-react';
 
-// ===================== SUPABASE + BACKEND WS CONFIG =====================
-// Strategy:
-//   1. Primary: Supabase Realtime subscription on sensor_live table
-//      (ESP32 writes directly to Supabase every 2s → triggers Realtime event)
-//   2. Fallback: Backend WebSocket relay /ws/feeding
-//      (backend SupabaseRealtimePoller polls sensor_live every 3s → broadcasts)
-
-// Backend WebSocket relay — derives from VITE_API_URL automatically
-const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
-const BACKEND_WS_URL: string = API_BASE
-  .replace('https://', 'wss://')
-  .replace('http://', 'ws://') + '/ws/feeding';
+// ===================== SUPABASE POLLING CONFIG =====================
+// Strategy: Poll Supabase pg/query every 3 seconds for sensor_live data.
+// This is the most reliable approach for self-hosted Supabase where
+// Realtime and WebSocket connections are unstable.
 
 interface WaterParameter {
   id: string;
@@ -56,7 +48,6 @@ interface SensorPayloadData {
 
 const WaterQualityDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [, setConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
   const [connectionMode, setConnectionMode] = useState<'supabase' | 'relay' | 'none'>('none');
   const [signalStrength, setSignalStrength] = useState(0);
@@ -64,9 +55,8 @@ const WaterQualityDashboard: React.FC = () => {
   const [latestData, setLatestData] = useState<SensorData | null>(null);
   const [dataSource, setDataSource] = useState<'live' | 'cached' | 'none'>('none');
   const [cachedTimestamp, setCachedTimestamp] = useState<string | null>(null);
-  const backendWsRef  = useRef<WebSocket | null>(null);
-  const supabaseChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
   const hasReceivedLive = useRef(false); // track if we've received live data
+  const pollFailCount = useRef(0);
 
   // ===================== FETCH LAST-KNOWN DATA FROM SUPABASE =====================
   useEffect(() => {
@@ -165,120 +155,12 @@ const WaterQualityDashboard: React.FC = () => {
     hasReceivedLive.current = true;
   }, []);
 
-  // ===================== BACKEND WS RELAY (fallback) =====================
-  const connectBackendRelay = React.useCallback(() => {
-    if (backendWsRef.current) {
-      backendWsRef.current.close();
-      backendWsRef.current = null;
-    }
-    console.log('[WATER QUALITY] Connecting to backend WS relay:', BACKEND_WS_URL);
-    setConnectionStatus('connecting');
+  // ===================== BACKEND WS RELAY — REMOVED =====================
+  // Supabase Realtime and WebSocket relay were unstable on our self-hosted
+  // Supabase.  Replaced with reliable periodic polling below.
 
-    const ws = new WebSocket(BACKEND_WS_URL);
-    backendWsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('[WATER QUALITY] Backend WS relay connected');
-      setConnected(true);
-      setConnectionStatus('connected');
-      setConnectionMode('relay');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const raw = JSON.parse(event.data as string);
-        // Only handle WQ_ device messages
-        const devId = raw.deviceId ?? raw.device_id ?? '';
-        if (devId && !String(devId).startsWith('WQ_')) return;
-        handleSensorPayload(raw);
-      } catch { /* ignore parse errors */ }
-    };
-
-    ws.onclose = () => {
-      console.warn('[WATER QUALITY] Backend WS relay disconnected, retrying in 5s...');
-      setConnected(false);
-      setConnectionStatus('disconnected');
-      setConnectionMode('none');
-      setTimeout(connectBackendRelay, 5000);
-    };
-
-    ws.onerror = (err) => {
-      console.error('[WATER QUALITY] Backend WS relay error:', err);
-      setConnectionStatus('error');
-    };
-  }, [handleSensorPayload]);
-
-  // ===================== SUPABASE REALTIME (primary) + BACKEND WS (fallback) =====================
-  useEffect(() => {
-    let supabaseConnected = false;
-
-    // 1. Try Supabase Realtime subscription on sensor_live table
-    if (supabase) {
-      console.log('[WATER QUALITY] Subscribing to Supabase Realtime on sensor_live...');
-      setConnectionStatus('connecting');
-
-      const channel = supabase
-        .channel('wq-sensor-live')
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'sensor_live',
-        }, (payload) => {
-          const row = payload.new as Record<string, unknown>;
-          const devId = (row.device_id as string) ?? '';
-          if (!devId.startsWith('WQ_')) return;
-
-          console.log('[WATER QUALITY] Supabase Realtime update:', devId);
-          handleSensorPayload(row);
-
-          if (!supabaseConnected) {
-            supabaseConnected = true;
-            setConnected(true);
-            setConnectionStatus('connected');
-            setConnectionMode('supabase');
-          }
-        })
-        .subscribe((status) => {
-          console.log('[WATER QUALITY] Supabase Realtime status:', status);
-          if (status === 'SUBSCRIBED') {
-            supabaseConnected = true;
-            setConnected(true);
-            setConnectionStatus('connected');
-            setConnectionMode('supabase');
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.warn('[WATER QUALITY] Supabase Realtime failed, using backend WS relay');
-            supabaseConnected = false;
-            connectBackendRelay();
-          }
-        });
-
-      supabaseChannelRef.current = channel;
-    } else {
-      // 2. Supabase client not available — use backend WS relay directly
-      console.log('[WATER QUALITY] Supabase client unavailable, using backend WS relay');
-      connectBackendRelay();
-    }
-
-    // If Supabase Realtime doesn't deliver data within 10s, also start backend WS as backup
-    const fallbackTimeout = setTimeout(() => {
-      if (!hasReceivedLive.current) {
-        console.log('[WATER QUALITY] No Supabase Realtime data after 10s, starting backend WS relay as backup');
-        connectBackendRelay();
-      }
-    }, 10000);
-
-    return () => {
-      clearTimeout(fallbackTimeout);
-      if (supabaseChannelRef.current && supabase) {
-        supabase.removeChannel(supabaseChannelRef.current);
-        supabaseChannelRef.current = null;
-      }
-      if (backendWsRef.current) backendWsRef.current.close();
-    };
-  }, [connectBackendRelay, handleSensorPayload]);
-
-  // ===================== PERIODIC POLL (most reliable fallback) =====================
-  // Polls Supabase pg/query every 3 seconds — works even when Realtime & WS are down
+  // ===================== PERIODIC POLL (primary & only data source) =====================
+  // Polls Supabase pg/query every 3 seconds — rock-solid on self-hosted Supabase
   useEffect(() => {
     let active = true;
     const poll = async () => {
@@ -288,7 +170,6 @@ const WaterQualityDashboard: React.FC = () => {
         );
         if (!active || rows.length === 0) return;
         const row = rows[0];
-        // Build SensorPayloadData from row and feed into shared handler
         handleSensorPayload({
           device_id: row.device_id,
           ph_value: row.ph_value,
@@ -302,16 +183,19 @@ const WaterQualityDashboard: React.FC = () => {
           rssi: row.rssi,
           source: 'poll',
         });
-        // Mark connection as active when poll succeeds
-        setConnected(true);
+        // Poll succeeded → mark connected
+        pollFailCount.current = 0;
         setConnectionStatus('connected');
-        if (connectionMode === 'none') setConnectionMode('supabase');
+        setConnectionMode('supabase');
       } catch {
-        // Polling failed — silent (Realtime / WS relay may still work)
+        pollFailCount.current += 1;
+        if (pollFailCount.current >= 3) {
+          setConnectionStatus('disconnected');
+          setConnectionMode('none');
+        }
       }
     };
-    // Initial poll
-    poll();
+    poll(); // initial
     const interval = setInterval(poll, 3000);
     return () => { active = false; clearInterval(interval); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -408,10 +292,10 @@ const WaterQualityDashboard: React.FC = () => {
 
   const getConnectionStatusBadge = () => {
     const statusConfig = {
-      connected:    { icon: <Wifi className="text-green-500 w-4 h-4" />,  label: connectionMode === 'supabase' ? '⚡ Supabase Realtime' : '🔗 Backend Relay', sub: connectionMode === 'supabase' ? 'sensor_live table' : 'via backend /ws/feeding', color: 'text-green-600' },
-      connecting:   { icon: <Wifi className="text-yellow-500 w-4 h-4 animate-pulse" />, label: '⏳ Connecting…', sub: 'Supabase Realtime → WS relay', color: 'text-yellow-600' },
-      disconnected: { icon: <WifiOff className="text-gray-400 w-4 h-4" />, label: '📴 Disconnected', sub: 'Retrying…',                color: 'text-gray-500' },
-      error:        { icon: <WifiOff className="text-red-500 w-4 h-4" />,  label: '❌ Error',        sub: 'Check Supabase or backend', color: 'text-red-600' },
+      connected:    { icon: <Wifi className="text-green-500 w-4 h-4" />,  label: '⚡ Supabase Live', sub: 'Polling sensor_live every 3s', color: 'text-green-600' },
+      connecting:   { icon: <Wifi className="text-yellow-500 w-4 h-4 animate-pulse" />, label: '⏳ Connecting…', sub: 'Fetching sensor data…', color: 'text-yellow-600' },
+      disconnected: { icon: <WifiOff className="text-gray-400 w-4 h-4" />, label: '📴 Disconnected', sub: 'Poll failed — retrying…',                color: 'text-gray-500' },
+      error:        { icon: <WifiOff className="text-red-500 w-4 h-4" />,  label: '❌ Error',        sub: 'Check Supabase connection', color: 'text-red-600' },
     };
     const cfg = statusConfig[connectionStatus];
     return (
@@ -493,12 +377,10 @@ const WaterQualityDashboard: React.FC = () => {
           </p>
           <p className={`text-xs mt-1 ${dataSource === 'cached' ? 'text-amber-600' : 'text-blue-600'}`}>
             {dataSource === 'live'
-              ? connectionMode === 'supabase'
-                ? '⚡ Supabase Realtime — ESP32 writes directly to sensor_live table'
-                : '🔗 Backend relay — Supabase Poller → WebSocket → Browser'
+              ? '⚡ Supabase Live — polling sensor_live table every 3 seconds'
               : dataSource === 'cached'
                 ? `📦 Showing last known data from Supabase${cachedTimestamp ? ` (recorded ${new Date(cachedTimestamp).toLocaleString()})` : ''}. Waiting for live sensor…`
-                : '⏳ Waiting for connection… (Supabase Realtime, then backend relay)'
+                : '⏳ Connecting to Supabase…'
             }
           </p>
         </div>
