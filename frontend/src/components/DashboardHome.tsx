@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import mqtt from 'mqtt';
 import { aiApi, weatherApi, type AIPrediction, type WeatherSummary } from '../services/api';
@@ -128,25 +128,130 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
     return 'text-red-500';
   };
 
+  // Determine rain intensity for animation
+  const isRaining = waterQuality?.rainDetected || (waterQuality?.rainLevel ?? 0) >= 5;
+  const rainIntensity: 'none' | 'light' | 'moderate' | 'heavy' =
+    !isRaining ? 'none' :
+    (waterQuality?.rainLevel ?? 0) < 25 ? 'light' :
+    (waterQuality?.rainLevel ?? 0) < 60 ? 'moderate' : 'heavy';
+
+  // Generate raindrop elements — memoised so they don't re-create each render
+  const raindrops = useMemo(() => {
+    if (rainIntensity === 'none') return null;
+    const count = rainIntensity === 'light' ? 40 : rainIntensity === 'moderate' ? 90 : 160;
+    const sizeClass = rainIntensity === 'light' ? 'raindrop-light' :
+                      rainIntensity === 'moderate' ? 'raindrop-moderate' : 'raindrop-heavy';
+    return Array.from({ length: count }, (_, i) => {
+      const left = Math.random() * 100;          // 0-100 vw
+      const duration = rainIntensity === 'heavy' ? 0.4 + Math.random() * 0.3 :
+                       rainIntensity === 'moderate' ? 0.6 + Math.random() * 0.5 :
+                       0.9 + Math.random() * 0.7;
+      const delay = Math.random() * 2;
+      return (
+        <div
+          key={i}
+          className={`raindrop ${sizeClass}`}
+          style={{
+            left: `${left}%`,
+            animationDuration: `${duration}s`,
+            animationDelay: `${delay}s`,
+          }}
+        />
+      );
+    });
+  }, [rainIntensity]);
+
+  // Splash elements at the bottom
+  const splashes = useMemo(() => {
+    if (rainIntensity === 'none') return null;
+    const count = rainIntensity === 'light' ? 8 : rainIntensity === 'moderate' ? 18 : 30;
+    return Array.from({ length: count }, (_, i) => {
+      const left = Math.random() * 100;
+      const delay = Math.random() * 1.5;
+      return (
+        <div
+          key={i}
+          className="rain-splash"
+          style={{
+            left: `${left}%`,
+            animationDelay: `${delay}s`,
+          }}
+        />
+      );
+    });
+  }, [rainIntensity]);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {/* ─── Rain Animation Overlay ─── */}
+      {isRaining && (
+        <>
+          <div className="rain-overlay">
+            {raindrops}
+            {splashes}
+          </div>
+          {/* Mist at the bottom */}
+          <div className="rain-mist" />
+          {/* Lightning flash only for heavy rain */}
+          {rainIntensity === 'heavy' && <div className="rain-lightning" />}
+        </>
+      )}
       {/* Welcome Section */}
-      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl shadow-lg p-8 text-white">
+      <div className={`rounded-xl shadow-lg p-8 text-white transition-all duration-700 ${
+        isRaining
+          ? 'bg-gradient-to-r from-slate-600 via-slate-700 to-gray-800'
+          : 'bg-gradient-to-r from-cyan-500 to-blue-600'
+      }`}>
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-3xl font-bold mb-2">Welcome back, {username}! 👋</h2>
-            <p className="text-cyan-100">Here's what's happening with your fish farm today.</p>
+            <p className={isRaining ? 'text-blue-200' : 'text-cyan-100'}>
+              {isRaining
+                ? `It's raining outside — ${waterQuality?.rainStatus ?? 'rain'} rain detected by pond sensor.`
+                : "Here's what's happening with your fish farm today."}
+            </p>
           </div>
-          {weather && (
-            <div className="hidden md:flex items-center gap-3 bg-white/15 rounded-xl px-5 py-3 backdrop-blur-sm">
-              <span className="text-4xl">{weather.weatherIcon}</span>
-              <div>
-                <p className="text-2xl font-bold">{weather.temperature}°C</p>
-                <p className="text-sm text-cyan-100">{weather.weatherDescription}</p>
+          <div className="hidden md:flex items-center gap-3">
+            {/* Rain badge (real-time sensor) */}
+            {isRaining && (
+              <div className="flex items-center gap-2 bg-blue-500/30 backdrop-blur-sm rounded-xl px-4 py-2 border border-blue-400/30">
+                <span className="text-3xl cloud-icon">🌧️</span>
+                <div>
+                  <p className="text-lg font-bold">{waterQuality?.rainLevel.toFixed(0)}%</p>
+                  <p className="text-xs text-blue-200">Rain Intensity</p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+            {/* Weather badge */}
+            {weather && (
+              <div className="flex items-center gap-3 bg-white/15 rounded-xl px-5 py-3 backdrop-blur-sm">
+                <span className="text-4xl">{isRaining ? '🌧️' : weather.weatherIcon}</span>
+                <div>
+                  <p className="text-2xl font-bold">{weather.temperature}°C</p>
+                  <p className="text-sm text-cyan-100">{isRaining ? 'Rainy' : weather.weatherDescription}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Rain alert banner inside welcome section */}
+        {isRaining && (
+          <div className="mt-4 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-3 flex items-center gap-3 border border-white/10">
+            <span className="text-2xl animate-bounce">☔</span>
+            <div className="flex-1">
+              <p className="text-sm font-semibold">
+                {rainIntensity === 'heavy' ? '⚠️ Heavy rain detected! Monitor pond water level and pH closely.' :
+                 rainIntensity === 'moderate' ? '🌧️ Moderate rain — pond pH may shift slightly. Keep monitoring.' :
+                 '🌦️ Light rain detected at the pond. No action needed.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-full bg-blue-300 animate-pulse"></div>
+              <span className="text-[10px] text-blue-200 font-bold">LIVE SENSOR</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Live Stats Grid */}
