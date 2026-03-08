@@ -260,6 +260,7 @@ void setup() {
   // Setup MQTT with optimized settings
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);  // CRITICAL: Default 256 is too small for sensor JSON (~280 bytes)
   mqttClient.setKeepAlive(15);  // Faster keepalive for quick disconnection detection
   mqttClient.setSocketTimeout(5);  // 5 second socket timeout
   
@@ -831,7 +832,13 @@ void publishSensorData() {
   sensorData += "\"rssi\":" + String(WiFi.RSSI());
   sensorData += "}";
   
-  mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
+  bool ok = mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
+  if (!ok) {
+    Serial.print("❌ MQTT publish FAILED! Payload size: ");
+    Serial.print(sensorData.length());
+    Serial.print(" bytes, buffer: ");
+    Serial.println(mqttClient.getBufferSize());
+  }
 }
 
 // ==================== COMMAND PROCESSOR (MQTT ONLY) ====================

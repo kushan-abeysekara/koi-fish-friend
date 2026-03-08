@@ -3,15 +3,15 @@ import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, Alert
 import mqtt from 'mqtt';
 import MediaMTXCameraFeed from '../components/MediaMTXCameraFeed';
 import BoatTilt3D from '../components/BoatTilt3D';
-import { supabase } from '../services/supabase';
+import { supabase, supabasePgQuery } from '../services/supabase';
 
 // ═══════════════════════════════════════════════════════════════════
-// CONNECTION STRATEGY (same as WaterQualityDashboard):
-//   1. Try direct MQTT via WSS (mqtt.koifishfriend.online)
-//   2. If no CONNACK within 8s → fall back to backend WebSocket relay /ws/feeding
-//      (backend connects to EMQX via TCP 1883 — always works)
-//   3. Supabase Realtime as tertiary backup data source
-//   4. Commands always sent via backend REST API (reliable TCP→MQTT relay)
+// CONNECTION STRATEGY (SPEED-OPTIMIZED):
+//   1. Supabase Realtime (PRIMARY) — postgres_changes on boat_telemetry
+//   2. REST polling every 2s on /api/boat/telemetry (GUARANTEED fallback)
+//   3. Backend WebSocket relay /ws/feeding (bonus — if connected)
+//   4. Direct MQTT WSS (bonus — if Traefik proxy works)
+//   Commands always sent via backend REST API (reliable TCP→MQTT relay)
 // ═══════════════════════════════════════════════════════════════════
 
 const MQTT_DIRECT_URL: string =
@@ -230,10 +230,44 @@ const BoatNavigation: React.FC = () => {
     };
   }, [updateSensor, parseSensorPayload, connectBackendRelay]);
 
-  // ═══ Supabase Realtime (tertiary backup) ═══
+  // ═══ Supabase Realtime (PRIMARY data source — fastest) ═══
   useEffect(() => {
+    // Initial load: fetch latest row from boat_telemetry immediately
+    const loadInitial = async () => {
+      try {
+        const rows = await supabasePgQuery<Record<string, unknown>>(
+          `SELECT * FROM ${BOAT_TABLE} WHERE device_id = 'BOAT_ESP32_001' ORDER BY updated_at DESC LIMIT 1`
+        );
+        if (rows.length > 0) {
+          const row = rows[0];
+          console.log('🚀 [BOAT] Initial Supabase load:', row);
+          updateSensor({
+            voltage: (row.voltage as number) ?? 0,
+            distanceFront: (row.distance_front as number) ?? 0,
+            distanceBack: (row.distance_back as number) ?? 0,
+            distanceLeft: (row.distance_left as number) ?? 0,
+            distanceRight: (row.distance_right as number) ?? 0,
+            angleX: (row.angle_x as number) ?? 0,
+            angleY: (row.angle_y as number) ?? 0,
+            temperature: (row.temperature as number) ?? 0,
+            mode: (row.mode as string) ?? 'manual',
+            command: (row.command as string) ?? 'STOP',
+            motorLeft: (row.motor_left as number) ?? 0,
+            motorRight: (row.motor_right as number) ?? 0,
+            rssi: (row.rssi as number) ?? 0,
+            connected: true,
+          }, 'supabase');
+          setConnectionMode('supabase');
+        }
+      } catch (err) {
+        console.warn('[BOAT] Initial Supabase load failed:', err);
+      }
+    };
+    loadInitial();
+
     if (!supabase) return;
 
+    // Subscribe to real-time changes on boat_telemetry table
     const channel = supabase
       .channel('boat-telemetry-live')
       .on(
@@ -242,46 +276,48 @@ const BoatNavigation: React.FC = () => {
         (payload) => {
           const row = payload.new as Record<string, unknown>;
           if (!row) return;
-          // Only use Supabase if no fresh direct data (>5s stale)
-          const directFresh = Date.now() - lastUpdateRef.current < 5000;
-          if (!directFresh) {
-            updateSensor({
-              voltage: (row.voltage as number) ?? 0,
-              distanceFront: (row.distance_front as number) ?? 0,
-              distanceBack: (row.distance_back as number) ?? 0,
-              distanceLeft: (row.distance_left as number) ?? 0,
-              distanceRight: (row.distance_right as number) ?? 0,
-              angleX: (row.angle_x as number) ?? 0,
-              angleY: (row.angle_y as number) ?? 0,
-              temperature: (row.temperature as number) ?? 0,
-              mode: (row.mode as string) ?? 'manual',
-              command: (row.command as string) ?? 'STOP',
-              rssi: (row.rssi as number) ?? 0,
-              connected: true,
-            }, 'supabase');
-            setConnectionMode('supabase');
-          }
+          console.log('⚡ [BOAT] Supabase Realtime update:', { voltage: row.voltage, angle_x: row.angle_x, angle_y: row.angle_y });
+          updateSensor({
+            voltage: (row.voltage as number) ?? 0,
+            distanceFront: (row.distance_front as number) ?? 0,
+            distanceBack: (row.distance_back as number) ?? 0,
+            distanceLeft: (row.distance_left as number) ?? 0,
+            distanceRight: (row.distance_right as number) ?? 0,
+            angleX: (row.angle_x as number) ?? 0,
+            angleY: (row.angle_y as number) ?? 0,
+            temperature: (row.temperature as number) ?? 0,
+            mode: (row.mode as string) ?? 'manual',
+            command: (row.command as string) ?? 'STOP',
+            motorLeft: (row.motor_left as number) ?? 0,
+            motorRight: (row.motor_right as number) ?? 0,
+            rssi: (row.rssi as number) ?? 0,
+            connected: true,
+          }, 'supabase');
+          setConnectionMode('supabase');
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 [BOAT] Supabase Realtime status:', status);
+      });
 
     return () => { supabase?.removeChannel(channel); };
   }, [updateSensor]);
 
-  // ═══ REST API Polling Fallback (4th source — always works if backend receives MQTT) ═══
+  // ═══ REST API Polling (GUARANTEED fallback — every 2s, always works) ═══
   useEffect(() => {
     let stopped = false;
     const poll = async () => {
       while (!stopped) {
-        // Only poll if no fresh data from other sources (>5s stale)
-        const freshEnough = Date.now() - lastUpdateRef.current < 5000;
+        // Poll if no fresh data from Supabase/WS/MQTT (>3s stale)
+        const freshEnough = Date.now() - lastUpdateRef.current < 3000;
         if (!freshEnough) {
           try {
             const resp = await fetch(`${API_URL}/api/boat/telemetry`);
             if (resp.ok) {
               const raw = await resp.json();
-              // raw might be { success: false } if no data yet, or the raw sensor payload
-              if (raw && raw.deviceId) {
+              // raw is the sensor payload directly (has deviceId, voltage, angleX, etc.)
+              if (raw && raw.deviceId && raw.voltage !== undefined) {
+                console.log('🔄 [BOAT] REST poll data:', { voltage: raw.voltage, angleX: raw.angleX, angleY: raw.angleY });
                 updateSensor(parseSensorPayload(raw as Record<string, unknown>), 'relay');
                 if (connectionMode === 'none') setConnectionMode('relay');
               }
@@ -290,7 +326,7 @@ const BoatNavigation: React.FC = () => {
             // Silently ignore — this is a fallback
           }
         }
-        await new Promise(r => setTimeout(r, 3000)); // Poll every 3s
+        await new Promise(r => setTimeout(r, 2000)); // Poll every 2s
       }
     };
     poll();
