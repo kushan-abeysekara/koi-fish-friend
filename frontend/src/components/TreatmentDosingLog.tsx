@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
+import { useLocation } from 'react-router-dom';
 import { pondApi, treatmentLogApi, type TreatmentLog, type TreatmentStats } from '../services/api';
 
 interface DosingLog {
@@ -24,6 +24,8 @@ interface DosingLog {
 }
 
 const TreatmentDosingLog: React.FC = () => {
+  const location = useLocation();
+
   // Get current logged-in user from localStorage
   const getCurrentUser = () => {
     return localStorage.getItem('username') || 'Admin';
@@ -72,9 +74,20 @@ const TreatmentDosingLog: React.FC = () => {
     'Other',
   ];
 
-  const parameters = ['pH Level', 'Turbidity', 'Temperature', 'Dissolved Oxygen'];
+  const parameters = ['pH Level', 'Turbidity', 'Temperature', 'Dissolved Oxygen', 'CO₂ Level', 'Ammonia (NH₃)'];
 
   const units = ['ml', 'L', 'g', 'kg', 'ppm', 'mg/L', 'tablets', 'drops'];
+
+  // Auto-open form with pre-filled parameter when navigated from sensor card
+  useEffect(() => {
+    const state = location.state as { openForm?: boolean; parameter?: string } | null;
+    if (state?.openForm && state.parameter) {
+      setFormData(prev => ({ ...prev, parameter: state.parameter! }));
+      setShowAddForm(true);
+      // Clear location state so re-renders don't re-trigger
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   // Fetch ponds on mount
   useEffect(() => {

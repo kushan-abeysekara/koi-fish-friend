@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Line,
   XAxis,
@@ -38,7 +39,10 @@ interface ParameterConfig {
 type TimeRange = '1h' | '24h' | '7d' | 'custom';
 
 const WaterQualityTrends: React.FC = () => {
-  const [selectedParameter, setSelectedParameter] = useState<string>('turbidity');
+  const location = useLocation();
+  const [selectedParameter, setSelectedParameter] = useState<string>(
+    (location.state as { parameter?: string } | null)?.parameter || 'turbidity'
+  );
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [showEvents, setShowEvents] = useState(true);
   const [customStartDate, setCustomStartDate] = useState('');
@@ -49,6 +53,8 @@ const WaterQualityTrends: React.FC = () => {
     { id: 'ph', name: 'pH Level', unit: 'pH', color: '#8b5cf6', safeRange: { min: 6.5, max: 8.5 } },
     { id: 'temperature', name: 'Temperature', unit: '°C', color: '#ef4444', safeRange: { min: 15, max: 28 } },
     { id: 'do', name: 'Dissolved Oxygen', unit: 'mg/L', color: '#10b981', safeRange: { min: 6, max: 12 } },
+    { id: 'co2', name: 'CO₂ Level', unit: 'PPM', color: '#f59e0b', safeRange: { min: 400, max: 1000 } },
+    { id: 'ammonia', name: 'Ammonia (NH₃)', unit: 'PPM', color: '#f97316', safeRange: { min: 0, max: 0.5 } },
   ];
 
   // Generate mock historical data

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import mqtt from 'mqtt';
 import type { SensorData } from '../services/api';
 import { Wifi, WifiOff } from 'lucide-react';
@@ -50,6 +51,7 @@ interface MqttSensorData {
 }
 
 const WaterQualityDashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [mqttConnected, setMqttConnected] = useState(false);
   const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
   const [connectionMode, setConnectionMode] = useState<'mqtt' | 'relay' | 'none'>('none');
@@ -428,10 +430,14 @@ const WaterQualityDashboard: React.FC = () => {
               </p>
             </div>
             <div className="flex gap-3 mt-4">
-              <button className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
                 <i className="fas fa-sync-alt mr-2"></i>Retry Connection
               </button>
-              <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors">
+              <button
+                onClick={() => navigate('/dashboard/sensor-care')}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors">
                 <i className="fas fa-book mr-2"></i>Troubleshooting Guide
               </button>
             </div>
@@ -507,10 +513,14 @@ const WaterQualityDashboard: React.FC = () => {
 
             {/* Quick Actions */}
             <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2">
-              <button className="flex-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition-colors">
+              <button
+                onClick={() => navigate('/dashboard/water-quality-trends', { state: { parameter: param.id } })}
+                className="flex-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition-colors">
                 <i className="fas fa-chart-line mr-1"></i> View Trend
               </button>
-              <button className="flex-1 px-3 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-xs font-medium transition-colors">
+              <button
+                onClick={() => navigate('/dashboard/treatment-dosing', { state: { openForm: true, parameter: param.name } })}
+                className="flex-1 px-3 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-xs font-medium transition-colors">
                 <i className="fas fa-flask mr-1"></i> Log Treatment
               </button>
             </div>
@@ -525,11 +535,15 @@ const WaterQualityDashboard: React.FC = () => {
           <i className="fas fa-bolt text-cyan-500"></i> Quick Actions
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <button className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-blue-50 to-cyan-50 hover:from-blue-100 hover:to-cyan-100 rounded-lg border border-blue-200 transition-all">
+          <button
+            onClick={() => navigate('/dashboard/treatment-dosing')}
+            className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-blue-50 to-cyan-50 hover:from-blue-100 hover:to-cyan-100 rounded-lg border border-blue-200 transition-all">
             <i className="fas fa-plus-circle text-2xl text-blue-600"></i>
             <span className="text-sm font-medium text-gray-700">Add Treatment</span>
           </button>
-          <button className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-purple-50 to-pink-50 hover:from-purple-100 hover:to-pink-100 rounded-lg border border-purple-200 transition-all">
+          <button
+            onClick={() => navigate('/dashboard/sensor-care')}
+            className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-purple-50 to-pink-50 hover:from-purple-100 hover:to-pink-100 rounded-lg border border-purple-200 transition-all">
             <i className="fas fa-wrench text-2xl text-purple-600"></i>
             <span className="text-sm font-medium text-gray-700">Calibrate Sensors</span>
           </button>
@@ -537,7 +551,9 @@ const WaterQualityDashboard: React.FC = () => {
             <i className="fas fa-file-export text-2xl text-green-600"></i>
             <span className="text-sm font-medium text-gray-700">Export Report</span>
           </button>
-          <button className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-orange-50 to-yellow-50 hover:from-orange-100 hover:to-yellow-100 rounded-lg border border-orange-200 transition-all">
+          <button
+            onClick={() => navigate('/dashboard/alerts-center')}
+            className="flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-orange-50 to-yellow-50 hover:from-orange-100 hover:to-yellow-100 rounded-lg border border-orange-200 transition-all">
             <i className="fas fa-bell text-2xl text-orange-600"></i>
             <span className="text-sm font-medium text-gray-700">View Alerts</span>
           </button>
