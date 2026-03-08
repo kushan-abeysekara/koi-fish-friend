@@ -5,7 +5,7 @@
   directly to Supabase via HTTPS REST (pg/query endpoint).
 
   Data flow:
-    ESP32 -> HTTPS POST -> Supabase sensor_live  (UPSERT every 2 s)
+    ESP32 -> HTTPS POST -> Supabase sensor_live  (UPSERT every 5 s)
     ESP32 -> HTTPS POST -> Supabase sensor_history (INSERT every 60 s)
 
   Backend continuously polls sensor_live -> broadcasts via WebSocket.
@@ -18,6 +18,8 @@
     - WiFiClientSecure (built-in ESP32 core)
 */
 
+#include "soc/soc.h"              // Brownout detector disable
+#include "soc/rtc_cntl_reg.h"     // RTC control register
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -50,20 +52,20 @@ int assignedPondId = 3; // Default Pond 3
 
 // Timing
 unsigned long lastSensorLiveUpdate = 0;
-const unsigned long SENSOR_LIVE_INTERVAL = 2000;     // UPSERT sensor_live every 2 s
+const unsigned long SENSOR_LIVE_INTERVAL = 5000;     // UPSERT sensor_live every 5 s (reduced from 2s to prevent brownout)
 unsigned long lastSensorHistoryInsert = 0;
 const unsigned long SENSOR_HISTORY_INTERVAL = 60000;  // INSERT sensor_history every 60 s
 unsigned long lastWiFiCheck = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;
 
 // Serial toggle: set to true ONLY for debugging with Serial Monitor
-#define ENABLE_SERIAL false
+#define ENABLE_SERIAL true
 
 // ===================== PIN MAPPING =====================
 #define PH_PIN 32           // pH sensor analog input (GPIO 32 / ADC1_CH4)
 #define MQ135_PIN 33        // MQ135 gas sensor for CO2 and NH3 (GPIO 33 / ADC1_CH5)
-#define TURBIDITY_PIN 34    // Turbidity sensor analog input (GPIO 34 / ADC1_CH6)
-#define RAIN_ANALOG_PIN 35  // Rain sensor analog input (GPIO 35 / ADC1_CH7)
+#define RAIN_ANALOG_PIN 34  // Rain sensor analog input (GPIO 34 / ADC1_CH6)
+#define TURBIDITY_PIN 35    // Turbidity sensor analog input (GPIO 35 / ADC1_CH7) ← original pin
 #define RAIN_DIGITAL_PIN 26 // Rain sensor digital output (GPIO 26) HIGH=dry, LOW=rain
 
 // ===================== CALIBRATION =====================
@@ -119,6 +121,8 @@ void setupWiFi()
         Serial.println(ssid);
     }
 
+    WiFi.setSleep(false);           // Disable WiFi modem sleep for stable connection
+    WiFi.setTxPower(WIFI_POWER_17dBm); // Reduce TX power to lower current draw
     WiFi.begin(ssid, password);
 
     int attempts = 0;
@@ -532,6 +536,11 @@ String evaluateWaterQuality(float ph, float turb, float co2, float nh3)
 // ===============================================================
 void setup()
 {
+    // *** Disable brownout detector to prevent crash loop ***
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+    delay(1000); // Let power stabilize before WiFi/HTTPS
+
     Serial.begin(115200);
 
     if (ENABLE_SERIAL)
