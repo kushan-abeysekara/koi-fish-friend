@@ -63,19 +63,25 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
       });
     };
 
-    // Fetch initial data from Supabase
-    supabasePgQuery<Record<string, unknown>>(
-      "SELECT * FROM sensor_live WHERE device_id LIKE 'WQ_%' LIMIT 1"
-    ).then((rows) => {
-      if (rows.length > 0) handleWqPayload(rows[0]);
-    }).catch(() => {});
+    // ── Periodic poll (most reliable — works even when Realtime & WS are down) ──
+    let active = true;
+    const poll = async () => {
+      try {
+        const rows = await supabasePgQuery<Record<string, unknown>>(
+          "SELECT * FROM sensor_live WHERE device_id LIKE 'WQ_%' ORDER BY updated_at DESC LIMIT 1"
+        );
+        if (active && rows.length > 0) handleWqPayload(rows[0]);
+      } catch { /* silent */ }
+    };
+    poll(); // initial fetch
+    const pollInterval = setInterval(poll, 3000);
 
-    // 1. Supabase Realtime subscription (primary)
+    // 1. Supabase Realtime subscription (bonus — instant push when available)
     if (supabase) {
       const channel = supabase
         .channel('dashboard-wq-live')
         .on('postgres_changes', {
-          event: 'UPDATE',
+          event: '*',
           schema: 'public',
           table: 'sensor_live',
         }, (payload) => {
@@ -103,6 +109,8 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
     };
 
     return () => {
+      active = false;
+      clearInterval(pollInterval);
       if (supabaseChannelRef.current && supabase) {
         supabase.removeChannel(supabaseChannelRef.current);
         supabaseChannelRef.current = null;

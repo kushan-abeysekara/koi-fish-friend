@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SensorData } from '../services/api';
 import { waterQualityLiveApi, type SupabaseSensorLiveRow } from '../services/api';
-import { supabase } from '../services/supabase';
+import { supabase, supabasePgQuery } from '../services/supabase';
 import { Wifi, WifiOff } from 'lucide-react';
 
 // ===================== SUPABASE + BACKEND WS CONFIG =====================
@@ -220,7 +220,7 @@ const WaterQualityDashboard: React.FC = () => {
       const channel = supabase
         .channel('wq-sensor-live')
         .on('postgres_changes', {
-          event: 'UPDATE',
+          event: '*',
           schema: 'public',
           table: 'sensor_live',
         }, (payload) => {
@@ -276,6 +276,46 @@ const WaterQualityDashboard: React.FC = () => {
       if (backendWsRef.current) backendWsRef.current.close();
     };
   }, [connectBackendRelay, handleSensorPayload]);
+
+  // ===================== PERIODIC POLL (most reliable fallback) =====================
+  // Polls Supabase pg/query every 3 seconds — works even when Realtime & WS are down
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const rows = await supabasePgQuery<SupabaseSensorLiveRow>(
+          "SELECT * FROM sensor_live WHERE device_id LIKE 'WQ_%' ORDER BY updated_at DESC LIMIT 1"
+        );
+        if (!active || rows.length === 0) return;
+        const row = rows[0];
+        // Build SensorPayloadData from row and feed into shared handler
+        handleSensorPayload({
+          device_id: row.device_id,
+          ph_value: row.ph_value,
+          turbidity: row.turbidity,
+          co2_level: row.co2_level,
+          ammonia: row.ammonia,
+          water_quality_status: row.water_quality_status,
+          rain_level: row.rain_level,
+          rain_detected: row.rain_detected,
+          rain_status: row.rain_status,
+          rssi: row.rssi,
+          source: 'poll',
+        });
+        // Mark connection as active when poll succeeds
+        setConnected(true);
+        setConnectionStatus('connected');
+        if (connectionMode === 'none') setConnectionMode('supabase');
+      } catch {
+        // Polling failed — silent (Realtime / WS relay may still work)
+      }
+    };
+    // Initial poll
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => { active = false; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleSensorPayload]);
 
   // Check if we have real data
   const hasRealData = latestData && latestData.phValue !== undefined && latestData.phValue !== null;

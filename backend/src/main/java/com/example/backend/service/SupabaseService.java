@@ -153,6 +153,9 @@ public class SupabaseService {
                 // Enable Realtime on live tables
                 "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
                 "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live",
+                // REPLICA IDENTITY FULL required for Supabase Realtime to see UPDATE payloads
+                "ALTER TABLE sensor_live REPLICA IDENTITY FULL",
+                "ALTER TABLE energydb REPLICA IDENTITY FULL",
 
                 // Boat: live telemetry (one row per device, upserted every 500ms)
                 "CREATE TABLE IF NOT EXISTS boat_telemetry (" +
