@@ -12,7 +12,7 @@ FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 
-COPY --from=builder /app/target/*.jar app.jar
+COPY --from=builder /app/target/backend-0.0.1-SNAPSHOT.jar app.jar
 
 ENV PORT=8080
 ENV JAVA_OPTS="-Xms256m -Xmx512m"
