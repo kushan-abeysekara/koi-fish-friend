@@ -1,16 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import mqtt from 'mqtt';
 import { aiApi, weatherApi, type AIPrediction, type WeatherSummary } from '../services/api';
-import { fetchDeviceStatusDirect, type FeeddbRow } from '../services/supabase';
-
-// MQTT config for real-time water quality (rain) data
-const MQTT_DIRECT_URL: string =
-  (import.meta.env.VITE_MQTT_WS_URL as string) ||
-  'wss://mqtt.koifishfriend.online/mqtt';
-const MQTT_USER     = 'admin';
-const MQTT_PASSWORD = 'admin1234';
-const WQ_DATA_TOPIC = 'koi/sensors/+/data';
+import { fetchDeviceStatusDirect, type FeeddbRow, supabasePgQuery } from '../services/supabase';
+import { supabase } from '../services/supabase';
 
 interface WaterQualityLive {
   rainLevel: number;
@@ -33,7 +25,7 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
   const [loadingWeather, setLoadingWeather] = useState(true);
   const [loadingAI, setLoadingAI] = useState(true);
   const [waterQuality, setWaterQuality] = useState<WaterQualityLive | null>(null);
-  const mqttRef = useRef<mqtt.MqttClient | null>(null);
+  const supabaseChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
   const backendWsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -53,71 +45,68 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
       .catch(() => {});
   }, []);
 
-  // Real-time MQTT connection for water quality / rain data
+  // Real-time Supabase subscription for water quality / rain data
   useEffect(() => {
     const handleWqPayload = (raw: Record<string, unknown>) => {
-      // Only accept WQ_ device messages
-      if (!raw.deviceId || !String(raw.deviceId).startsWith('WQ_')) return;
-      if (raw.phValue === undefined) return;
+      // Accept both camelCase (WS relay) and snake_case (Supabase Realtime)
+      const devId = (raw.deviceId ?? raw.device_id ?? '') as string;
+      if (!devId.startsWith('WQ_')) return;
+      const ph = (raw.phValue ?? raw.ph_value) as number | undefined;
+      if (ph === undefined) return;
       setWaterQuality({
-        rainLevel: (raw.rainLevel as number) ?? 0,
-        rainDetected: (raw.rainDetected as boolean) ?? false,
-        rainStatus: (raw.rainStatus as string) ?? 'dry',
-        phValue: (raw.phValue as number) ?? 7,
-        turbidity: (raw.turbidity as number) ?? 0,
-        waterQualityStatus: (raw.waterQualityStatus as string) ?? 'normal',
+        rainLevel: (raw.rainLevel ?? raw.rain_level ?? 0) as number,
+        rainDetected: (raw.rainDetected ?? raw.rain_detected ?? false) as boolean,
+        rainStatus: (raw.rainStatus ?? raw.rain_status ?? 'dry') as string,
+        phValue: ph,
+        turbidity: (raw.turbidity ?? 0) as number,
+        waterQualityStatus: (raw.waterQualityStatus ?? raw.water_quality_status ?? 'normal') as string,
       });
     };
 
-    // Try direct MQTT first, fall back to backend WebSocket relay
-    const isHttps = window.location.protocol === 'https:';
-    const isMqttInsecure = MQTT_DIRECT_URL.startsWith('ws://');
+    // Fetch initial data from Supabase
+    supabasePgQuery<Record<string, unknown>>(
+      "SELECT * FROM sensor_live WHERE device_id LIKE 'WQ_%' LIMIT 1"
+    ).then((rows) => {
+      if (rows.length > 0) handleWqPayload(rows[0]);
+    }).catch(() => {});
 
-    if (isHttps && isMqttInsecure) {
-      // Use backend WebSocket relay
-      const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
-      const wsUrl = API_BASE.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/feeding';
-      const ws = new WebSocket(wsUrl);
-      backendWsRef.current = ws;
-      ws.onmessage = (event) => {
-        try {
-          const raw = JSON.parse(event.data as string);
-          handleWqPayload(raw);
-        } catch { /* ignore */ }
-      };
-      ws.onclose = () => {
-        setTimeout(() => {
-          // Auto-reconnect
-          if (backendWsRef.current) backendWsRef.current.close();
-        }, 5000);
-      };
-    } else {
-      // Direct MQTT
-      const client = mqtt.connect(MQTT_DIRECT_URL, {
-        username: MQTT_USER,
-        password: MQTT_PASSWORD,
-        clientId: `dashboard-home-${Math.random().toString(16).slice(2, 8)}`,
-        clean: true,
-        reconnectPeriod: 5000,
-        connectTimeout: 10000,
-        keepalive: 30,
-      });
-      mqttRef.current = client;
-
-      client.on('connect', () => {
-        client.subscribe([WQ_DATA_TOPIC], { qos: 0 });
-      });
-
-      client.on('message', (_topic: string, payload: Buffer) => {
-        try {
-          const raw = JSON.parse(payload.toString());
-          handleWqPayload(raw);
-        } catch { /* ignore */ }
-      });
+    // 1. Supabase Realtime subscription (primary)
+    if (supabase) {
+      const channel = supabase
+        .channel('dashboard-wq-live')
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'sensor_live',
+        }, (payload) => {
+          handleWqPayload(payload.new as Record<string, unknown>);
+        })
+        .subscribe();
+      supabaseChannelRef.current = channel;
     }
 
+    // 2. Backend WS relay as fallback (receives data from SupabaseRealtimePoller)
+    const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
+    const wsUrl = API_BASE.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/feeding';
+    const ws = new WebSocket(wsUrl);
+    backendWsRef.current = ws;
+    ws.onmessage = (event) => {
+      try {
+        const raw = JSON.parse(event.data as string);
+        handleWqPayload(raw);
+      } catch { /* ignore */ }
+    };
+    ws.onclose = () => {
+      setTimeout(() => {
+        if (backendWsRef.current) backendWsRef.current.close();
+      }, 5000);
+    };
+
     return () => {
-      if (mqttRef.current) { mqttRef.current.end(true); mqttRef.current = null; }
+      if (supabaseChannelRef.current && supabase) {
+        supabase.removeChannel(supabaseChannelRef.current);
+        supabaseChannelRef.current = null;
+      }
       if (backendWsRef.current) { backendWsRef.current.close(); backendWsRef.current = null; }
     };
   }, []);
@@ -586,8 +575,8 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           </div>
           <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
             <div className="flex items-center gap-3">
-              <i className="fas fa-broadcast-tower text-green-600"></i>
-              <span className="font-medium text-gray-800">MQTT Broker</span>
+              <i className="fas fa-database text-green-600"></i>
+              <span className="font-medium text-gray-800">Supabase Realtime</span>
             </div>
             <span className="text-sm text-green-600 font-semibold">Connected</span>
           </div>

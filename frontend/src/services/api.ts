@@ -733,6 +733,32 @@ export const sensorDataApi = {
   },
 };
 
+// ==================== Supabase-backed Water Quality API ====================
+// Proxied through the backend to avoid mixed-content issues on HTTPS
+export interface SupabaseSensorLiveRow {
+  device_id: string;
+  ph_value: number;
+  turbidity: number;
+  co2_level: number;
+  ammonia: number;
+  water_quality_status: string;
+  rain_level: number;
+  rain_detected: boolean;
+  rain_status: string;
+  status: string;
+  rssi: number;
+  updated_at: string;
+}
+
+export const waterQualityLiveApi = {
+  /** Fetch the latest sensor_live rows from Supabase (via backend proxy) */
+  getLatest: async (deviceId?: string): Promise<SupabaseSensorLiveRow[]> => {
+    const params = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : '';
+    const response = await api.get<SupabaseSensorLiveRow[]>(`/energy/sensor/live${params}`);
+    return response.data;
+  },
+};
+
 // ==================== Camera & Detection Management ====================
 export interface CameraPond {
   id: number;

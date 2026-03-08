@@ -123,6 +123,8 @@ public class SupabaseService {
                         "  device_id            TEXT PRIMARY KEY," +
                         "  ph_value             FLOAT   DEFAULT 0," +
                         "  turbidity            FLOAT   DEFAULT 0," +
+                        "  co2_level            FLOAT   DEFAULT 400," +
+                        "  ammonia              FLOAT   DEFAULT 0," +
                         "  water_quality_status TEXT    DEFAULT 'normal'," +
                         "  rain_level           FLOAT   DEFAULT 0," +
                         "  rain_detected        BOOLEAN DEFAULT FALSE," +
@@ -138,6 +140,8 @@ public class SupabaseService {
                         "  device_id            TEXT," +
                         "  ph_value             FLOAT," +
                         "  turbidity            FLOAT," +
+                        "  co2_level            FLOAT   DEFAULT 400," +
+                        "  ammonia              FLOAT   DEFAULT 0," +
                         "  water_quality_status TEXT    DEFAULT 'normal'," +
                         "  rain_level           FLOAT   DEFAULT 0," +
                         "  rain_detected        BOOLEAN DEFAULT FALSE," +
@@ -177,7 +181,12 @@ public class SupabaseService {
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'",
                 "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_level FLOAT DEFAULT 0",
                 "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_detected BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'"
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'",
+                // Migration: Add co2_level and ammonia columns to existing tables
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS co2_level FLOAT DEFAULT 400",
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS ammonia FLOAT DEFAULT 0",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS co2_level FLOAT DEFAULT 400",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS ammonia FLOAT DEFAULT 0"
         };
 
         for (String sql : ddls) {
@@ -642,6 +651,8 @@ public class SupabaseService {
             try {
                 double phValue = getDoubleOrDefault(mqttPayload, "phValue", 0);
                 double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
+                double co2Level = getDoubleOrDefault(mqttPayload, "co2Level", 400);
+                double ammonia = getDoubleOrDefault(mqttPayload, "ammonia", 0);
                 String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
                 int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
@@ -649,13 +660,15 @@ public class SupabaseService {
                 boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
                 String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
 
-                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, water_quality_status, rain_level, rain_detected, rain_status, status, rssi, updated_at) "
+                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, status, rssi, updated_at) "
                         +
-                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
+                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", " +
+                        co2Level + ", " + ammonia + ", '" +
                         esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
                         esc(rainStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
                         "ON CONFLICT (device_id) DO UPDATE SET " +
                         "ph_value = EXCLUDED.ph_value, turbidity = EXCLUDED.turbidity, " +
+                        "co2_level = EXCLUDED.co2_level, ammonia = EXCLUDED.ammonia, " +
                         "water_quality_status = EXCLUDED.water_quality_status, " +
                         "rain_level = EXCLUDED.rain_level, rain_detected = EXCLUDED.rain_detected, " +
                         "rain_status = EXCLUDED.rain_status, " +
@@ -663,7 +676,9 @@ public class SupabaseService {
 
                 executePgQuery(sql);
                 System.out.println("[Supabase] 🌊 sensor_live upserted: " + deviceId +
-                        " pH:" + phValue + " Turb:" + turbidity + " Rain:" + rainLevel + "% (" + rainStatus + ")");
+                        " pH:" + phValue + " Turb:" + turbidity +
+                        " CO2:" + co2Level + " NH3:" + ammonia +
+                        " Rain:" + rainLevel + "% (" + rainStatus + ")");
             } catch (Exception e) {
                 System.err.println("[Supabase] ❌ Error upserting sensor_live: " + e.getMessage());
             }
@@ -689,15 +704,18 @@ public class SupabaseService {
             try {
                 double phValue = getDoubleOrDefault(mqttPayload, "phValue", 0);
                 double turbidity = getDoubleOrDefault(mqttPayload, "turbidity", 0);
+                double co2Level = getDoubleOrDefault(mqttPayload, "co2Level", 400);
+                double ammonia = getDoubleOrDefault(mqttPayload, "ammonia", 0);
                 String wqStatus = getTextOrDefault(mqttPayload, "waterQualityStatus", "normal");
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
                 double rainLevel = getDoubleOrDefault(mqttPayload, "rainLevel", 0);
                 boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
                 String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
 
-                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, water_quality_status, rain_level, rain_detected, rain_status, status, recorded_at) "
+                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, status, recorded_at) "
                         +
-                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", '" +
+                        "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", " +
+                        co2Level + ", " + ammonia + ", '" +
                         esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
                         esc(rainStatus) + "', '" + esc(status) + "', NOW())";
 

@@ -1,29 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import mqtt from 'mqtt';
 import type { SensorData } from '../services/api';
+import { waterQualityLiveApi, type SupabaseSensorLiveRow } from '../services/api';
+import { supabase } from '../services/supabase';
 import { Wifi, WifiOff } from 'lucide-react';
 
-// ===================== MQTT / BACKEND WS CONFIG =====================
+// ===================== SUPABASE + BACKEND WS CONFIG =====================
 // Strategy:
-//   1. Try direct MQTT via mqtt.js  (requires port 8083 published in EMQX Docker compose)
-//   2. If that fails within 10s → fall back to backend WebSocket relay /ws/feeding
-//      (backend is connected to EMQX via TCP 1883 which always works)
-const MQTT_DIRECT_URL: string =
-  (import.meta.env.VITE_MQTT_WS_URL as string) ||
-  'wss://mqtt.koifishfriend.online/mqtt';
-const MQTT_USER     = 'admin';
-const MQTT_PASSWORD = 'admin1234';
+//   1. Primary: Supabase Realtime subscription on sensor_live table
+//      (ESP32 writes directly to Supabase every 2s → triggers Realtime event)
+//   2. Fallback: Backend WebSocket relay /ws/feeding
+//      (backend SupabaseRealtimePoller polls sensor_live every 3s → broadcasts)
 
 // Backend WebSocket relay — derives from VITE_API_URL automatically
 const API_BASE: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
 const BACKEND_WS_URL: string = API_BASE
   .replace('https://', 'wss://')
   .replace('http://', 'ws://') + '/ws/feeding';
-
-// Subscribe to all water-quality sensor data & status topics
-const DATA_TOPIC   = 'koi/sensors/+/data';
-const STATUS_TOPIC = 'koi/sensors/+/status';
 
 interface WaterParameter {
   id: string;
@@ -37,73 +30,139 @@ interface WaterParameter {
   lastUpdated: Date;
 }
 
-interface MqttSensorData {
-  deviceId: string;
-  pondId: number;
-  phValue: number;
-  turbidity: number;
-  co2Level: number;
-  ammonia: number;
+interface SensorPayloadData {
+  deviceId?: string;
+  device_id?: string;
+  pondId?: number;
+  phValue?: number;
+  ph_value?: number;
+  turbidity?: number;
+  co2Level?: number;
+  co2_level?: number;
+  ammonia?: number;
   dissolvedOxygen?: number;
   rainLevel?: number;
+  rain_level?: number;
   rainDetected?: boolean;
+  rain_detected?: boolean;
   rainStatus?: string;
-  waterQualityStatus: string;
+  rain_status?: string;
+  waterQualityStatus?: string;
+  water_quality_status?: string;
   timestamp?: number;
   rssi?: number;
+  source?: string;
 }
 
 const WaterQualityDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [mqttConnected, setMqttConnected] = useState(false);
-  const [mqttStatus, setMqttStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
-  const [connectionMode, setConnectionMode] = useState<'mqtt' | 'relay' | 'none'>('none');
+  const [connected, setConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
+  const [connectionMode, setConnectionMode] = useState<'supabase' | 'relay' | 'none'>('none');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
   const [latestData, setLatestData] = useState<SensorData | null>(null);
-  const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
+  const [dataSource, setDataSource] = useState<'live' | 'cached' | 'none'>('none');
+  const [cachedTimestamp, setCachedTimestamp] = useState<string | null>(null);
   const backendWsRef  = useRef<WebSocket | null>(null);
-  const mqttTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const connectedRef  = useRef(false); // tracks live connection for timeout callback
+  const supabaseChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
+  const hasReceivedLive = useRef(false); // track if we've received live data
+
+  // ===================== FETCH LAST-KNOWN DATA FROM SUPABASE =====================
+  useEffect(() => {
+    const fetchCachedData = async () => {
+      try {
+        const rows = await waterQualityLiveApi.getLatest();
+        // Find the first WQ_ device row
+        const wqRow = Array.isArray(rows)
+          ? rows.find((r: SupabaseSensorLiveRow) => r.device_id?.startsWith('WQ_'))
+          : null;
+        if (wqRow && !hasReceivedLive.current) {
+          // Map Supabase row to SensorData format
+          const cachedSensorData: SensorData = {
+            id: Date.now(),
+            device: {
+              id: 0,
+              deviceId: wqRow.device_id,
+              deviceType: 'WATER_QUALITY',
+              pond: null,
+              status: 'online',
+              ipAddress: '',
+              rssi: wqRow.rssi || 0,
+              energyWh: 0,
+              lastSeen: wqRow.updated_at || new Date().toISOString(),
+              createdAt: new Date().toISOString(),
+            },
+            pond: null,
+            voltage: 0, current: 0, power: 0, energyWh: 0,
+            phValue: wqRow.ph_value ?? 0,
+            turbidity: wqRow.turbidity ?? 0,
+            co2Level: wqRow.co2_level ?? 400,
+            ammonia: wqRow.ammonia ?? 0,
+            rainLevel: wqRow.rain_level ?? 0,
+            rainDetected: wqRow.rain_detected ?? false,
+            rainStatus: wqRow.rain_status ?? 'dry',
+            waterQualityStatus: wqRow.water_quality_status ?? 'normal',
+            status: wqRow.status ?? 'normal',
+            timestamp: wqRow.updated_at || new Date().toISOString(),
+          };
+          setLatestData(cachedSensorData);
+          setDataSource('cached');
+          setCachedTimestamp(wqRow.updated_at);
+          setLastSync(new Date(wqRow.updated_at));
+          if (wqRow.rssi) setSignalStrength(wqRow.rssi);
+          console.log('📦 [WATER QUALITY] Loaded cached data from Supabase:', wqRow.device_id);
+        }
+      } catch (err) {
+        console.warn('⚠️ [WATER QUALITY] Could not fetch cached data from Supabase:', err);
+      }
+    };
+    fetchCachedData();
+  }, []);
 
   // ===================== SHARED DATA HANDLER =====================
+  // Accepts both camelCase (backend WS relay) and snake_case (Supabase Realtime) keys
   const handleSensorPayload = React.useCallback((raw: unknown) => {
-    const data = raw as MqttSensorData;
-    if (data.phValue === undefined || data.phValue === null) {
+    const data = raw as SensorPayloadData;
+    const ph = data.phValue ?? data.ph_value;
+    if (ph === undefined || ph === null) {
       if (data.rssi !== undefined) setSignalStrength(data.rssi);
       return;
     }
-    if (data.rssi !== undefined) setSignalStrength(data.rssi);
+    const rssi = data.rssi ?? 0;
+    if (rssi) setSignalStrength(rssi);
+
     const sensorData: SensorData = {
       id: Date.now(),
       device: {
         id: 0,
-        deviceId: data.deviceId,
+        deviceId: data.deviceId ?? data.device_id ?? '',
         deviceType: 'WATER_QUALITY',
         pond: null,
         status: 'online',
         ipAddress: '',
-        rssi: data.rssi || 0,
+        rssi,
         energyWh: 0,
         lastSeen: new Date().toISOString(),
         createdAt: new Date().toISOString(),
       },
       pond: null,
       voltage: 0, current: 0, power: 0, energyWh: 0,
-      phValue: data.phValue,
-      turbidity: data.turbidity,
-      co2Level: data.co2Level,
-      ammonia: data.ammonia,
-      rainLevel: data.rainLevel,
-      rainDetected: data.rainDetected,
-      rainStatus: data.rainStatus,
-      waterQualityStatus: data.waterQualityStatus,
+      phValue: ph,
+      turbidity: data.turbidity ?? 0,
+      co2Level: data.co2Level ?? data.co2_level ?? 400,
+      ammonia: data.ammonia ?? 0,
+      rainLevel: data.rainLevel ?? data.rain_level ?? 0,
+      rainDetected: data.rainDetected ?? data.rain_detected ?? false,
+      rainStatus: data.rainStatus ?? data.rain_status ?? 'dry',
+      waterQualityStatus: data.waterQualityStatus ?? data.water_quality_status ?? 'normal',
       status: 'active',
-      timestamp: new Date().toISOString(), // ESP32 sends millis() not Unix time, use current time
+      timestamp: new Date().toISOString(),
     };
     setLatestData(sensorData);
     setLastSync(new Date());
-    // Supabase storage is handled by backend MqttService via the same MQTT message
+    setDataSource('live');
+    hasReceivedLive.current = true;
   }, []);
 
   // ===================== BACKEND WS RELAY (fallback) =====================
@@ -112,17 +171,16 @@ const WaterQualityDashboard: React.FC = () => {
       backendWsRef.current.close();
       backendWsRef.current = null;
     }
-    console.log('🔌 [WATER QUALITY] Connecting to backend WS relay:', BACKEND_WS_URL);
-    setMqttStatus('connecting');
+    console.log('[WATER QUALITY] Connecting to backend WS relay:', BACKEND_WS_URL);
+    setConnectionStatus('connecting');
 
     const ws = new WebSocket(BACKEND_WS_URL);
     backendWsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('✅ [WATER QUALITY] Backend WS relay connected');
-      connectedRef.current = true;
-      setMqttConnected(true);
-      setMqttStatus('connected');
+      console.log('[WATER QUALITY] Backend WS relay connected');
+      setConnected(true);
+      setConnectionStatus('connected');
       setConnectionMode('relay');
     };
 
@@ -130,118 +188,91 @@ const WaterQualityDashboard: React.FC = () => {
       try {
         const raw = JSON.parse(event.data as string);
         // Only handle WQ_ device messages
-        if (raw.deviceId && !String(raw.deviceId).startsWith('WQ_')) return;
+        const devId = raw.deviceId ?? raw.device_id ?? '';
+        if (devId && !String(devId).startsWith('WQ_')) return;
         handleSensorPayload(raw);
       } catch { /* ignore parse errors */ }
     };
 
     ws.onclose = () => {
-      console.warn('🔌 [WATER QUALITY] Backend WS relay disconnected, retrying in 5s...');
-      connectedRef.current = false;
-      setMqttConnected(false);
-      setMqttStatus('disconnected');
+      console.warn('[WATER QUALITY] Backend WS relay disconnected, retrying in 5s...');
+      setConnected(false);
+      setConnectionStatus('disconnected');
       setConnectionMode('none');
       setTimeout(connectBackendRelay, 5000);
     };
 
     ws.onerror = (err) => {
-      console.error('❌ [WATER QUALITY] Backend WS relay error:', err);
-      setMqttStatus('error');
+      console.error('[WATER QUALITY] Backend WS relay error:', err);
+      setConnectionStatus('error');
     };
   }, [handleSensorPayload]);
 
-  // ===================== MQTT DIRECT CONNECTION (primary) =====================
+  // ===================== SUPABASE REALTIME (primary) + BACKEND WS (fallback) =====================
   useEffect(() => {
-    // If page is HTTPS and MQTT URL is ws://, skip direct MQTT and go straight to relay
-    const isHttps = window.location.protocol === 'https:';
-    const isMqttInsecure = MQTT_DIRECT_URL.startsWith('ws://');
-    if (isHttps && isMqttInsecure) {
-      console.log('🔒 Page is HTTPS — skipping insecure ws:// MQTT, using backend relay');
+    let supabaseConnected = false;
+
+    // 1. Try Supabase Realtime subscription on sensor_live table
+    if (supabase) {
+      console.log('[WATER QUALITY] Subscribing to Supabase Realtime on sensor_live...');
+      setConnectionStatus('connecting');
+
+      const channel = supabase
+        .channel('wq-sensor-live')
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'sensor_live',
+        }, (payload) => {
+          const row = payload.new as Record<string, unknown>;
+          const devId = (row.device_id as string) ?? '';
+          if (!devId.startsWith('WQ_')) return;
+
+          console.log('[WATER QUALITY] Supabase Realtime update:', devId);
+          handleSensorPayload(row);
+
+          if (!supabaseConnected) {
+            supabaseConnected = true;
+            setConnected(true);
+            setConnectionStatus('connected');
+            setConnectionMode('supabase');
+          }
+        })
+        .subscribe((status) => {
+          console.log('[WATER QUALITY] Supabase Realtime status:', status);
+          if (status === 'SUBSCRIBED') {
+            supabaseConnected = true;
+            setConnected(true);
+            setConnectionStatus('connected');
+            setConnectionMode('supabase');
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn('[WATER QUALITY] Supabase Realtime failed, using backend WS relay');
+            supabaseConnected = false;
+            connectBackendRelay();
+          }
+        });
+
+      supabaseChannelRef.current = channel;
+    } else {
+      // 2. Supabase client not available — use backend WS relay directly
+      console.log('[WATER QUALITY] Supabase client unavailable, using backend WS relay');
       connectBackendRelay();
-      return () => {
-        if (backendWsRef.current) backendWsRef.current.close();
-        clearTimeout(mqttTimeoutRef.current ?? undefined);
-      };
     }
 
-    console.log('🌐 [WATER QUALITY] Trying direct MQTT:', MQTT_DIRECT_URL);
-    setMqttStatus('connecting');
-
-    const client = mqtt.connect(MQTT_DIRECT_URL, {
-      username: MQTT_USER,
-      password: MQTT_PASSWORD,
-      clientId: `wq-dashboard-${Math.random().toString(16).slice(2, 8)}`,
-      clean: true,
-      reconnectPeriod: 0,    // Disable auto-reconnect — we handle it manually with fallback
-      connectTimeout: 10000,
-      keepalive: 30,
-    });
-
-    mqttClientRef.current = client;
-
-    // If no CONNACK within 10 seconds → kill MQTT, fall back to backend relay
-    mqttTimeoutRef.current = setTimeout(() => {
-      if (!connectedRef.current) {
-        console.warn('⏱️ [WATER QUALITY] MQTT direct timeout — switching to backend WS relay');
-        client.end(true);
-        mqttClientRef.current = null;
+    // If Supabase Realtime doesn't deliver data within 10s, also start backend WS as backup
+    const fallbackTimeout = setTimeout(() => {
+      if (!hasReceivedLive.current) {
+        console.log('[WATER QUALITY] No Supabase Realtime data after 10s, starting backend WS relay as backup');
         connectBackendRelay();
       }
     }, 10000);
 
-    client.on('connect', () => {
-      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
-      console.log('✅ [WATER QUALITY] Direct MQTT connected');
-      connectedRef.current = true;
-      setMqttConnected(true);
-      setMqttStatus('connected');
-      setConnectionMode('mqtt');
-
-      client.subscribe([DATA_TOPIC, STATUS_TOPIC], { qos: 1 }, (err) => {
-        if (err) console.error('❌ MQTT subscribe error:', err);
-        else console.log('📡 Subscribed to:', DATA_TOPIC, STATUS_TOPIC);
-      });
-    });
-
-    client.on('message', (topic: string, payload: Buffer) => {
-      try {
-        const raw = JSON.parse(payload.toString());
-        if (topic.endsWith('/status')) {
-          if (raw.rssi !== undefined) setSignalStrength(raw.rssi);
-          return;
-        }
-        handleSensorPayload(raw);
-      } catch (err) {
-        console.error('❌ Failed to parse MQTT message:', err);
-      }
-    });
-
-    client.on('reconnect', () => {
-      setMqttConnected(false);
-      setMqttStatus('connecting');
-    });
-
-    client.on('offline', () => {
-      console.warn('📴 [WATER QUALITY] MQTT offline');
-      connectedRef.current = false;
-      setMqttConnected(false);
-      setMqttStatus('disconnected');
-      setConnectionMode('none');
-      // Offline after being connected — fall back to relay
-      client.end(true);
-      mqttClientRef.current = null;
-      connectBackendRelay();
-    });
-
-    client.on('error', (err) => {
-      console.error('❌ [WATER QUALITY] MQTT error:', err.message);
-      setMqttStatus('error');
-    });
-
     return () => {
-      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
-      client.end(true);
-      mqttClientRef.current = null;
+      clearTimeout(fallbackTimeout);
+      if (supabaseChannelRef.current && supabase) {
+        supabase.removeChannel(supabaseChannelRef.current);
+        supabaseChannelRef.current = null;
+      }
       if (backendWsRef.current) backendWsRef.current.close();
     };
   }, [connectBackendRelay, handleSensorPayload]);
@@ -337,12 +368,12 @@ const WaterQualityDashboard: React.FC = () => {
 
   const getConnectionStatusBadge = () => {
     const statusConfig = {
-      connected:    { icon: <Wifi className="text-green-500 w-4 h-4" />,  label: connectionMode === 'relay' ? '🔗 Backend Relay' : '🌐 MQTT Direct', sub: connectionMode === 'relay' ? 'via backend /ws/feeding' : 'EMQX Self-Hosted', color: 'text-green-600' },
-      connecting:   { icon: <Wifi className="text-yellow-500 w-4 h-4 animate-pulse" />, label: '⏳ Connecting…', sub: 'trying MQTT → relay fallback', color: 'text-yellow-600' },
+      connected:    { icon: <Wifi className="text-green-500 w-4 h-4" />,  label: connectionMode === 'supabase' ? '⚡ Supabase Realtime' : '🔗 Backend Relay', sub: connectionMode === 'supabase' ? 'sensor_live table' : 'via backend /ws/feeding', color: 'text-green-600' },
+      connecting:   { icon: <Wifi className="text-yellow-500 w-4 h-4 animate-pulse" />, label: '⏳ Connecting…', sub: 'Supabase Realtime → WS relay', color: 'text-yellow-600' },
       disconnected: { icon: <WifiOff className="text-gray-400 w-4 h-4" />, label: '📴 Disconnected', sub: 'Retrying…',                color: 'text-gray-500' },
-      error:        { icon: <WifiOff className="text-red-500 w-4 h-4" />,  label: '❌ Error',        sub: 'Check broker or backend', color: 'text-red-600' },
+      error:        { icon: <WifiOff className="text-red-500 w-4 h-4" />,  label: '❌ Error',        sub: 'Check Supabase or backend', color: 'text-red-600' },
     };
-    const cfg = statusConfig[mqttStatus];
+    const cfg = statusConfig[connectionStatus];
     return (
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
@@ -406,26 +437,41 @@ const WaterQualityDashboard: React.FC = () => {
       </div>
 
       {/* Last Sync Info */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
-        <i className="fas fa-info-circle text-blue-600 text-xl"></i>
+      <div className={`rounded-lg p-4 flex items-center gap-3 border ${
+        dataSource === 'live' ? 'bg-blue-50 border-blue-200' :
+        dataSource === 'cached' ? 'bg-amber-50 border-amber-200' :
+        'bg-blue-50 border-blue-200'
+      }`}>
+        <i className={`fas text-xl ${
+          dataSource === 'cached' ? 'fa-database text-amber-600' : 'fa-info-circle text-blue-600'
+        }`}></i>
         <div className="flex-1">
-          <p className="text-sm text-blue-800">
+          <p className={`text-sm ${dataSource === 'cached' ? 'text-amber-800' : 'text-blue-800'}`}>
             <span className="font-semibold">Last updated:</span> {formatTimestamp(lastSync)}
-            {mqttConnected && <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-semibold">LIVE</span>}
+            {dataSource === 'live' && <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-semibold">LIVE</span>}
+            {dataSource === 'cached' && <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full font-semibold">LAST KNOWN</span>}
           </p>
-          <p className="text-xs text-blue-600 mt-1">
-            {mqttConnected
-              ? connectionMode === 'mqtt'
-                ? '⚡ Direct MQTT — EMQX Self-Hosted (Supabase stored via backend)'
-                : '🔗 Backend relay — ESP32 → EMQX → Backend → Browser (Supabase stored)'
-              : '⏳ Waiting for connection… (trying MQTT direct, then backend relay)'
+          <p className={`text-xs mt-1 ${dataSource === 'cached' ? 'text-amber-600' : 'text-blue-600'}`}>
+            {dataSource === 'live'
+              ? connectionMode === 'supabase'
+                ? '⚡ Supabase Realtime — ESP32 writes directly to sensor_live table'
+                : '🔗 Backend relay — Supabase Poller → WebSocket → Browser'
+              : dataSource === 'cached'
+                ? `📦 Showing last known data from Supabase${cachedTimestamp ? ` (recorded ${new Date(cachedTimestamp).toLocaleString()})` : ''}. Waiting for live sensor…`
+                : '⏳ Waiting for connection… (Supabase Realtime, then backend relay)'
             }
           </p>
         </div>
-        {mqttConnected && (
+        {dataSource === 'live' && (
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-xs font-semibold text-green-700">STREAMING</span>
+          </div>
+        )}
+        {dataSource === 'cached' && (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+            <span className="text-xs font-semibold text-amber-700">CACHED</span>
           </div>
         )}
       </div>
@@ -493,15 +539,15 @@ const WaterQualityDashboard: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm p-12 border-2 border-dashed border-gray-300 text-center">
           <div className="flex flex-col items-center gap-4">
             <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center">
-              <i className="fas fa-plug-circle-xmark text-4xl text-gray-400"></i>
+              <i className="fas fa-satellite-dish text-4xl text-gray-400 animate-pulse"></i>
             </div>
             <div>
-              <h3 className="text-xl font-semibold text-gray-700 mb-2">No Sensor Data Available</h3>
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">Loading Sensor Data…</h3>
               <p className="text-gray-500 mb-1">
-                Water quality sensor is not connected or not sending data
+                Connecting to water quality sensor via MQTT and loading last known data from database
               </p>
               <p className="text-sm text-gray-400">
-                Make sure the ESP32 device is powered on and connected to WiFi
+                If no data appears, make sure the ESP32 device is powered on and connected to WiFi
               </p>
             </div>
             <div className="flex gap-3 mt-4">
