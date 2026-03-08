@@ -48,6 +48,15 @@ public class MqttService {
     private final AtomicLong lastHistoryInsertTime = new AtomicLong(0);
     private static final long HISTORY_THROTTLE_MS = 10_000;
 
+    // ── Cached latest boat telemetry (for REST polling fallback) ──
+    private volatile String lastBoatPayload = null;
+    private volatile long lastBoatTimestamp = 0;
+
+    /** Returns the last received boat sensor JSON payload (or null). */
+    public String getLastBoatPayload() { return lastBoatPayload; }
+    /** Returns epoch-ms of last boat message. */
+    public long getLastBoatTimestamp() { return lastBoatTimestamp; }
+
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
         try {
@@ -73,6 +82,9 @@ public class MqttService {
             // ── Boat telemetry: forward to Supabase boat_telemetry table ──
             if (topic.startsWith("koifish/boat/")) {
                 String boatDeviceId = jsonNode.has("deviceId") ? jsonNode.get("deviceId").asText() : "BOAT_ESP32_001";
+                // Cache latest payload for REST polling fallback
+                lastBoatPayload = payload;
+                lastBoatTimestamp = System.currentTimeMillis();
                 supabaseService.storeBoatTelemetry(boatDeviceId, jsonNode);
                 feedingWebSocketHandler.broadcast(payload); // also push to WS for any listeners
                 System.out.println("🚤 Boat telemetry stored for " + boatDeviceId);

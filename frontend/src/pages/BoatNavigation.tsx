@@ -89,6 +89,7 @@ const BoatNavigation: React.FC = () => {
 
   // ─── Update sensor data from any source ───
   const updateSensor = useCallback((data: Partial<SensorData>, source: 'mqtt' | 'relay' | 'supabase') => {
+    console.log(`📊 [BOAT] Data from ${source}:`, { angleX: data.angleX, angleY: data.angleY, voltage: data.voltage, temp: data.temperature });
     setSensorData(prev => ({ ...prev, ...data }));
     setDataSource(source);
     setLastUpdate(Date.now());
@@ -117,8 +118,9 @@ const BoatNavigation: React.FC = () => {
     ws.onmessage = (event) => {
       try {
         const raw = JSON.parse(event.data as string) as Record<string, unknown>;
-        // Only handle BOAT device messages
         const devId = String(raw.deviceId ?? '');
+        console.log('📨 [BOAT] WS relay msg:', devId, raw.deviceId ? '' : '(no deviceId!)', 'angleX:', raw.angleX, 'voltage:', raw.voltage);
+        // Only handle BOAT device messages
         if (!devId.startsWith('BOAT')) return;
         updateSensor(parseSensorPayload(raw), 'relay');
       } catch { /* ignore */ }
@@ -258,6 +260,35 @@ const BoatNavigation: React.FC = () => {
 
     return () => { supabase?.removeChannel(channel); };
   }, [updateSensor]);
+
+  // ═══ REST API Polling Fallback (4th source — always works if backend receives MQTT) ═══
+  useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      while (!stopped) {
+        // Only poll if no fresh data from other sources (>5s stale)
+        const freshEnough = Date.now() - lastUpdateRef.current < 5000;
+        if (!freshEnough) {
+          try {
+            const resp = await fetch(`${API_URL}/api/boat/telemetry`);
+            if (resp.ok) {
+              const raw = await resp.json();
+              // raw might be { success: false } if no data yet, or the raw sensor payload
+              if (raw && raw.deviceId) {
+                updateSensor(parseSensorPayload(raw as Record<string, unknown>), 'relay');
+                if (connectionMode === 'none') setConnectionMode('relay');
+              }
+            }
+          } catch {
+            // Silently ignore — this is a fallback
+          }
+        }
+        await new Promise(r => setTimeout(r, 3000)); // Poll every 3s
+      }
+    };
+    poll();
+    return () => { stopped = true; };
+  }, [updateSensor, parseSensorPayload, connectionMode]);
 
   // ─── Stale data detection ───
   useEffect(() => {

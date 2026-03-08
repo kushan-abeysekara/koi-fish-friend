@@ -15,6 +15,24 @@ public class BoatController {
     @Autowired
     private MqttService mqttService;
 
+    /**
+     * Returns the latest cached boat sensor data.
+     * This is a REST polling fallback for when MQTT WSS and WebSocket relay don't deliver data.
+     */
+    @GetMapping("/telemetry")
+    public ResponseEntity<?> getLatestTelemetry() {
+        String payload = mqttService.getLastBoatPayload();
+        if (payload == null) {
+            return ResponseEntity.ok(Map.of(
+                "success", false,
+                "message", "No boat telemetry received yet",
+                "mqttConnected", mqttService.isConnected()
+            ));
+        }
+        // Return raw JSON payload as-is (same format as MQTT/WS relay)
+        return ResponseEntity.ok().header("Content-Type", "application/json").body(payload);
+    }
+
     @PostMapping("/command")
     public ResponseEntity<?> sendBoatCommand(@RequestBody Map<String, Object> command) {
         try {
