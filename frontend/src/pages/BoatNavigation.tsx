@@ -1,29 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video, Activity } from 'lucide-react';
-import mqtt from 'mqtt';
 import MediaMTXCameraFeed from '../components/MediaMTXCameraFeed';
 import BoatTilt3D from '../components/BoatTilt3D';
 import { supabase, supabasePgQuery } from '../services/supabase';
 
 // ═══════════════════════════════════════════════════════════════════
-// CONNECTION STRATEGY (SPEED-OPTIMIZED):
-//   1. Supabase Realtime (PRIMARY) — postgres_changes on boat_telemetry
-//   2. REST polling every 2s on /api/boat/telemetry (GUARANTEED fallback)
-//   3. Backend WebSocket relay /ws/feeding (bonus — if connected)
-//   4. Direct MQTT WSS (bonus — if Traefik proxy works)
-//   Commands always sent via backend REST API (reliable TCP→MQTT relay)
+// DATA STRATEGY:
+//   Display: Supabase Realtime (PRIMARY) + REST polling (FALLBACK)
+//   Commands: REST API → Backend → MQTT → ESP32
+//   ESP32 → EMQX → Backend → Supabase DB → Frontend (Realtime)
 // ═══════════════════════════════════════════════════════════════════
 
-const MQTT_DIRECT_URL: string =
-  (import.meta.env.VITE_MQTT_WS_URL as string) || 'wss://mqtt.koifishfriend.online/mqtt';
-const MQTT_USER = 'admin';
-const MQTT_PASSWORD = 'admin1234';
-
-// Backend REST + WebSocket
+// Backend REST API (for commands + polling fallback)
 const API_URL: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
-const BACKEND_WS_URL: string = API_URL
-  .replace('https://', 'wss://')
-  .replace('http://', 'ws://') + '/ws/feeding';
 
 // Supabase table
 const BOAT_TABLE = 'boat_telemetry';
@@ -55,15 +44,11 @@ const BoatNavigation: React.FC = () => {
   const [speed, setSpeed] = useState(150);
   const [isConnected, setIsConnected] = useState(false);
   const [currentCommand, setCurrentCommand] = useState('STOP');
-  const [mqttConnected, setMqttConnected] = useState(false);
-  const [connectionMode, setConnectionMode] = useState<'mqtt' | 'relay' | 'supabase' | 'none'>('none');
+  const [supabaseConnected, setSupabaseConnected] = useState(false);
+  const [connectionMode, setConnectionMode] = useState<'supabase' | 'rest' | 'none'>('none');
   const [sensorData, setSensorData] = useState<SensorData>(DEFAULT_SENSOR);
-  const [dataSource, setDataSource] = useState<'mqtt' | 'relay' | 'supabase' | 'none'>('none');
+  const [dataSource, setDataSource] = useState<'supabase' | 'rest' | 'none'>('none');
   const [lastUpdate, setLastUpdate] = useState<number>(0);
-  const mqttRef = useRef<mqtt.MqttClient | null>(null);
-  const backendWsRef = useRef<WebSocket | null>(null);
-  const mqttTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const connectedRef = useRef(false);
   const lastUpdateRef = useRef<number>(0);
 
   // Keep refs in sync
@@ -88,7 +73,7 @@ const BoatNavigation: React.FC = () => {
   }), []);
 
   // ─── Update sensor data from any source ───
-  const updateSensor = useCallback((data: Partial<SensorData>, source: 'mqtt' | 'relay' | 'supabase') => {
+  const updateSensor = useCallback((data: Partial<SensorData>, source: 'supabase' | 'rest') => {
     console.log(`📊 [BOAT] Data from ${source}:`, { angleX: data.angleX, angleY: data.angleY, voltage: data.voltage, temp: data.temperature });
     setSensorData(prev => ({ ...prev, ...data }));
     setDataSource(source);
@@ -96,139 +81,6 @@ const BoatNavigation: React.FC = () => {
     setIsConnected(true);
     if (data.command) setCurrentCommand(data.command);
   }, []);
-
-  // ═══ BACKEND WebSocket RELAY (fallback — always works) ═══
-  const connectBackendRelay = useCallback(() => {
-    if (backendWsRef.current) {
-      backendWsRef.current.close();
-      backendWsRef.current = null;
-    }
-    console.log('🔌 [BOAT] Connecting to backend WS relay:', BACKEND_WS_URL);
-
-    const ws = new WebSocket(BACKEND_WS_URL);
-    backendWsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('✅ [BOAT] Backend WS relay connected');
-      connectedRef.current = true;
-      setMqttConnected(true);
-      setConnectionMode('relay');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const raw = JSON.parse(event.data as string) as Record<string, unknown>;
-        const devId = String(raw.deviceId ?? '');
-        // Skip non-boat messages
-        if (!devId.startsWith('BOAT')) return;
-        // Skip heartbeat messages (they have "type":"heartbeat" but no sensor data)
-        if (raw.type === 'heartbeat') {
-          console.log('💓 [BOAT] Heartbeat from', devId, 'rssi:', raw.rssi);
-          return;
-        }
-        console.log('📨 [BOAT] Sensor data via relay:', 'angleX:', raw.angleX, 'angleY:', raw.angleY, 'V:', raw.voltage, 'T:', raw.temperature);
-        updateSensor(parseSensorPayload(raw), 'relay');
-      } catch { /* ignore */ }
-    };
-
-    ws.onclose = () => {
-      console.warn('🔌 [BOAT] Backend WS relay disconnected, retrying in 5s...');
-      connectedRef.current = false;
-      setMqttConnected(false);
-      setConnectionMode('none');
-      setIsConnected(false);
-      setTimeout(connectBackendRelay, 5000);
-    };
-
-    ws.onerror = (err) => {
-      console.error('❌ [BOAT] Backend WS relay error:', err);
-    };
-  }, [updateSensor, parseSensorPayload]);
-
-  // ═══ MQTT Direct WSS (primary — may fail if Traefik proxy not configured) ═══
-  useEffect(() => {
-    // If page is HTTPS and MQTT URL is ws://, skip direct MQTT — go to relay
-    const isPageHttps = window.location.protocol === 'https:';
-    const isMqttInsecure = MQTT_DIRECT_URL.startsWith('ws://');
-    if (isPageHttps && isMqttInsecure) {
-      console.log('🔒 [BOAT] Page is HTTPS — skipping insecure ws:// MQTT, using backend relay');
-      connectBackendRelay();
-      return () => {
-        if (backendWsRef.current) backendWsRef.current.close();
-      };
-    }
-
-    console.log('🌐 [BOAT] Trying direct MQTT:', MQTT_DIRECT_URL);
-
-    const client = mqtt.connect(MQTT_DIRECT_URL, {
-      clientId: 'BoatNav_' + Math.random().toString(16).substr(2, 8),
-      clean: true,
-      keepalive: 30,
-      reconnectPeriod: 0, // Disable auto-reconnect — we handle fallback manually
-      connectTimeout: 8000,
-      username: MQTT_USER,
-      password: MQTT_PASSWORD,
-    });
-    mqttRef.current = client;
-
-    // If no CONNACK within 8 seconds → kill MQTT, fall back to backend relay
-    mqttTimeoutRef.current = setTimeout(() => {
-      if (!connectedRef.current) {
-        console.warn('⏱️ [BOAT] MQTT direct timeout — switching to backend WS relay');
-        client.end(true);
-        mqttRef.current = null;
-        connectBackendRelay();
-      }
-    }, 8000);
-
-    client.on('connect', () => {
-      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
-      console.log('✅ [BOAT] Direct MQTT connected');
-      connectedRef.current = true;
-      setMqttConnected(true);
-      setConnectionMode('mqtt');
-      client.subscribe(['koifish/boat/sensor', 'koifish/boat/status'], { qos: 0 });
-    });
-
-    client.on('message', (_topic: string, message: Buffer) => {
-      try {
-        const raw = JSON.parse(message.toString()) as Record<string, unknown>;
-        // Skip heartbeats — only process sensor data
-        if (raw.type === 'heartbeat') return;
-        updateSensor(parseSensorPayload(raw), 'mqtt');
-      } catch { /* ignore */ }
-    });
-
-    client.on('error', (err) => {
-      console.error('❌ [BOAT] MQTT error:', err);
-      if (!connectedRef.current) {
-        // First-time connection failed — switch to relay
-        if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
-        client.end(true);
-        mqttRef.current = null;
-        connectBackendRelay();
-      }
-    });
-
-    client.on('close', () => {
-      connectedRef.current = false;
-      setMqttConnected(false);
-      setConnectionMode('none');
-    });
-
-    return () => {
-      if (mqttTimeoutRef.current) clearTimeout(mqttTimeoutRef.current);
-      if (client.connected) {
-        client.publish('koifish/boat/command', JSON.stringify({ command: 'STOP', speed: 0 }), { qos: 0 });
-      }
-      client.end(true);
-      mqttRef.current = null;
-      if (backendWsRef.current) {
-        backendWsRef.current.close();
-        backendWsRef.current = null;
-      }
-    };
-  }, [updateSensor, parseSensorPayload, connectBackendRelay]);
 
   // ═══ Supabase Realtime (PRIMARY data source — fastest) ═══
   useEffect(() => {
@@ -298,35 +150,38 @@ const BoatNavigation: React.FC = () => {
       )
       .subscribe((status) => {
         console.log('📡 [BOAT] Supabase Realtime status:', status);
+        if (status === 'SUBSCRIBED') {
+          setSupabaseConnected(true);
+          setConnectionMode('supabase');
+        }
       });
 
     return () => { supabase?.removeChannel(channel); };
   }, [updateSensor]);
 
-  // ═══ REST API Polling (GUARANTEED fallback — every 2s, always works) ═══
+  // ═══ REST API Polling (FALLBACK — every 3s when Supabase data is stale) ═══
   useEffect(() => {
     let stopped = false;
     const poll = async () => {
       while (!stopped) {
-        // Poll if no fresh data from Supabase/WS/MQTT (>3s stale)
-        const freshEnough = Date.now() - lastUpdateRef.current < 3000;
+        // Poll only if no fresh data from Supabase (>4s stale)
+        const freshEnough = Date.now() - lastUpdateRef.current < 4000;
         if (!freshEnough) {
           try {
             const resp = await fetch(`${API_URL}/api/boat/telemetry`);
             if (resp.ok) {
               const raw = await resp.json();
-              // raw is the sensor payload directly (has deviceId, voltage, angleX, etc.)
               if (raw && raw.deviceId && raw.voltage !== undefined) {
-                console.log('🔄 [BOAT] REST poll data:', { voltage: raw.voltage, angleX: raw.angleX, angleY: raw.angleY });
-                updateSensor(parseSensorPayload(raw as Record<string, unknown>), 'relay');
-                if (connectionMode === 'none') setConnectionMode('relay');
+                console.log('🔄 [BOAT] REST fallback poll:', { voltage: raw.voltage, angleX: raw.angleX, angleY: raw.angleY });
+                updateSensor(parseSensorPayload(raw as Record<string, unknown>), 'rest');
+                if (connectionMode === 'none') setConnectionMode('rest');
               }
             }
           } catch {
             // Silently ignore — this is a fallback
           }
         }
-        await new Promise(r => setTimeout(r, 2000)); // Poll every 2s
+        await new Promise(r => setTimeout(r, 3000)); // Poll every 3s
       }
     };
     poll();
@@ -342,34 +197,27 @@ const BoatNavigation: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // ─── Send Command via Backend REST API (always reliable — backend relays via TCP MQTT) ───
+  // ─── Send Command via Backend REST API → MQTT → ESP32 ───
   const sendCommand = useCallback((command: string) => {
     setCurrentCommand(command);
-
-    // Primary: Backend REST API → backend publishes to EMQX via TCP 1883 (always works)
     fetch(`${API_URL}/api/boat/command`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command, speed }),
     })
-      .then(() => console.log('🌐 REST→MQTT Command:', command, speed))
-      .catch(err => {
-        console.error('REST failed, trying direct MQTT:', err);
-        // Fallback: try direct MQTT if REST fails
-        if (mqttRef.current?.connected) {
-          mqttRef.current.publish('koifish/boat/command',
-            JSON.stringify({ command, speed, timestamp: Date.now() }), { qos: 0 });
-          console.log('📡 Direct MQTT Command:', command, speed);
-        }
-      });
+      .then(() => console.log('🚀 Command sent:', command, 'speed:', speed))
+      .catch(err => console.error('❌ Command failed:', err));
   }, [speed]);
 
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newSpeed = parseInt(e.target.value);
     setSpeed(newSpeed);
-    if (mqttRef.current?.connected) {
-      mqttRef.current.publish('koifish/boat/command', JSON.stringify({ command: 'SPEED', speed: newSpeed }), { qos: 0 });
-    }
+    // Send speed update via REST → MQTT
+    fetch(`${API_URL}/api/boat/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'SPEED', speed: newSpeed }),
+    }).catch(() => {});
   };
 
   const handleEmergencyStop = () => {
@@ -433,22 +281,21 @@ const BoatNavigation: React.FC = () => {
           <div className="flex items-center gap-3">
             {/* Connection Mode */}
             <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
-              mqttConnected 
+              supabaseConnected || isConnected
                 ? 'bg-green-50 border-green-200' 
                 : 'bg-red-50 border-red-200 animate-pulse'
             }`}>
-              {mqttConnected ? <Wifi className="text-green-500 w-5 h-5" /> : <WifiOff className="text-red-500 w-5 h-5" />}
+              {supabaseConnected || isConnected ? <Wifi className="text-green-500 w-5 h-5" /> : <WifiOff className="text-red-500 w-5 h-5" />}
               <div>
-                <div className={`font-semibold text-sm ${mqttConnected ? 'text-green-600' : 'text-red-500'}`}>
-                  {connectionMode === 'mqtt' ? '🌐 MQTT Direct' 
-                    : connectionMode === 'relay' ? '🔌 Backend Relay' 
-                    : connectionMode === 'supabase' ? '☁️ Supabase'
+                <div className={`font-semibold text-sm ${supabaseConnected || isConnected ? 'text-green-600' : 'text-red-500'}`}>
+                  {connectionMode === 'supabase' ? '☁️ Supabase Realtime'
+                    : connectionMode === 'rest' ? '🔄 REST Polling'
                     : 'Connecting...'}
                 </div>
                 <div className="text-xs text-gray-500">
-                  {connectionMode === 'mqtt' ? 'WSS → EMQX' 
-                    : connectionMode === 'relay' ? 'WS → Backend → EMQX' 
-                    : connectionMode === 'none' ? 'Trying connections...' : 'Supabase RT'}
+                  {connectionMode === 'supabase' ? 'Live DB Updates' 
+                    : connectionMode === 'rest' ? 'Polling every 3s'
+                    : 'Waiting for data...'}
                 </div>
               </div>
             </div>
@@ -585,7 +432,7 @@ const BoatNavigation: React.FC = () => {
                 💡 Click once to move continuously. Click STOP (red) to halt.
               </p>
               <p className="text-xs text-blue-600 mt-1">
-                Commands sent via Backend REST → EMQX TCP → ESP32
+                Commands: REST → Backend → MQTT → ESP32 | Data: Supabase Realtime
               </p>
             </div>
           </div>
@@ -608,7 +455,7 @@ const BoatNavigation: React.FC = () => {
               <StatusRow label="Mode" value={sensorData.mode} valueClass="text-gray-800 capitalize" />
               <StatusRow label="Voltage" value={`${sensorData.voltage.toFixed(1)}V`} valueClass={sensorData.voltage > 5.5 ? 'text-green-600' : 'text-red-500'} />
               <StatusRow label="Motors" value={`L:${sensorData.motorLeft} R:${sensorData.motorRight}`} valueClass="text-gray-700" />
-              <StatusRow label="Data Via" value={connectionMode === 'mqtt' ? 'MQTT WSS Direct' : connectionMode === 'relay' ? 'Backend WS Relay' : connectionMode === 'supabase' ? 'Supabase Realtime' : '—'} valueClass="text-blue-500" />
+              <StatusRow label="Data Via" value={connectionMode === 'supabase' ? 'Supabase Realtime' : connectionMode === 'rest' ? 'REST Polling' : '—'} valueClass="text-blue-500" />
 
               {/* Obstacle Distances */}
               <div className="border-t pt-3 mt-3">
