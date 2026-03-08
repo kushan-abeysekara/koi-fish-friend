@@ -119,9 +119,14 @@ const BoatNavigation: React.FC = () => {
       try {
         const raw = JSON.parse(event.data as string) as Record<string, unknown>;
         const devId = String(raw.deviceId ?? '');
-        console.log('📨 [BOAT] WS relay msg:', devId, raw.deviceId ? '' : '(no deviceId!)', 'angleX:', raw.angleX, 'voltage:', raw.voltage);
-        // Only handle BOAT device messages
+        // Skip non-boat messages
         if (!devId.startsWith('BOAT')) return;
+        // Skip heartbeat messages (they have "type":"heartbeat" but no sensor data)
+        if (raw.type === 'heartbeat') {
+          console.log('💓 [BOAT] Heartbeat from', devId, 'rssi:', raw.rssi);
+          return;
+        }
+        console.log('📨 [BOAT] Sensor data via relay:', 'angleX:', raw.angleX, 'angleY:', raw.angleY, 'V:', raw.voltage, 'T:', raw.temperature);
         updateSensor(parseSensorPayload(raw), 'relay');
       } catch { /* ignore */ }
     };
@@ -188,6 +193,8 @@ const BoatNavigation: React.FC = () => {
     client.on('message', (_topic: string, message: Buffer) => {
       try {
         const raw = JSON.parse(message.toString()) as Record<string, unknown>;
+        // Skip heartbeats — only process sensor data
+        if (raw.type === 'heartbeat') return;
         updateSensor(parseSensorPayload(raw), 'mqtt');
       } catch { /* ignore */ }
     });

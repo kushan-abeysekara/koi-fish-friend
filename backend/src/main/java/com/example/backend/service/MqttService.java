@@ -79,15 +79,24 @@ public class MqttService {
 
             JsonNode jsonNode = objectMapper.readTree(payload);
 
-            // ── Boat telemetry: forward to Supabase boat_telemetry table ──
+            // ── Boat telemetry: forward to Supabase + WS relay ──
             if (topic.startsWith("koifish/boat/")) {
                 String boatDeviceId = jsonNode.has("deviceId") ? jsonNode.get("deviceId").asText() : "BOAT_ESP32_001";
-                // Cache latest payload for REST polling fallback
-                lastBoatPayload = payload;
-                lastBoatTimestamp = System.currentTimeMillis();
-                supabaseService.storeBoatTelemetry(boatDeviceId, jsonNode);
-                feedingWebSocketHandler.broadcast(payload); // also push to WS for any listeners
-                System.out.println("🚤 Boat telemetry stored for " + boatDeviceId);
+                boolean isSensorData = topic.endsWith("/sensor");
+                
+                if (isSensorData) {
+                    // Only cache SENSOR data (not heartbeats) for REST polling
+                    lastBoatPayload = payload;
+                    lastBoatTimestamp = System.currentTimeMillis();
+                    supabaseService.storeBoatTelemetry(boatDeviceId, jsonNode);
+                    System.out.println("🚤 Boat SENSOR data stored for " + boatDeviceId + 
+                        " | angleX=" + jsonNode.path("angleX").asDouble() + 
+                        " voltage=" + jsonNode.path("voltage").asDouble());
+                } else {
+                    System.out.println("🚤 Boat STATUS/heartbeat from " + boatDeviceId);
+                }
+                // Broadcast ALL boat messages — frontend filters by content
+                feedingWebSocketHandler.broadcast(payload);
                 return;
             }
 
