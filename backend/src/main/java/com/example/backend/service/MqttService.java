@@ -69,6 +69,16 @@ public class MqttService {
             System.out.println("Payload: " + payload);
 
             JsonNode jsonNode = objectMapper.readTree(payload);
+
+            // ── Boat telemetry: forward to Supabase boat_telemetry table ──
+            if (topic.startsWith("koifish/boat/")) {
+                String boatDeviceId = jsonNode.has("deviceId") ? jsonNode.get("deviceId").asText() : "BOAT_ESP32_001";
+                supabaseService.storeBoatTelemetry(boatDeviceId, jsonNode);
+                feedingWebSocketHandler.broadcast(payload); // also push to WS for any listeners
+                System.out.println("🚤 Boat telemetry stored for " + boatDeviceId);
+                return;
+            }
+
             String deviceId = jsonNode.get("deviceId").asText();
 
             if (topic.contains("/status")) {

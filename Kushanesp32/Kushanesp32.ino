@@ -19,8 +19,7 @@
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <WebSocketsServer.h>  // Hybrid: Local WebSocket for same network
-#include <ArduinoJson.h>       // JSON parsing for both MQTT and WebSocket
+#include <ArduinoJson.h>       // JSON parsing for MQTT
 
 // ==================== PIN DEFINITIONS ====================
 
@@ -100,12 +99,9 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_MOSI, OLED_CLK,
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-WebSocketsServer wsServer(81);  // WebSocket on port 81 for local direct communication
 
-// Hybrid Communication Stats
-int wsConnectedClients = 0;
+// Communication Stats
 bool mqttConnected = false;
-String lastCommandSource = "none";  // "mqtt" or "websocket"
 unsigned long lastWiFiCheck = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 
@@ -267,20 +263,13 @@ void setup() {
   mqttClient.setKeepAlive(15);  // Faster keepalive for quick disconnection detection
   mqttClient.setSocketTimeout(5);  // 5 second socket timeout
   
-  // Setup WebSocket server for hybrid local communication
-  wsServer.begin();
-  wsServer.onEvent(webSocketEvent);
-  Serial.println("✓ WebSocket server started on port 81");
-  Serial.print("  Local access: ws://");
-  Serial.println(WiFi.localIP());
-  
   // Initialize safety timers
   lastHeartbeat = millis();
   lastWiFiCheck = millis();
   
   Serial.println("Initialization complete!");
   Serial.println("Mode: Continuous movement - no watchdog");
-  Serial.println("Hybrid Mode: MQTT + WebSocket (local network)");
+  Serial.println("MQTT Only Mode (Self-hosted EMQX)");
   Serial.println("========================================");
 }
 
@@ -288,9 +277,6 @@ void setup() {
 
 void loop() {
   unsigned long currentMillis = millis();
-  
-  // WebSocket server loop - handle local connections
-  wsServer.loop();
   
   // Maintain WiFi connection with periodic checks
   if (currentMillis - lastWiFiCheck >= WIFI_CHECK_INTERVAL) {
@@ -334,7 +320,6 @@ void loop() {
     printSensorData();
     updateDisplay();
     publishSensorData();        // MQTT publishing
-    broadcastSensorDataWS();    // WebSocket broadcasting (hybrid)
   }
   
   // Control relay based on voltage
@@ -786,10 +771,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("📨 MQTT: ");
   Serial.println(message);
   
-  // Mark command source
-  lastCommandSource = "mqtt";
-  
-  // Use unified command processor
+  // Process the command
   processCommand(message);
 }
 
@@ -852,60 +834,12 @@ void publishSensorData() {
   mqttClient.publish(mqtt_topic_sensor, sensorData.c_str());
 }
 
-// ==================== WEBSOCKET FUNCTIONS (HYBRID MODE) ====================
+// ==================== COMMAND PROCESSOR (MQTT ONLY) ====================
 
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  switch(type) {
-    case WStype_DISCONNECTED:
-      Serial.printf("[WS] Client #%u disconnected\n", num);
-      wsConnectedClients = max(0, wsConnectedClients - 1);
-      Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
-      break;
-      
-    case WStype_CONNECTED: {
-      IPAddress ip = wsServer.remoteIP(num);
-      Serial.printf("[WS] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-      wsConnectedClients++;
-      Serial.printf("[WS] Active clients: %d\n", wsConnectedClients);
-      
-      // Send initial status
-      String status = "{\"status\":\"connected\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"mode\":\"hybrid\"}";
-      wsServer.sendTXT(num, status);
-      break;
-    }
-      
-    case WStype_TEXT: {
-      String message = String((char*)payload);
-      Serial.printf("[WS] Command from #%u: %s\n", num, message.c_str());
-      
-      // Mark command source
-      lastCommandSource = "websocket";
-      
-      // Process command (same format as MQTT)
-      processCommand(message);
-      
-      // Send acknowledgment
-      String ack = "{\"ack\":true,\"command\":\"" + currentCommand + "\"}";
-      wsServer.sendTXT(num, ack);
-      break;
-    }
-      
-    case WStype_BIN:
-    case WStype_ERROR:
-    case WStype_FRAGMENT_TEXT_START:
-    case WStype_FRAGMENT_BIN_START:
-    case WStype_FRAGMENT:
-    case WStype_FRAGMENT_FIN:
-      break;
-  }
-}
-
-// Unified command processor for both MQTT and WebSocket
 void processCommand(String message) {
   // Parse JSON command: {"command":"FORWARD","speed":128}
   if (message.indexOf("HEARTBEAT") > -1) {
-    // Just a keepalive ping - update timer only
-    Serial.println("💓 Heartbeat [" + lastCommandSource + "]");
+    Serial.println("💓 Heartbeat received via MQTT");
   } else if (message.indexOf("FORWARD") > -1) {
     autoMode = false;
     extractSpeed(message);
@@ -933,42 +867,16 @@ void processCommand(String message) {
   } else if (message.indexOf("STOP") > -1) {
     autoMode = false;
     stopMotors();
+  } else if (message.indexOf("SPEED") > -1) {
+    extractSpeed(message);
+    Serial.print("Speed updated to: ");
+    Serial.println(remoteSpeed);
   } else if (message.indexOf("AUTO") > -1) {
     autoMode = true;
-    Serial.println("🤖 Auto mode enabled [" + lastCommandSource + "]");
+    Serial.println("🤖 Auto mode enabled");
   } else if (message.indexOf("MANUAL") > -1) {
     autoMode = false;
     stopMotors();
-    Serial.println("🎮 Manual mode enabled [" + lastCommandSource + "]");
+    Serial.println("🎮 Manual mode enabled");
   }
 }
-
-// Broadcast sensor data to all WebSocket clients
-void broadcastSensorDataWS() {
-  if (wsConnectedClients == 0) return;
-  
-  // Create JSON sensor data
-  StaticJsonDocument<512> doc;
-  doc["deviceId"] = deviceId;
-  doc["voltage"] = round(voltage * 100) / 100.0;
-  doc["distanceFront"] = round(distanceFront * 10) / 10.0;
-  doc["distanceBack"] = round(distanceBack * 10) / 10.0;
-  doc["distanceLeft"] = round(distanceLeft * 10) / 10.0;
-  doc["distanceRight"] = round(distanceRight * 10) / 10.0;
-  doc["angleX"] = round(angleX * 100) / 100.0;
-  doc["angleY"] = round(angleY * 100) / 100.0;
-  doc["temperature"] = round(temperature * 100) / 100.0;
-  doc["motorLeft"] = motorLeftSpeed;
-  doc["motorRight"] = motorRightSpeed;
-  doc["command"] = currentCommand;
-  doc["mode"] = autoMode ? "auto" : "manual";
-  doc["connected"] = true;
-  doc["rssi"] = WiFi.RSSI();
-  doc["wsClients"] = wsConnectedClients;
-  doc["source"] = lastCommandSource;
-  
-  String output;
-  serializeJson(doc, output);
-  wsServer.broadcastTXT(output);
-}
-

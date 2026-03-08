@@ -24,7 +24,9 @@ public class MqttConfig {
     private static final String[] TOPICS = {
             "koi/sensors/+/data",
             "koi/sensors/+/status",
-            "koi/devices/+/feeding/status" // Subscribe to feeding device status
+            "koi/devices/+/feeding/status", // Subscribe to feeding device status
+            "koifish/boat/sensor",           // Boat telemetry data from ESP32
+            "koifish/boat/status"            // Boat heartbeat / connection status
     };
 
     @Bean

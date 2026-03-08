@@ -142,7 +142,28 @@ public class SupabaseService {
 
                 // Enable Realtime on live tables
                 "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
-                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live"
+                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live",
+
+                // Boat: live telemetry (one row per device, upserted every 500ms)
+                "CREATE TABLE IF NOT EXISTS boat_telemetry (" +
+                        "  device_id       TEXT PRIMARY KEY," +
+                        "  voltage         FLOAT   DEFAULT 0," +
+                        "  distance_front  FLOAT   DEFAULT 0," +
+                        "  distance_back   FLOAT   DEFAULT 0," +
+                        "  distance_left   FLOAT   DEFAULT 0," +
+                        "  distance_right  FLOAT   DEFAULT 0," +
+                        "  angle_x         FLOAT   DEFAULT 0," +
+                        "  angle_y         FLOAT   DEFAULT 0," +
+                        "  temperature     FLOAT   DEFAULT 0," +
+                        "  motor_left      INT     DEFAULT 0," +
+                        "  motor_right     INT     DEFAULT 0," +
+                        "  command         TEXT    DEFAULT 'STOP'," +
+                        "  mode            TEXT    DEFAULT 'manual'," +
+                        "  rssi            INT     DEFAULT 0," +
+                        "  connected       BOOLEAN DEFAULT TRUE," +
+                        "  updated_at      TIMESTAMPTZ DEFAULT NOW()" +
+                        ")",
+                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS boat_telemetry"
         };
 
         for (String sql : ddls) {
@@ -154,7 +175,7 @@ public class SupabaseService {
                 System.out.println("[Supabase] ℹ️ DDL note: " + e.getMessage());
             }
         }
-        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history)");
+        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history, boat_telemetry)");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -693,5 +714,57 @@ public class SupabaseService {
                 throw new RuntimeException(ex);
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Boat Telemetry - UPSERT live reading to boat_telemetry table
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Upsert boat telemetry data into boat_telemetry table.
+     * Uses ON CONFLICT (device_id) DO UPDATE so there is always one live row per boat.
+     * Called from MqttService when messages arrive on koifish/boat/sensor or koifish/boat/status.
+     */
+    public void storeBoatTelemetry(String deviceId, JsonNode data) {
+        if (!enabled || httpClient == null) return;
+
+        executor.submit(() -> {
+            try {
+                double voltage       = data.has("voltage")       ? data.get("voltage").asDouble()       : 0;
+                double distFront     = data.has("distanceFront") ? data.get("distanceFront").asDouble() : 0;
+                double distBack      = data.has("distanceBack")  ? data.get("distanceBack").asDouble()  : 0;
+                double distLeft      = data.has("distanceLeft")  ? data.get("distanceLeft").asDouble()  : 0;
+                double distRight     = data.has("distanceRight") ? data.get("distanceRight").asDouble() : 0;
+                double angleX        = data.has("angleX")        ? data.get("angleX").asDouble()        : 0;
+                double angleY        = data.has("angleY")        ? data.get("angleY").asDouble()        : 0;
+                double temperature   = data.has("temperature")   ? data.get("temperature").asDouble()   : 0;
+                int    motorLeft     = data.has("motorLeft")     ? data.get("motorLeft").asInt()        : 0;
+                int    motorRight    = data.has("motorRight")    ? data.get("motorRight").asInt()       : 0;
+                String command       = data.has("command")       ? data.get("command").asText()         : "STOP";
+                String mode          = data.has("mode")          ? data.get("mode").asText()            : "manual";
+                int    rssi          = data.has("rssi")          ? data.get("rssi").asInt()             : 0;
+                boolean connected    = data.has("connected")     ? data.get("connected").asBoolean()    : true;
+
+                String sql = String.format(
+                    "INSERT INTO boat_telemetry " +
+                    "(device_id, voltage, distance_front, distance_back, distance_left, distance_right, " +
+                    " angle_x, angle_y, temperature, motor_left, motor_right, command, mode, rssi, connected, updated_at) " +
+                    "VALUES ('%s', %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %d, %d, '%s', '%s', %d, %b, NOW()) " +
+                    "ON CONFLICT (device_id) DO UPDATE SET " +
+                    " voltage=EXCLUDED.voltage, distance_front=EXCLUDED.distance_front, " +
+                    " distance_back=EXCLUDED.distance_back, distance_left=EXCLUDED.distance_left, " +
+                    " distance_right=EXCLUDED.distance_right, angle_x=EXCLUDED.angle_x, angle_y=EXCLUDED.angle_y, " +
+                    " temperature=EXCLUDED.temperature, motor_left=EXCLUDED.motor_left, motor_right=EXCLUDED.motor_right, " +
+                    " command=EXCLUDED.command, mode=EXCLUDED.mode, rssi=EXCLUDED.rssi, connected=EXCLUDED.connected, " +
+                    " updated_at=NOW()",
+                    deviceId.replace("'", ""), voltage, distFront, distBack, distLeft, distRight,
+                    angleX, angleY, temperature, motorLeft, motorRight,
+                    command.replace("'", ""), mode.replace("'", ""), rssi, connected);
+
+                executePgQuery(sql);
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Failed to store boat telemetry: " + e.getMessage());
+            }
+        });
     }
 }
