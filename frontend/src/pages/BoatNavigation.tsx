@@ -425,12 +425,19 @@ const BoatNavigation: React.FC = () => {
             </div>
           </div>
 
-          {/* 3D Boat Tilt Visualization */}
+          {/* 3D Boat Tilt + Radar Obstacle Visualization */}
           <BoatTilt3D
             angleX={sensorData.angleX}
             angleY={sensorData.angleY}
             temperature={sensorData.temperature}
             voltage={sensorData.voltage}
+            distanceFront={sensorData.distanceFront}
+            distanceBack={sensorData.distanceBack}
+            distanceLeft={sensorData.distanceLeft}
+            distanceRight={sensorData.distanceRight}
+            motorLeft={sensorData.motorLeft}
+            motorRight={sensorData.motorRight}
+            command={sensorData.command}
           />
         </div>
 
