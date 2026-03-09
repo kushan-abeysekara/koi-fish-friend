@@ -29,15 +29,16 @@
 const char *ssid = "KoiFishFriend";
 const char *password = "FiberTarget255";
 
-// Static IP Configuration for Water Quality Device
-IPAddress local_IP(192, 168, 8, 102);
-IPAddress gateway(192, 168, 8, 1);
-IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(8, 8, 8, 8);
-IPAddress secondaryDNS(8, 8, 4, 4);
+// Static IP disabled — using DHCP like the feed device (which works reliably)
+// If you need a fixed IP, set a DHCP reservation on the router instead.
+// IPAddress local_IP(192, 168, 8, 102);
+// IPAddress gateway(192, 168, 8, 1);
+// IPAddress subnet(255, 255, 255, 0);
+// IPAddress primaryDNS(192, 168, 8, 1);
+// IPAddress secondaryDNS(8, 8, 8, 8);
 
 // ===================== SUPABASE CONFIG =====================
-// Self-hosted Supabase - pg/query endpoint for SQL UPSERT/INSERT
+// Same connection approach as the working feed device (Kushanesp32feedcode)
 const char *supabase_url = "https://superbase.koifishfriend.online/pg/query";
 const char *supabase_service_key =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -104,16 +105,8 @@ void setupWiFi()
         Serial.println("========================================");
     }
 
-    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS))
-    {
-        if (ENABLE_SERIAL)
-            Serial.println("Static IP configuration failed");
-    }
-    else
-    {
-        if (ENABLE_SERIAL)
-            Serial.println("Static IP configured: 192.168.8.102");
-    }
+    // Using DHCP (no static IP) — matches the working feed device config
+    // Static IP + WiFi.config() on ESP32 core 3.x breaks DNS/SSL
 
     if (ENABLE_SERIAL)
     {
@@ -164,7 +157,10 @@ void setupWiFi()
 
 /**
  * Execute a SQL query on Supabase via the pg/query endpoint.
+/**
+ * Execute a SQL query on Supabase via the pg/query endpoint.
  * Uses service_role key for full write access.
+ * Same pattern as the working feed device (Kushanesp32feedcode).
  * Returns true on success.
  */
 bool executeSupabaseQuery(String sql)
@@ -173,7 +169,7 @@ bool executeSupabaseQuery(String sql)
         return false;
 
     WiFiClientSecure secureClient;
-    secureClient.setInsecure(); // Skip cert validation for self-hosted Supabase
+    secureClient.setInsecure();  // Skip certificate validation for self-hosted Supabase
 
     HTTPClient http;
     http.begin(secureClient, supabase_url);
@@ -289,7 +285,7 @@ void insertSensorHistory()
 // ===============================================================
 //                  SENSOR READ FUNCTIONS
 // ===============================================================
-float readPH(int pin, int samples = 50)
+float readPH(int pin, int samples = 20)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -301,17 +297,33 @@ float readPH(int pin, int samples = 50)
         sum += reading;
         if (reading < minRaw) minRaw = reading;
         if (reading > maxRaw) maxRaw = reading;
-        delay(10);
+        delay(2);
     }
 
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
+
+    // Check if sensor is disconnected (ADC pegged at max or min)
+    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
 
     // CALIBRATED formula: shifted by -2.3 based on real measurement
     float ph = 7.0 + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_STEP) - 2.3;
 
     if (ph < 0) ph = 0;
     if (ph > 14) ph = 14;
+
+    // If sensor disconnected, return safe default (neutral pH)
+    if (disconnected)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("WARNING: pH Sensor disconnected -> using default 7.0");
+        }
+        return 7.0;
+    }
 
     // Debug every 10 seconds
     static unsigned long lastDebug = 0;
@@ -329,16 +341,10 @@ float readPH(int pin, int samples = 50)
         }
     }
 
-    if (maxRaw >= 4090 || maxRaw <= 5)
-    {
-        if (ENABLE_SERIAL)
-            Serial.println("WARNING: pH Sensor may be disconnected!");
-    }
-
     return ph;
 }
 
-float readTurbidity(int pin, int samples = 50)
+float readTurbidity(int pin, int samples = 20)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -350,11 +356,25 @@ float readTurbidity(int pin, int samples = 50)
         sum += reading;
         if (reading < minRaw) minRaw = reading;
         if (reading > maxRaw) maxRaw = reading;
-        delay(10);
+        delay(2);
     }
 
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
+
+    // Check if sensor is disconnected
+    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
+    if (disconnected)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("WARNING: Turbidity Sensor disconnected -> using default 0.0 NTU");
+        }
+        return 0.0; // Clear water default
+    }
 
     float ntu = 0;
     if (voltage > 2.5)
@@ -369,16 +389,10 @@ float readTurbidity(int pin, int samples = 50)
     if (ntu < 0) ntu = 0;
     if (ntu > TURBIDITY_MAX_NTU) ntu = TURBIDITY_MAX_NTU;
 
-    if (maxRaw >= 4090 || maxRaw <= 5)
-    {
-        if (ENABLE_SERIAL)
-            Serial.println("WARNING: Turbidity Sensor may be disconnected!");
-    }
-
     return ntu;
 }
 
-float readCO2(int pin, int samples = 50)
+float readCO2(int pin, int samples = 20)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -390,11 +404,25 @@ float readCO2(int pin, int samples = 50)
         sum += reading;
         if (reading < minRaw) minRaw = reading;
         if (reading > maxRaw) maxRaw = reading;
-        delay(10);
+        delay(2);
     }
 
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
+
+    // Check if sensor is disconnected
+    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
+    if (disconnected)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("WARNING: MQ135 Sensor disconnected -> using default 400 PPM");
+        }
+        return 400.0; // Normal atmospheric CO2
+    }
 
     float ppm = 400.0;
     if (voltage > 0.4)
@@ -406,16 +434,10 @@ float readCO2(int pin, int samples = 50)
     if (ppm < 400) ppm = 400;
     if (ppm > 5000) ppm = 5000;
 
-    if (maxRaw >= 4090 || maxRaw <= 5)
-    {
-        if (ENABLE_SERIAL)
-            Serial.println("WARNING: MQ135 Sensor may be disconnected!");
-    }
-
     return ppm;
 }
 
-float readAmmonia(int pin, int samples = 50)
+float readAmmonia(int pin, int samples = 20)
 {
     unsigned long sum = 0;
     int minRaw = 4095;
@@ -427,11 +449,25 @@ float readAmmonia(int pin, int samples = 50)
         sum += reading;
         if (reading < minRaw) minRaw = reading;
         if (reading > maxRaw) maxRaw = reading;
-        delay(10);
+        delay(2);
     }
 
     float avgReading = sum / (float)samples;
     float voltage = (avgReading / ADC_MAX) * V_REF;
+
+    // Check if sensor is disconnected
+    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
+    if (disconnected)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("WARNING: NH3 Sensor disconnected -> using default 0.0 PPM");
+        }
+        return 0.0;
+    }
 
     float ppm = 0.0;
 
@@ -580,10 +616,33 @@ void setup()
 
     if (ENABLE_SERIAL)
     {
+        Serial.print("\n[Network] WiFi IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("[Network] DNS: ");
+        Serial.println(WiFi.dnsIP());
+    }
+
+    // Test connection with a simple query (same as feed device)
+    if (ENABLE_SERIAL)
+    {
+        Serial.println("[Setup] Testing Supabase connection...");
+    }
+    bool testOk = executeSupabaseQuery("SELECT 1");
+    if (ENABLE_SERIAL)
+    {
+        Serial.print("[Setup] Supabase test: ");
+        Serial.println(testOk ? "OK" : "FAILED");
+    }
+
+    if (ENABLE_SERIAL)
+    {
         Serial.println("\n========================================");
         Serial.println("Setup complete! Supabase Mode Active");
         Serial.println("  Writing directly to sensor_live table");
         Serial.println("  History stored every 60 seconds");
+        Serial.print("  Free heap: ");
+        Serial.print(ESP.getFreeHeap());
+        Serial.println(" bytes");
         Serial.println("========================================");
     }
 }
