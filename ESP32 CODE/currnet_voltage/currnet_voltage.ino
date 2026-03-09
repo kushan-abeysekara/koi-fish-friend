@@ -75,7 +75,7 @@ float I_calibration = 30.0 / 2048.0;
 float currentOffset = 2048.0;
 
 // ===================== VOLTAGE SAFETY RANGE =====================
-const float V_SAFE_MIN = 210.0;
+const float V_SAFE_MIN = 190.0;
 const float V_SAFE_MAX = 250.0;
 
 // ===================== VARIABLES =====================
@@ -91,6 +91,61 @@ const unsigned long STATUS_PUBLISH_INTERVAL = 5000; // Publish status every 5 se
 bool manualMode = false;      // Manual control mode flag
 bool relayManualState = true; // Manual relay state (true = ON, false = OFF)
 bool scheduleMode = false;    // Schedule control mode flag
+
+
+void setup()
+{
+    Serial.begin(115200);
+    Wire.begin(21, 23);
+
+    lcd.init();
+    lcd.backlight();
+    lcd.print("Initializing...");
+    delay(1500);
+
+    pinMode(RELAY_PIN, OUTPUT);
+    digitalWrite(RELAY_PIN, LOW); 
+    // Load saved power state from flash
+    loadPowerState();
+
+    // Apply loaded state to relay
+    if (manualMode)
+    {
+        digitalWrite(RELAY_PIN, relayManualState ? HIGH : LOW);
+        Serial.print("Restored manual mode: ");
+        Serial.println(relayManualState ? "ON" : "OFF");
+    }
+    else
+    {
+        digitalWrite(RELAY_PIN, LOW); // Start in ON state for AUTO mode
+        Serial.println("Starting in AUTO mode");
+    }
+
+    // Generate device ID with BM prefix (Budget Management)
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    deviceId = "BM_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
+    deviceId.toUpperCase();
+
+    statusTopic = "koi/sensors/" + deviceId + "/status";
+    dataTopic = "koi/sensors/" + deviceId + "/data";
+    commandTopic = "koi/sensors/" + deviceId + "/command";
+
+    setupWiFi();
+
+    client.setServer(mqtt_server, mqtt_port);
+    client.setCallback(mqttCallback);
+    client.setBufferSize(512);
+
+    // Initialize time from NTP
+    initTime();
+
+    // Load saved schedules
+    loadSchedules();
+
+    lcd.clear();
+}
+
 
 // ===================== HELPER FUNCTIONS =====================
 // Initialize time from NTP server
@@ -610,58 +665,7 @@ float readCurrent(int pin, float scale, int samples = 10)
 // ===============================================================
 //                       SETUP
 // ===============================================================
-void setup()
-{
-    Serial.begin(115200);
-    Wire.begin(21, 23);
 
-    lcd.init();
-    lcd.backlight();
-    lcd.print("Initializing...");
-    delay(1500);
-
-    pinMode(RELAY_PIN, OUTPUT);
-
-    // Load saved power state from flash
-    loadPowerState();
-
-    // Apply loaded state to relay
-    if (manualMode)
-    {
-        digitalWrite(RELAY_PIN, relayManualState ? HIGH : LOW);
-        Serial.print("Restored manual mode: ");
-        Serial.println(relayManualState ? "ON" : "OFF");
-    }
-    else
-    {
-        digitalWrite(RELAY_PIN, HIGH); // Start in ON state for AUTO mode
-        Serial.println("Starting in AUTO mode");
-    }
-
-    // Generate device ID with BM prefix (Budget Management)
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    deviceId = "BM_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
-    deviceId.toUpperCase();
-
-    statusTopic = "koi/sensors/" + deviceId + "/status";
-    dataTopic = "koi/sensors/" + deviceId + "/data";
-    commandTopic = "koi/sensors/" + deviceId + "/command";
-
-    setupWiFi();
-
-    client.setServer(mqtt_server, mqtt_port);
-    client.setCallback(mqttCallback);
-    client.setBufferSize(512);
-
-    // Initialize time from NTP
-    initTime();
-
-    // Load saved schedules
-    loadSchedules();
-
-    lcd.clear();
-}
 
 // ===============================================================
 //                      MAIN LOOP
