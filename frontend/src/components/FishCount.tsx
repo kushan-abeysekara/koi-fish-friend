@@ -28,6 +28,12 @@ const FishCount: React.FC = () => {
   const [newPondName, setNewPondName] = useState('');
   const [newPondColor, setNewPondColor] = useState('blue');
   const [isAddingPond, setIsAddingPond] = useState(false);
+  const [isAddingFishCount, setIsAddingFishCount] = useState(false);
+  const [deletingRecordId, setDeletingRecordId] = useState<number | null>(null);
+  const [isDeletePondModalOpen, setIsDeletePondModalOpen] = useState(false);
+  const [pondToDelete, setPondToDelete] = useState<Pond | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [isDeletingPond, setIsDeletingPond] = useState(false);
   const [formData, setFormData] = useState({
     pondId: '',
     count: '',
@@ -138,6 +144,49 @@ const FishCount: React.FC = () => {
     }
   };
 
+  const openDeletePondModal = (pond: Pond) => {
+    const hasFishCounts = fishCountRecords.some(r => r.pondId === pond.id);
+    if (hasFishCounts) {
+      alert('Cannot delete pond with existing fish count records. Please delete associated records first.');
+      return;
+    }
+    setPondToDelete(pond);
+    setDeleteConfirmationText('');
+    setIsDeletePondModalOpen(true);
+  };
+
+  const handleDeletePond = async () => {
+    if (!pondToDelete) return;
+    if (isDeletingPond) return;
+
+    if (deleteConfirmationText === pondToDelete.name) {
+      setIsDeletingPond(true);
+      try {
+        const response = await pondApi.delete(pondToDelete.id);
+
+        if (response.success) {
+          await loadPonds();
+          if (selectedPond === pondToDelete.id) {
+            setSelectedPond('all');
+          }
+          setIsDeletePondModalOpen(false);
+          setPondToDelete(null);
+          setDeleteConfirmationText('');
+        } else {
+          alert(response.message || 'Failed to delete pond');
+        }
+      } catch (error) {
+        console.error('Error deleting pond:', error);
+        const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+        alert('Failed to delete pond: ' + errorMessage);
+      } finally {
+        setIsDeletingPond(false);
+      }
+    } else {
+      alert('Pond name does not match. Please type the exact pond name to confirm deletion.');
+    }
+  };
+
   const openModal = () => {
     setFormData({
       pondId: selectedPond === 'all' ? '' : selectedPond.toString(),
@@ -162,6 +211,9 @@ const FishCount: React.FC = () => {
       alert('Invalid pond selection');
       return;
     }
+
+    if (isAddingFishCount) return;
+    setIsAddingFishCount(true);
 
     try {
       const response = await fishCountApi.create({
@@ -193,11 +245,14 @@ const FishCount: React.FC = () => {
       console.error('Error adding fish count:', error);
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
       alert('Failed to add fish count: ' + errorMessage);
+    } finally {
+      setIsAddingFishCount(false);
     }
   };
 
   const handleDeleteRecord = async (id: number) => {
     if (window.confirm('Are you sure you want to delete this fish count record?')) {
+      setDeletingRecordId(id);
       try {
         const response = await fishCountApi.delete(id);
         
@@ -211,15 +266,22 @@ const FishCount: React.FC = () => {
         console.error('Error deleting fish count:', error);
         const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
         alert('Failed to delete fish count: ' + errorMessage);
+      } finally {
+        setDeletingRecordId(null);
       }
     }
   };
 
   const getFilteredRecords = () => {
+    const sortByDateDesc = (a: FishCountRecord, b: FishCountRecord) => {
+      const dateA = new Date(`${a.countDate}T${a.countTime}`);
+      const dateB = new Date(`${b.countDate}T${b.countTime}`);
+      return dateB.getTime() - dateA.getTime();
+    };
     if (selectedPond === 'all') {
-      return fishCountRecords;
+      return [...fishCountRecords].sort(sortByDateDesc);
     }
-    return fishCountRecords.filter(record => record.pondId === selectedPond);
+    return fishCountRecords.filter(record => record.pondId === selectedPond).sort(sortByDateDesc);
   };
 
   const getLatestCountByPond = (pondId: number) => {
@@ -294,7 +356,7 @@ const FishCount: React.FC = () => {
           </div>
           <button
             onClick={() => setIsPondModalOpen(true)}
-            className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transform hover:scale-105 transition-all duration-200 flex items-center gap-2 text-sm"
+            className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 active:scale-95 text-white px-4 py-2 rounded-lg font-semibold shadow-md transform hover:scale-105 transition-all duration-200 flex items-center gap-2 text-sm"
           >
             <i className="fas fa-plus"></i>
             Add Pond
@@ -320,20 +382,33 @@ const FishCount: React.FC = () => {
             const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
 
             return (
-              <button
-                key={pond.id}
-                onClick={() => setSelectedPond(pond.id)}
-                className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${selectedPond === pond.id
-                    ? `${pondColorClasses.bg} ${pondColorClasses.text} border-2 ${pondColorClasses.border} shadow-lg`
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-              >
-                <i className="fas fa-water mr-2"></i>
-                {pond.name} ({recordCount})
-                {latestCount && (
-                  <span className="ml-2 text-xs">• {latestCount.count} fish</span>
+              <div key={pond.id} className="relative group">
+                <button
+                  onClick={() => setSelectedPond(pond.id)}
+                  className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${selectedPond === pond.id
+                      ? `${pondColorClasses.bg} ${pondColorClasses.text} border-2 ${pondColorClasses.border} shadow-lg`
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                >
+                  <i className="fas fa-water mr-2"></i>
+                  {pond.name} ({recordCount})
+                  {latestCount && (
+                    <span className="ml-2 text-xs">• {latestCount.count} fish</span>
+                  )}
+                </button>
+                {ponds.length > 1 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openDeletePondModal(pond);
+                    }}
+                    className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs"
+                    title="Delete pond"
+                  >
+                    <i className="fas fa-times"></i>
+                  </button>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
@@ -392,7 +467,7 @@ const FishCount: React.FC = () => {
         </div>
         <button
           onClick={openModal}
-          className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white px-6 py-3 rounded-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
+          className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 active:scale-95 text-white px-6 py-3 rounded-lg font-semibold shadow-lg transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
         >
           <i className="fas fa-plus-circle"></i>
           Add Fish Count
@@ -473,10 +548,22 @@ const FishCount: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-center">
                         <button
                           onClick={() => handleDeleteRecord(record.id)}
-                          className="text-red-600 hover:text-red-800 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                          disabled={deletingRecordId === record.id}
+                          className={`p-2 rounded-lg transition-colors ${
+                            deletingRecordId === record.id
+                              ? 'text-red-300 cursor-not-allowed'
+                              : 'text-red-600 hover:text-red-800 hover:bg-red-50'
+                          }`}
                           title="Delete"
                         >
-                          <i className="fas fa-trash-alt"></i>
+                          {deletingRecordId === record.id ? (
+                            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                          ) : (
+                            <i className="fas fa-trash-alt"></i>
+                          )}
                         </button>
                       </td>
                     </tr>
@@ -631,10 +718,27 @@ const FishCount: React.FC = () => {
               <div className="flex gap-3 pt-4">
                 <button
                   onClick={handleAddFishCount}
-                  className="flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white py-3 rounded-lg font-semibold shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+                  disabled={isAddingFishCount}
+                  className={`flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 text-white py-3 rounded-lg font-semibold shadow-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                    isAddingFishCount
+                      ? 'opacity-70 cursor-not-allowed'
+                      : 'hover:from-blue-700 hover:to-cyan-700'
+                  }`}
                 >
-                  <i className="fas fa-check"></i>
-                  Save Fish Count
+                  {isAddingFishCount ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fas fa-check"></i>
+                      Save Fish Count
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={() => setIsModalOpen(false)}
@@ -730,6 +834,117 @@ const FishCount: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setIsPondModalOpen(false)}
+                  className="px-6 py-3 border-2 border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Pond Confirmation Modal */}
+      {isDeletePondModalOpen && pondToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+            <div className="bg-gradient-to-r from-red-600 to-red-700 text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-2xl font-bold flex items-center gap-2">
+                  <i className="fas fa-exclamation-triangle"></i>
+                  Delete Pond
+                </h3>
+                <button
+                  onClick={() => {
+                    setIsDeletePondModalOpen(false);
+                    setPondToDelete(null);
+                    setDeleteConfirmationText('');
+                  }}
+                  className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-lg transition-colors"
+                >
+                  <i className="fas fa-times text-xl"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Warning Message */}
+              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                <div className="flex items-start gap-3">
+                  <i className="fas fa-exclamation-circle text-red-500 text-xl mt-0.5"></i>
+                  <div>
+                    <h4 className="font-bold text-red-800 mb-1">Warning: This action cannot be undone!</h4>
+                    <p className="text-sm text-red-700">
+                      You are about to permanently delete <strong className="font-bold">"{pondToDelete.name}"</strong>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pond Info */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-700">Pond to delete:</span>
+                  <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${
+                    pondColors[pondToDelete.color]?.bg || 'bg-gray-100'
+                  } ${pondColors[pondToDelete.color]?.text || 'text-gray-700'}`}>
+                    <i className="fas fa-water"></i>
+                    {pondToDelete.name}
+                  </span>
+                </div>
+              </div>
+
+              {/* Confirmation Input */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Type <span className="text-red-600 font-bold">"{pondToDelete.name}"</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmationText}
+                  onChange={(e) => setDeleteConfirmationText(e.target.value)}
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none transition"
+                  placeholder={`Type "${pondToDelete.name}" exactly`}
+                  autoFocus
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  <i className="fas fa-info-circle mr-1"></i>
+                  The pond name must match exactly (case-sensitive)
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={handleDeletePond}
+                  disabled={deleteConfirmationText !== pondToDelete.name || isDeletingPond}
+                  className={`flex-1 py-3 rounded-lg font-semibold shadow-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                    deleteConfirmationText === pondToDelete.name && !isDeletingPond
+                      ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white cursor-pointer'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {isDeletingPond ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fas fa-trash-alt"></i>
+                      Delete Pond Permanently
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsDeletePondModalOpen(false);
+                    setPondToDelete(null);
+                    setDeleteConfirmationText('');
+                  }}
                   className="px-6 py-3 border-2 border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg font-semibold transition-colors"
                 >
                   Cancel

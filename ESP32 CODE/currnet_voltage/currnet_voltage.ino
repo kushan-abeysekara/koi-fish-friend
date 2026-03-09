@@ -1,7 +1,8 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <time.h>
@@ -34,32 +35,23 @@ struct PowerSchedule
 PowerSchedule schedules[MAX_SCHEDULES];
 int scheduleCount = 0;
 
-// ===================== WiFi & MQTT CONFIG =====================
+// ===================== WiFi CONFIG =====================
 const char *ssid = "KoiFishFriend";
 const char *password = "FiberTarget255";
 
-// Self-hosted EMQX Broker on VPS
-const char *mqtt_server = "187.77.189.5";
-const int mqtt_port = 1883;
-const char *mqtt_user = "";
-const char *mqtt_password = "";
+// ===================== SUPABASE CONFIG =====================
+// Same endpoint the water-quality device uses — ESP32 → HTTPS → Supabase directly
+const char *supabase_url = "https://superbase.koifishfriend.online/pg/query";
+const char *supabase_service_key =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwK"
+    "ICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ."
+    "DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q";
 
 // Device configuration
 String deviceId = "";
 const char *deviceType = "BUDGET_MANAGEMENT";
 int assignedPondId = 0;
-
-// MQTT Topics
-String statusTopic = "";
-String dataTopic = "";
-String commandTopic = "";
-
-WiFiClient espClient;
-PubSubClient client(espClient);
-
-// Forward declarations 523
-void publishStatus();
-void publishStatusWithPond();
 
 // ===================== PIN MAPPING =====================
 #define ZMPT_PIN 34
@@ -82,16 +74,19 @@ const float V_SAFE_MAX = 250.0;
 float voltage = 0, current = 0, power = 0, energyWh = 0;
 unsigned long lastSample = 0;
 unsigned long lastDisplay = 0;
-unsigned long lastMqttPublish = 0;
-unsigned long lastStatusPublish = 0;
-const unsigned long MQTT_PUBLISH_INTERVAL = 3000;
-const unsigned long STATUS_PUBLISH_INTERVAL = 5000; // Publish status every 5 seconds
+unsigned long lastSupabaseLiveUpdate = 0;
+unsigned long lastSupabaseHistoryInsert = 0;
+unsigned long lastCommandPoll = 0;
+unsigned long lastWiFiCheck = 0;
+const unsigned long SUPABASE_LIVE_INTERVAL = 5000;     // UPSERT energydb every 5 s
+const unsigned long SUPABASE_HISTORY_INTERVAL = 60000; // INSERT energy_history every 60 s
+const unsigned long COMMAND_POLL_INTERVAL = 5000;      // Poll energy_commands every 5 s
+const unsigned long WIFI_CHECK_INTERVAL = 5000;
 
 // ===================== RELAY CONTROL =====================
 bool manualMode = false;      // Manual control mode flag
 bool relayManualState = true; // Manual relay state (true = ON, false = OFF)
 bool scheduleMode = false;    // Schedule control mode flag
-
 
 void setup()
 {
@@ -104,7 +99,7 @@ void setup()
     delay(1500);
 
     pinMode(RELAY_PIN, OUTPUT);
-    digitalWrite(RELAY_PIN, LOW); 
+    digitalWrite(RELAY_PIN, LOW);
     // Load saved power state from flash
     loadPowerState();
 
@@ -127,15 +122,7 @@ void setup()
     deviceId = "BM_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
     deviceId.toUpperCase();
 
-    statusTopic = "koi/sensors/" + deviceId + "/status";
-    dataTopic = "koi/sensors/" + deviceId + "/data";
-    commandTopic = "koi/sensors/" + deviceId + "/command";
-
     setupWiFi();
-
-    client.setServer(mqtt_server, mqtt_port);
-    client.setCallback(mqttCallback);
-    client.setBufferSize(512);
 
     // Initialize time from NTP
     initTime();
@@ -143,9 +130,17 @@ void setup()
     // Load saved schedules
     loadSchedules();
 
+    // Test Supabase connection
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Testing Supabase...");
+    bool testOk = executeSupabaseQuery("SELECT 1");
+    lcd.setCursor(0, 1);
+    lcd.print(testOk ? "Supabase OK!" : "Supabase FAIL");
+    delay(1500);
+
     lcd.clear();
 }
-
 
 // ===================== HELPER FUNCTIONS =====================
 // Initialize time from NTP server
@@ -332,309 +327,217 @@ void setupWiFi()
 }
 
 // ===============================================================
-//                  MQTT CALLBACK (FIXED)
+//              SUPABASE HTTP HELPER
 // ===============================================================
-void mqttCallback(char *topic, byte *payload, unsigned int length)
+/**
+ * Execute a raw SQL query against the Supabase pg/query endpoint.
+ * Uses HTTPS with service_role JWT — same approach as water_quality.ino.
+ * Returns true on HTTP 200.
+ */
+bool executeSupabaseQuery(String sql)
 {
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
 
-    String message = "";
-    for (unsigned int i = 0; i < length; i++)
-        message += (char)payload[i];
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure(); // Skip cert validation for self-hosted Supabase
 
-    Serial.println(message);
+    HTTPClient http;
+    http.begin(secureClient, supabase_url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", supabase_service_key);
+    http.addHeader("Authorization", String("Bearer ") + supabase_service_key);
+    http.setTimeout(5000);
 
-    StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, message);
+    StaticJsonDocument<2048> doc;
+    doc["query"] = sql;
+    String body;
+    serializeJson(doc, body);
 
-    if (error)
+    int httpCode = http.POST(body);
+    bool success = (httpCode == 200);
+    if (!success)
     {
-        Serial.print("JSON error: ");
-        Serial.println(error.c_str());
+        Serial.print("[Supabase] HTTP ");
+        Serial.print(httpCode);
+        Serial.print(": ");
+        Serial.println(http.getString().substring(0, 200));
+    }
+    http.end();
+    return success;
+}
+
+// ===============================================================
+//              UPSERT energydb (live — one row per device)
+// ===============================================================
+void upsertEnergyLive()
+{
+    String relayState = (digitalRead(RELAY_PIN) == HIGH) ? "ON" : "OFF";
+    String controlMode = manualMode ? "manual" : (scheduleMode ? "schedule" : "auto");
+    String status = "normal";
+
+    String sql =
+        "INSERT INTO energydb "
+        "(device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) "
+        "VALUES ('" +
+        deviceId + "', " +
+        String(voltage, 2) + ", " +
+        String(current, 3) + ", " +
+        String(power, 1) + ", " +
+        String(energyWh, 3) + ", '" +
+        status + "', " +
+        String(WiFi.RSSI()) + ", '" +
+        WiFi.localIP().toString() + "', NOW()) "
+                                    "ON CONFLICT (device_id) DO UPDATE SET "
+                                    "voltage = EXCLUDED.voltage, current = EXCLUDED.current, "
+                                    "power = EXCLUDED.power, energy_wh = EXCLUDED.energy_wh, "
+                                    "status = EXCLUDED.status, rssi = EXCLUDED.rssi, "
+                                    "ip_address = EXCLUDED.ip_address, updated_at = NOW()";
+
+    bool ok = executeSupabaseQuery(sql);
+    if (ok)
+    {
+        Serial.print("[Supabase] energydb upserted: V=");
+        Serial.print(voltage, 1);
+        Serial.print(" I=");
+        Serial.print(current, 2);
+        Serial.print(" P=");
+        Serial.print(power, 1);
+        Serial.print("W E=");
+        Serial.print(energyWh, 1);
+        Serial.println("Wh");
+    }
+}
+
+// ===============================================================
+//              INSERT energy_history (1 row per minute)
+// ===============================================================
+void insertEnergyHistory()
+{
+    String sql =
+        "INSERT INTO energy_history "
+        "(device_id, voltage, current, power, energy_wh, status, recorded_at) "
+        "VALUES ('" +
+        deviceId + "', " +
+        String(voltage, 2) + ", " +
+        String(current, 3) + ", " +
+        String(power, 1) + ", " +
+        String(energyWh, 3) + ", 'normal', NOW())";
+
+    bool ok = executeSupabaseQuery(sql);
+    if (ok)
+        Serial.println("[Supabase] energy_history inserted (1/min)");
+}
+
+// ===============================================================
+//              POLL energy_commands (bidirectional control)
+// ===============================================================
+// Frontend / backend writes a row to energy_commands:
+//   { device_id, command, executed: false }
+// ESP32 polls this table, executes the command, marks executed = true.
+void pollEnergyCommands()
+{
+    String sql =
+        "SELECT id, command FROM energy_commands "
+        "WHERE device_id = '" +
+        deviceId + "' AND executed = false "
+                   "ORDER BY created_at ASC LIMIT 1";
+
+    if (WiFi.status() != WL_CONNECTED)
+        return;
+
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    HTTPClient http;
+    http.begin(secureClient, supabase_url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", supabase_service_key);
+    http.addHeader("Authorization", String("Bearer ") + supabase_service_key);
+    http.setTimeout(5000);
+
+    StaticJsonDocument<256> reqDoc;
+    reqDoc["query"] = sql;
+    String body;
+    serializeJson(reqDoc, body);
+
+    int httpCode = http.POST(body);
+    if (httpCode != 200)
+    {
+        http.end();
         return;
     }
 
-    if (!doc.containsKey("command"))
-    {
-        Serial.println("Missing 'command'");
+    String resp = http.getString();
+    http.end();
+
+    StaticJsonDocument<512> respDoc;
+    if (deserializeJson(respDoc, resp) != DeserializationError::Ok)
         return;
-    }
 
-    const char *command = doc["command"];
+    JsonArray rows = respDoc.isNull() ? JsonArray() : (respDoc.is<JsonArray>() ? respDoc.as<JsonArray>() : (respDoc.containsKey("rows") ? respDoc["rows"].as<JsonArray>() : JsonArray()));
 
-    if (strcmp(command, "assign") == 0)
-    {
-        if (!doc.containsKey("pondId"))
-        {
-            Serial.println("No pondId");
-            return;
-        }
+    if (!rows || rows.size() == 0)
+        return;
 
-        assignedPondId = doc["pondId"].as<int>();
-        Serial.print("Assigned to Pond: ");
-        Serial.println(assignedPondId);
+    int cmdId = rows[0]["id"].as<int>();
+    String command = rows[0]["command"].as<const char *>();
 
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Assigned Pond:");
-        lcd.setCursor(0, 1);
-        lcd.print(assignedPondId);
-        delay(1000);
-
-        // Send status with pond info immediately for confirmation
-        publishStatusWithPond();
-    }
-    else if (strcmp(command, "reset_energy") == 0)
-    {
-        energyWh = 0;
-        Serial.println("Energy counter reset");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Energy Reset");
-        delay(1000);
-
-        publishStatus();
-    }
-    else if (strcmp(command, "unassign") == 0)
-    {
-        assignedPondId = 0;
-        Serial.println("Unassigned from pond");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Unassigned");
-        delay(1000);
-
-        // Send status with pondId=0 immediately for confirmation
-        publishStatusWithPond();
-    }
-    else if (strcmp(command, "power_on") == 0)
+    // Execute command
+    if (command == "power_on")
     {
         manualMode = true;
         relayManualState = true;
         digitalWrite(RELAY_PIN, HIGH);
-        savePowerState(); // Save to flash
-        Serial.println("Power turned ON manually");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("POWER: ON");
-        lcd.setCursor(0, 1);
-        lcd.print("(Manual Mode)");
-        delay(1000);
-
-        publishStatus();
+        savePowerState();
+        Serial.println("[CMD] power_on");
     }
-    else if (strcmp(command, "power_off") == 0)
+    else if (command == "power_off")
     {
         manualMode = true;
         relayManualState = false;
         digitalWrite(RELAY_PIN, LOW);
-        savePowerState(); // Save to flash
-        Serial.println("Power turned OFF manually");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("POWER: OFF");
-        lcd.setCursor(0, 1);
-        lcd.print("(Manual Mode)");
-        delay(1000);
-
-        publishStatus();
+        savePowerState();
+        Serial.println("[CMD] power_off");
     }
-    else if (strcmp(command, "auto_mode") == 0)
+    else if (command == "auto_mode")
     {
         manualMode = false;
         scheduleMode = false;
-        savePowerState(); // Save to flash
-        Serial.println("Switched to AUTO mode (voltage-based)");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("AUTO Mode");
-        lcd.setCursor(0, 1);
-        lcd.print("Voltage Control");
-        delay(1000);
-
-        publishStatus();
+        savePowerState();
+        Serial.println("[CMD] auto_mode");
     }
-    else if (strcmp(command, "schedule_mode") == 0)
+    else if (command == "schedule_mode")
     {
         manualMode = false;
         scheduleMode = true;
-        savePowerState(); // Save to flash
-        Serial.println("Switched to SCHEDULE mode");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("SCHEDULE Mode");
-        lcd.setCursor(0, 1);
-        lcd.print("Time-based Control");
-        delay(1000);
-
-        publishStatus();
+        savePowerState();
+        Serial.println("[CMD] schedule_mode");
     }
-    else if (strcmp(command, "sync_schedules") == 0)
+    else if (command == "reset_energy")
     {
-        if (!doc.containsKey("schedules"))
-        {
-            Serial.println("No schedules array");
-            return;
-        }
-
-        JsonArray schedulesArray = doc["schedules"].as<JsonArray>();
-        scheduleCount = 0;
-
-        for (JsonObject schedObj : schedulesArray)
-        {
-            if (scheduleCount >= MAX_SCHEDULES)
-                break;
-
-            schedules[scheduleCount].enabled = schedObj["enabled"] | false;
-            schedules[scheduleCount].startHour = schedObj["startHour"] | 0;
-            schedules[scheduleCount].startMinute = schedObj["startMinute"] | 0;
-            schedules[scheduleCount].endHour = schedObj["endHour"] | 0;
-            schedules[scheduleCount].endMinute = schedObj["endMinute"] | 0;
-
-            const char *name = schedObj["name"] | "Schedule";
-            strncpy(schedules[scheduleCount].name, name, 31);
-            schedules[scheduleCount].name[31] = '\0';
-
-            JsonArray days = schedObj["daysOfWeek"].as<JsonArray>();
-            for (int i = 0; i < 7; i++)
-            {
-                schedules[scheduleCount].daysOfWeek[i] = (i < days.size()) ? days[i].as<bool>() : false;
-            }
-
-            scheduleCount++;
-        }
-
-        saveSchedules();
-        Serial.print("Synced ");
-        Serial.print(scheduleCount);
-        Serial.println(" schedules");
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Schedules Synced");
-        lcd.setCursor(0, 1);
-        lcd.print("Count: ");
-        lcd.print(scheduleCount);
-        delay(1000);
-
-        publishStatus();
+        energyWh = 0;
+        Serial.println("[CMD] reset_energy");
     }
-    else
-    {
-        Serial.println("Unknown command");
-    }
+
+    // Mark command as executed
+    String markSql = "UPDATE energy_commands SET executed = true WHERE id = " + String(cmdId);
+    executeSupabaseQuery(markSql);
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("CMD: ");
+    lcd.print(command.substring(0, 15));
+    delay(800);
 }
 
 // ===============================================================
-//                    MQTT RECONNECT
+//                  MQTT CALLBACK (REMOVED)
 // ===============================================================
-void reconnectMQTT()
+// Commands now arrive via Supabase energy_commands table (pollEnergyCommands).
+// This stub exists only in case old code references it — it is never called.
+void mqttCallback(char * /*topic*/, byte * /*payload*/, unsigned int /*length*/)
 {
-    while (!client.connected())
-    {
-        Serial.print("Trying MQTT...");
-        lcd.setCursor(0, 0);
-        lcd.print("Connecting MQTT...");
-
-        String clientId = "ESP32-" + deviceId;
-
-        String willTopic = statusTopic;
-        String willMsg = "{\"deviceId\":\"" + deviceId +
-                         "\",\"deviceType\":\"BUDGET_MANAGEMENT\"" +
-                         ",\"status\":\"offline\"}";
-
-        if (client.connect(clientId.c_str(), mqtt_user, mqtt_password,
-                           willTopic.c_str(), 1, true, willMsg.c_str()))
-        {
-            lcd.setCursor(0, 0);
-            lcd.print("MQTT Connected");
-
-            client.subscribe(commandTopic.c_str());
-            publishStatus();
-            delay(1000);
-        }
-        else
-        {
-            lcd.setCursor(0, 0);
-            lcd.print("MQTT Failed");
-            delay(3000);
-        }
-    }
-}
-
-// ===============================================================
-//                    PUBLISH STATUS
-// ===============================================================
-void publishStatus()
-{
-    StaticJsonDocument<300> doc;
-    doc["deviceId"] = deviceId;
-    doc["deviceType"] = deviceType;
-    // Don't send pondId in regular status - backend manages assignments
-    // Only send it immediately after receiving assign/unassign commands
-    doc["status"] = "online";
-    doc["ipAddress"] = WiFi.localIP().toString();
-    doc["rssi"] = WiFi.RSSI();
-    doc["energyWh"] = energyWh;
-    doc["relayState"] = digitalRead(RELAY_PIN) == HIGH ? "ON" : "OFF";
-    doc["controlMode"] = manualMode ? "manual" : (scheduleMode ? "schedule" : "auto");
-    doc["scheduleCount"] = scheduleCount;
-
-    String json;
-    serializeJson(doc, json);
-
-    client.publish(statusTopic.c_str(), json.c_str(), true);
-}
-
-// Publish status with pond assignment info (only after assign/unassign commands)
-void publishStatusWithPond()
-{
-    StaticJsonDocument<300> doc;
-    doc["deviceId"] = deviceId;
-    doc["deviceType"] = deviceType;
-    doc["pondId"] = assignedPondId;
-    doc["status"] = "online";
-    doc["ipAddress"] = WiFi.localIP().toString();
-    doc["rssi"] = WiFi.RSSI();
-    doc["energyWh"] = energyWh;
-
-    String json;
-    serializeJson(doc, json);
-
-    client.publish(statusTopic.c_str(), json.c_str(), true);
-    Serial.println("Status with pond assignment sent: " + json);
-}
-
-// ===============================================================
-//                 PUBLISH SENSOR DATA
-// ===============================================================
-void publishSensorData()
-{
-    // Always publish sensor data - backend will handle pond assignment
-    // This ensures continuous data logging even if pond assignment isn't synced
-
-    StaticJsonDocument<300> doc;
-    doc["deviceId"] = deviceId;
-    doc["pondId"] = assignedPondId; // Will be 0 if not assigned
-    doc["voltage"] = voltage;
-    doc["current"] = current;
-    doc["power"] = power;
-    doc["energyWh"] = energyWh;
-    doc["status"] = "normal"; // Add status field for backend
-
-    String json;
-    serializeJson(doc, json);
-
-    client.publish(dataTopic.c_str(), json.c_str());
-    Serial.println("Sensor data published: " + json);
+    // no-op — MQTT removed, using Supabase direct HTTPS
 }
 
 // ===============================================================
@@ -666,21 +569,23 @@ float readCurrent(int pin, float scale, int samples = 10)
 //                       SETUP
 // ===============================================================
 
-
 // ===============================================================
 //                      MAIN LOOP
 // ===============================================================
 void loop()
 {
-    if (WiFi.status() != WL_CONNECTED)
-        setupWiFi();
-
-    if (!client.connected())
-        reconnectMQTT();
-
-    client.loop();
-
     unsigned long now = millis();
+
+    // -- Maintain WiFi --
+    if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL)
+    {
+        lastWiFiCheck = now;
+        if (WiFi.status() != WL_CONNECTED)
+        {
+            Serial.println("WiFi lost — reconnecting...");
+            setupWiFi();
+        }
+    }
     float deltaT = (now - lastSample) / 1000.0;
     lastSample = now;
 
@@ -709,17 +614,25 @@ void loop()
             digitalWrite(RELAY_PIN, HIGH);
     }
 
-    if (now - lastMqttPublish >= MQTT_PUBLISH_INTERVAL)
+    // -- UPSERT energydb every 5 s (real-time dashboard data) --
+    if (now - lastSupabaseLiveUpdate >= SUPABASE_LIVE_INTERVAL)
     {
-        lastMqttPublish = now;
-        publishSensorData();
+        lastSupabaseLiveUpdate = now;
+        upsertEnergyLive();
     }
 
-    // Publish status periodically to keep device online
-    if (now - lastStatusPublish >= STATUS_PUBLISH_INTERVAL)
+    // -- INSERT energy_history every 60 s (chart/trend data) --
+    if (now - lastSupabaseHistoryInsert >= SUPABASE_HISTORY_INTERVAL)
     {
-        lastStatusPublish = now;
-        publishStatus();
+        lastSupabaseHistoryInsert = now;
+        insertEnergyHistory();
+    }
+
+    // -- Poll energy_commands every 5 s (power control from frontend) --
+    if (now - lastCommandPoll >= COMMAND_POLL_INTERVAL)
+    {
+        lastCommandPoll = now;
+        pollEnergyCommands();
     }
 
     if (now - lastDisplay >= 1000)

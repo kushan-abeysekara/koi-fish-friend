@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { sensorDataApi } from '../services/api';
 import type { SensorData } from '../services/api';
-// Direct Supabase calls removed — frontend is HTTPS, Supabase is HTTP.
-// All data now goes through the Spring Boot backend (HTTPS) as a proxy.
+// Live data now polled directly from Supabase energydb (same pattern as WaterQualityDashboard).
+import { supabasePgQuery } from '../services/supabase';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
@@ -33,108 +33,94 @@ export default function EnergyMonitor() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'realtime' | 'analysis'>('realtime');
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const offlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── WebSocket: real-time live readings from MQTT data messages ───────────
+  // ── Supabase live poll: reads energydb table every 5 s ──────────────────
+  // Matches the ESP32 UPSERT interval (SUPABASE_LIVE_INTERVAL = 5000 ms).
+  // Same pattern used by WaterQualityDashboard polling sensor_live.
   useEffect(() => {
-    let isMounted = true;
-    const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
-    const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/feeding'; // shared WS channel — filter by BM_ prefix
+    let active = true;
 
-    const connect = () => {
-      if (!isMounted) return;
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+    interface EnergydbRow {
+      device_id: string;
+      voltage: number;
+      current: number;
+      power: number;
+      energy_wh: number;
+      status: string;
+      rssi: number;
+      ip_address: string;
+      updated_at: string;
+    }
 
-      ws.onmessage = (event) => {
-        if (!isMounted) return;
-        try {
-          const d = JSON.parse(event.data);
-          // Only handle data messages (have voltage field), not status messages
-          if (!d.deviceId?.startsWith('BM_') || d.voltage === undefined) return;
-
-          const now = new Date();
-          setLastUpdateTime(now);
-          // Build a pseudo-SensorData from the MQTT payload
-          setLatestData(prev => ({
-            id: prev?.id ?? 0,
-            device: prev?.device ?? ({ deviceId: d.deviceId } as SensorData['device']),
-            pond: prev?.pond ?? null,
-            voltage: d.voltage ?? 0,
-            current: d.current ?? 0,
-            power: d.power ?? 0,
-            energyWh: d.energyWh ?? 0,
-            status: d.status ?? 'normal',
-            timestamp: now.toISOString(),
-          }));
-
-          // Offline watchdog: no message in 15 s → clear live data
-          if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-          offlineTimerRef.current = setTimeout(() => {
-            setLatestData(null);
-            setLastUpdateTime(null);
-          }, 15000);
-        } catch { /* ignore parse errors */ }
-      };
-
-      ws.onclose = () => {
-        if (!isMounted) return;
-        wsRef.current = null;
-        reconnectTimerRef.current = setTimeout(connect, 3000);
-      };
-
-      ws.onerror = () => { /* close will fire next */ };
+    const poll = async () => {
+      try {
+        const rows = await supabasePgQuery<EnergydbRow>(
+          "SELECT * FROM energydb WHERE device_id LIKE 'BM_%' ORDER BY updated_at DESC LIMIT 1"
+        );
+        if (!active || rows.length === 0) return;
+        const r = rows[0];
+        const now = new Date();
+        setLastUpdateTime(now);
+        setLatestData({
+          id: 0,
+          device: { deviceId: r.device_id } as SensorData['device'],
+          pond: null,
+          voltage:  r.voltage  ?? 0,
+          current:  r.current  ?? 0,
+          power:    r.power    ?? 0,
+          energyWh: r.energy_wh ?? 0,
+          status:   r.status   ?? 'normal',
+          timestamp: r.updated_at ?? now.toISOString(),
+        });
+      } catch (err) {
+        console.warn('[EnergyMonitor] Supabase energydb poll failed:', err);
+      }
     };
 
-    connect();
-
-    return () => {
-      isMounted = false;
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-    };
+    poll(); // immediate first fetch
+    const interval = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(interval); };
   }, []);
 
-  // Supabase Realtime removed — direct ws:// blocked from HTTPS pages.
-  // Live data comes from Spring Boot WebSocket (wss://) above.
-
-  // ── History: Supabase primary → REST fallback ───────────────────────────
+  // ── History: direct Supabase pg/query (same proxy as WaterQualityDashboard) ─
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
-    // Fetch energy history via Spring Boot proxy (HTTPS safe — no Mixed Content)
     try {
-      const API_BASE = import.meta.env.VITE_API_URL || 'https://backend.koifishfriend.online';
-      const res = await fetch(`${API_BASE}/api/energy/history?hours=${selectedHours}&limit=1500`);
-      if (res.ok) {
-        const json = await res.json();
-        // pg/query returns { rows: [...] }
-        const rows: Record<string, unknown>[] = Array.isArray(json) ? json : (json.rows ?? []);
-        if (rows.length > 0) {
-          const mapped: SensorData[] = rows.map((r, i) => ({
-            id:        (r.id as number) ?? i,
-            device:    { deviceId: r.device_id as string } as SensorData['device'],
-            pond:      null,
-            voltage:   (r.voltage  as number) ?? 0,
-            current:   (r.current  as number) ?? 0,
-            power:     (r.power    as number) ?? 0,
-            energyWh:  (r.energy_wh as number) ?? 0,
-            status:    (r.status   as string) ?? 'normal',
-            timestamp: (r.recorded_at as string) ?? '',
-          }));
-          setHistoricalData(mapped);
-          setLoading(false);
-          return;
-        }
+      interface HistoryRow {
+        id: number;
+        device_id: string;
+        voltage: number;
+        current: number;
+        power: number;
+        energy_wh: number;
+        status: string;
+        recorded_at: string;
+      }
+      const rows = await supabasePgQuery<HistoryRow>(
+        `SELECT * FROM energy_history ORDER BY recorded_at DESC LIMIT 1500`
+      );
+      if (rows.length > 0) {
+        const mapped: SensorData[] = rows.map((r, i) => ({
+          id:        r.id ?? i,
+          device:    { deviceId: r.device_id } as SensorData['device'],
+          pond:      null,
+          voltage:   r.voltage   ?? 0,
+          current:   r.current   ?? 0,
+          power:     r.power     ?? 0,
+          energyWh:  r.energy_wh ?? 0,
+          status:    r.status    ?? 'normal',
+          timestamp: r.recorded_at ?? '',
+        }));
+        setHistoricalData(mapped);
+        setLoading(false);
+        return;
       }
     } catch (err) {
-      console.warn('[EnergyMonitor] Backend energy/history fetch failed:', err);
+      console.warn('[EnergyMonitor] Supabase energy_history fetch failed:', err);
     }
 
-    // Final fallback: original sensorDataApi (MySQL — may be empty for energy now)
+    // Fallback: MySQL via REST API
     try {
       const historicalRes = await sensorDataApi.getEnergyHistory(selectedHours);
       if (historicalRes.success && historicalRes.data) {

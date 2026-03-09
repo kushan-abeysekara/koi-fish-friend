@@ -720,6 +720,35 @@ const Expenditures: React.FC = () => {
           const total = getTotalByCategory(categoryName);
           const filteredCount = getFilteredExpenditures().filter(exp => exp.category === categoryName).length;
 
+          if (categoryName === 'Inventory Purchases') {
+            return (
+              <button
+                key={categoryName}
+                onClick={() => setActiveTab('inventory')}
+                className={`${colorClasses.bg} border-2 ${colorClasses.border} rounded-xl p-6 hover:shadow-lg transition-all duration-200 text-left hover:scale-105 transform w-full`}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-4xl">{categoryData.icon}</span>
+                  <div className={`px-3 py-1 ${colorClasses.bg} border ${colorClasses.border} rounded-full`}>
+                    <span className={`text-sm font-bold ${colorClasses.text}`}>
+                      {filteredCount}
+                    </span>
+                  </div>
+                </div>
+                <h3 className={`text-lg font-bold ${colorClasses.text} mb-2`}>{categoryName}</h3>
+                <p className="text-2xl font-bold text-gray-800">{formatCurrency(total)}</p>
+                <div className="mt-3 pt-3 border-t border-emerald-200">
+                  <p className="text-xs text-gray-500 mb-1">Stock Value</p>
+                  <p className="text-lg font-bold text-emerald-700">{formatCurrency(getTotalInventoryValue())}</p>
+                  <p className="text-xs text-emerald-600 mt-2 flex items-center gap-1">
+                    <i className="fas fa-arrow-right"></i>
+                    View Inventory &amp; Stock
+                  </p>
+                </div>
+              </button>
+            );
+          }
+
           return (
             <div
               key={categoryName}
@@ -1235,6 +1264,28 @@ const Expenditures: React.FC = () => {
                         </button>
                       );
                     })}
+
+                    {/* Inventory Purchases — navigates to Inventory tab */}
+                    <button
+                      onClick={() => {
+                        setIsModalOpen(false);
+                        setSelectedCategory('');
+                        setActiveTab('inventory');
+                      }}
+                      className="bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-200 rounded-xl p-6 text-left transition-all duration-200 transform hover:scale-105"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="text-3xl">📦</span>
+                        <h4 className="font-bold text-emerald-600">Inventory Purchases</h4>
+                      </div>
+                      <p className="text-xs text-gray-600">
+                        {inventoryItems.length} items in stock
+                      </p>
+                      <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                        <i className="fas fa-arrow-right"></i>
+                        Goes to Inventory &amp; Stock tab
+                      </p>
+                    </button>
                   </div>
                 </div>
               ) : (
