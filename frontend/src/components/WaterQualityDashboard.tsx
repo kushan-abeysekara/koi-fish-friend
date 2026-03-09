@@ -53,7 +53,7 @@ interface SensorPayloadData {
 const WaterQualityDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
-  const [connectionMode, setConnectionMode] = useState<'supabase' | 'relay' | 'none'>('none');
+  const [, setConnectionMode] = useState<'supabase' | 'relay' | 'none'>('none');
   const [signalStrength, setSignalStrength] = useState(0);
   const [lastSync, setLastSync] = useState<Date>(new Date());
   const [latestData, setLatestData] = useState<SensorData | null>(null);
