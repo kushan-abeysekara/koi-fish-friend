@@ -74,7 +74,7 @@ const TreatmentDosingLog: React.FC = () => {
     'Other',
   ];
 
-  const parameters = ['pH Level', 'Turbidity', 'Temperature', 'Dissolved Oxygen', 'CO₂ Level', 'Ammonia (NH₃)'];
+  const parameters = ['pH Level', 'Turbidity', 'Temperature', 'Dissolved Oxygen', 'CO₂ Level', 'Ammonia (NH₃)', 'Air Quality Index'];
 
   const units = ['ml', 'L', 'g', 'kg', 'ppm', 'mg/L', 'tablets', 'drops'];
 

@@ -55,6 +55,7 @@ const WaterQualityTrends: React.FC = () => {
     { id: 'do', name: 'Dissolved Oxygen', unit: 'mg/L', color: '#10b981', safeRange: { min: 6, max: 12 } },
     { id: 'co2', name: 'CO₂ Level', unit: 'PPM', color: '#f59e0b', safeRange: { min: 400, max: 1000 } },
     { id: 'ammonia', name: 'Ammonia (NH₃)', unit: 'PPM', color: '#f97316', safeRange: { min: 0, max: 0.5 } },
+    { id: 'aqi', name: 'Air Quality Index', unit: 'AQI', color: '#6366f1', safeRange: { min: 0, max: 100 } },
   ];
 
   // Generate mock historical data

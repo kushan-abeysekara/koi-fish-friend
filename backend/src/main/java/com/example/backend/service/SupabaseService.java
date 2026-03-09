@@ -129,6 +129,8 @@ public class SupabaseService {
                         "  rain_level           FLOAT   DEFAULT 0," +
                         "  rain_detected        BOOLEAN DEFAULT FALSE," +
                         "  rain_status          TEXT    DEFAULT 'dry'," +
+                        "  air_quality_index    INT     DEFAULT 0," +
+                        "  gas_status           TEXT    DEFAULT 'normal'," +
                         "  status               TEXT    DEFAULT 'normal'," +
                         "  rssi                 INT     DEFAULT 0," +
                         "  updated_at           TIMESTAMPTZ DEFAULT NOW()" +
@@ -146,6 +148,8 @@ public class SupabaseService {
                         "  rain_level           FLOAT   DEFAULT 0," +
                         "  rain_detected        BOOLEAN DEFAULT FALSE," +
                         "  rain_status          TEXT    DEFAULT 'dry'," +
+                        "  air_quality_index    INT     DEFAULT 0," +
+                        "  gas_status           TEXT    DEFAULT 'normal'," +
                         "  status               TEXT    DEFAULT 'normal'," +
                         "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
                         ")",
@@ -189,7 +193,12 @@ public class SupabaseService {
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS co2_level FLOAT DEFAULT 400",
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS ammonia FLOAT DEFAULT 0",
                 "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS co2_level FLOAT DEFAULT 400",
-                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS ammonia FLOAT DEFAULT 0"
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS ammonia FLOAT DEFAULT 0",
+                // Migration: Add air quality index and gas status columns
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
+                "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'"
         };
 
         for (String sql : ddls) {
@@ -662,19 +671,23 @@ public class SupabaseService {
                 double rainLevel = getDoubleOrDefault(mqttPayload, "rainLevel", 0);
                 boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
                 String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
+                int airQualityIndex = getIntOrDefault(mqttPayload, "airQualityIndex", 0);
+                String gasStatus = getTextOrDefault(mqttPayload, "gasStatus", "normal");
 
-                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, status, rssi, updated_at) "
+                String sql = "INSERT INTO sensor_live (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, air_quality_index, gas_status, status, rssi, updated_at) "
                         +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", " +
                         co2Level + ", " + ammonia + ", '" +
                         esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
-                        esc(rainStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
+                        esc(rainStatus) + "', " + airQualityIndex + ", '" +
+                        esc(gasStatus) + "', '" + esc(status) + "', " + rssi + ", NOW()) " +
                         "ON CONFLICT (device_id) DO UPDATE SET " +
                         "ph_value = EXCLUDED.ph_value, turbidity = EXCLUDED.turbidity, " +
                         "co2_level = EXCLUDED.co2_level, ammonia = EXCLUDED.ammonia, " +
                         "water_quality_status = EXCLUDED.water_quality_status, " +
                         "rain_level = EXCLUDED.rain_level, rain_detected = EXCLUDED.rain_detected, " +
                         "rain_status = EXCLUDED.rain_status, " +
+                        "air_quality_index = EXCLUDED.air_quality_index, gas_status = EXCLUDED.gas_status, " +
                         "status = EXCLUDED.status, rssi = EXCLUDED.rssi, updated_at = NOW()";
 
                 executePgQuery(sql);
@@ -714,13 +727,16 @@ public class SupabaseService {
                 double rainLevel = getDoubleOrDefault(mqttPayload, "rainLevel", 0);
                 boolean rainDetected = getBoolOrDefault(mqttPayload, "rainDetected", false);
                 String rainStatus = getTextOrDefault(mqttPayload, "rainStatus", "dry");
+                int airQualityIndex = getIntOrDefault(mqttPayload, "airQualityIndex", 0);
+                String gasStatus = getTextOrDefault(mqttPayload, "gasStatus", "normal");
 
-                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, status, recorded_at) "
+                String sql = "INSERT INTO sensor_history (device_id, ph_value, turbidity, co2_level, ammonia, water_quality_status, rain_level, rain_detected, rain_status, air_quality_index, gas_status, status, recorded_at) "
                         +
                         "VALUES ('" + esc(deviceId) + "', " + phValue + ", " + turbidity + ", " +
                         co2Level + ", " + ammonia + ", '" +
                         esc(wqStatus) + "', " + rainLevel + ", " + rainDetected + ", '" +
-                        esc(rainStatus) + "', '" + esc(status) + "', NOW())";
+                        esc(rainStatus) + "', " + airQualityIndex + ", '" +
+                        esc(gasStatus) + "', '" + esc(status) + "', NOW())";
 
                 executePgQuery(sql);
                 System.out.println("[Supabase] 🌊 sensor_history saved (1/min): " + deviceId);

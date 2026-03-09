@@ -88,6 +88,8 @@ public class SupabaseRealtimePoller {
                 payload.put("rainLevel", toDouble(row.get("rain_level")));
                 payload.put("rainDetected", toBool(row.get("rain_detected")));
                 payload.put("rainStatus", row.getOrDefault("rain_status", "dry"));
+                payload.put("airQualityIndex", toInt(row.get("air_quality_index")));
+                payload.put("gasStatus", row.getOrDefault("gas_status", "normal"));
                 payload.put("status", row.getOrDefault("status", "normal"));
                 payload.put("rssi", toInt(row.get("rssi")));
                 payload.put("timestamp", System.currentTimeMillis());
@@ -104,7 +106,8 @@ public class SupabaseRealtimePoller {
                         " Turb:" + payload.get("turbidity") +
                         " CO2:" + payload.get("co2Level") +
                         " NH3:" + payload.get("ammonia") +
-                        " Rain:" + payload.get("rainLevel") + "% (" + payload.get("rainStatus") + ")");
+                        " Rain:" + payload.get("rainLevel") + "% (" + payload.get("rainStatus") + ")" +
+                        " AQI:" + payload.get("airQualityIndex") + " Gas:" + payload.get("gasStatus"));
             }
         } catch (Exception e) {
             // Don't spam logs — only log occasionally

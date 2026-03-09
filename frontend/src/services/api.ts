@@ -647,9 +647,9 @@ export interface SensorData {
   turbidity?: number;
   co2Level?: number;  // CO2 in PPM from MQ135
   ammonia?: number;   // Ammonia in PPM from MQ135
-  airQuality?: number;
+  airQualityIndex?: number; // 0-500 AQI scale
+  gasStatus?: string;       // normal, warning, critical
   waterQualityStatus?: string;
-  dissolvedOxygen?: number;
   // Rain sensor parameters
   rainLevel?: number;      // Rain intensity 0-100%
   rainDetected?: boolean;  // Digital rain detection flag
@@ -745,6 +745,8 @@ export interface SupabaseSensorLiveRow {
   rain_level: number;
   rain_detected: boolean;
   rain_status: string;
+  air_quality_index: number;
+  gas_status: string;
   status: string;
   rssi: number;
   updated_at: string;
