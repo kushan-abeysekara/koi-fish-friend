@@ -1,7 +1,9 @@
 package com.example.backend.service;
 
 import com.example.backend.dto.PondRequest;
+import com.example.backend.entity.FishCount;
 import com.example.backend.entity.Pond;
+import com.example.backend.repository.FishCountRepository;
 import com.example.backend.repository.PondRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,9 @@ public class PondService {
 
     @Autowired
     private PondRepository pondRepository;
+
+    @Autowired
+    private FishCountRepository fishCountRepository;
 
     public List<Pond> getAllPonds() {
         return pondRepository.findAll();
@@ -49,5 +54,22 @@ public class PondService {
     public void deletePond(Long id) {
         Pond pond = getPondById(id);
         pondRepository.delete(pond);
+    }
+
+    public Pond closePond(Long id) {
+        Pond pond = getPondById(id);
+
+        if ("CLOSED".equals(pond.getStatus())) {
+            throw new RuntimeException("Pond is already closed");
+        }
+
+        // Block closing if pond has fish
+        List<FishCount> counts = fishCountRepository.findByPondIdOrderByDateDesc(id);
+        if (!counts.isEmpty() && counts.get(0).getCount() > 0) {
+            throw new RuntimeException("Cannot close pond: pond still has " + counts.get(0).getCount() + " fish. Remove all fish before closing.");
+        }
+
+        pond.setStatus("CLOSED");
+        return pondRepository.save(pond);
     }
 }

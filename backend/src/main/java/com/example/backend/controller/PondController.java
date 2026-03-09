@@ -86,4 +86,18 @@ public class PondController {
                     .body(new ApiResponse(false, "Error deleting pond: " + e.getMessage(), null));
         }
     }
+
+    @PatchMapping("/{id}/close")
+    public ResponseEntity<ApiResponse> closePond(@PathVariable Long id) {
+        try {
+            Pond pond = pondService.closePond(id);
+            return ResponseEntity.ok(new ApiResponse(true, "Pond closed successfully", pond));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse(false, e.getMessage(), null));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse(false, "Error closing pond: " + e.getMessage(), null));
+        }
+    }
 }

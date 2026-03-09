@@ -16,6 +16,9 @@ public class Pond {
     @Column(nullable = false)
     private String color;
 
+    @Column(name = "status", columnDefinition = "VARCHAR(20) DEFAULT 'ACTIVE'")
+    private String status = "ACTIVE";
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -81,5 +84,13 @@ public class Pond {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 }

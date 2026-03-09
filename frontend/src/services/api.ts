@@ -45,6 +45,7 @@ export interface Pond {
   id: number;
   name: string;
   color: string;
+  status?: 'ACTIVE' | 'CLOSED';
   capacity?: number;
   currentFishCount?: number;
   createdAt?: string;
@@ -74,6 +75,11 @@ export const pondApi = {
 
   delete: async (id: number): Promise<ApiResponse> => {
     const response = await api.delete<ApiResponse>(`/ponds/${id}`);
+    return response.data;
+  },
+
+  closePond: async (id: number): Promise<ApiResponse<Pond>> => {
+    const response = await api.patch<ApiResponse<Pond>>(`/ponds/${id}/close`);
     return response.data;
   },
 };

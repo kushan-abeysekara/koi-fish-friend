@@ -17,6 +17,7 @@ interface Pond {
   id: number;
   name: string;
   color: string;
+  status?: string;
 }
 
 const FishCount: React.FC = () => {
@@ -34,6 +35,9 @@ const FishCount: React.FC = () => {
   const [pondToDelete, setPondToDelete] = useState<Pond | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [isDeletingPond, setIsDeletingPond] = useState(false);
+  const [isClosePondModalOpen, setIsClosePondModalOpen] = useState(false);
+  const [pondToClose, setPondToClose] = useState<Pond | null>(null);
+  const [isClosingPond, setIsClosingPond] = useState(false);
   const [formData, setFormData] = useState({
     pondId: '',
     count: '',
@@ -184,6 +188,40 @@ const FishCount: React.FC = () => {
       }
     } else {
       alert('Pond name does not match. Please type the exact pond name to confirm deletion.');
+    }
+  };
+
+  const openClosePondModal = (pond: Pond) => {
+    if (pond.status === 'CLOSED') {
+      alert('This pond is already closed.');
+      return;
+    }
+    const latestCount = getLatestCountByPond(pond.id);
+    if (latestCount && latestCount.count > 0) {
+      alert(`Cannot close pond: pond still has ${latestCount.count} fish. Record a count of 0 before closing.`);
+      return;
+    }
+    setPondToClose(pond);
+    setIsClosePondModalOpen(true);
+  };
+
+  const handleClosePond = async () => {
+    if (!pondToClose || isClosingPond) return;
+    setIsClosingPond(true);
+    try {
+      const response = await pondApi.closePond(pondToClose.id);
+      if (response.success) {
+        await loadPonds();
+        setIsClosePondModalOpen(false);
+        setPondToClose(null);
+      } else {
+        alert(response.message || 'Failed to close pond');
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
+      alert('Failed to close pond: ' + errorMessage);
+    } finally {
+      setIsClosingPond(false);
     }
   };
 
@@ -380,22 +418,42 @@ const FishCount: React.FC = () => {
             const pondColorClasses = pondColors[pond.color];
             const latestCount = getLatestCountByPond(pond.id);
             const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
+            const isClosed = pond.status === 'CLOSED';
 
             return (
               <div key={pond.id} className="relative group">
                 <button
                   onClick={() => setSelectedPond(pond.id)}
-                  className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${selectedPond === pond.id
+                  className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                    isClosed
+                      ? 'bg-gray-200 text-gray-500 border-2 border-gray-300 opacity-75'
+                      : selectedPond === pond.id
                       ? `${pondColorClasses.bg} ${pondColorClasses.text} border-2 ${pondColorClasses.border} shadow-lg`
                       : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                 >
+                  {isClosed && <i className="fas fa-lock mr-1 text-xs"></i>}
                   <i className="fas fa-water mr-2"></i>
                   {pond.name} ({recordCount})
                   {latestCount && (
                     <span className="ml-2 text-xs">• {latestCount.count} fish</span>
                   )}
+                  {isClosed && (
+                    <span className="ml-2 text-xs bg-gray-500 text-white px-1.5 py-0.5 rounded font-bold">CLOSED</span>
+                  )}
                 </button>
+                {!isClosed && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openClosePondModal(pond);
+                    }}
+                    className="absolute -top-2 -left-2 bg-orange-500 hover:bg-orange-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs"
+                    title="Close pond"
+                  >
+                    <i className="fas fa-lock"></i>
+                  </button>
+                )}
                 {ponds.length > 1 && (
                   <button
                     onClick={(e) => {
@@ -421,21 +479,33 @@ const FishCount: React.FC = () => {
           const latestCount = getLatestCountByPond(pond.id);
           const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
           const trend = getCountTrend(pond.id);
+          const isClosed = pond.status === 'CLOSED';
 
           return (
             <div
               key={pond.id}
-              className={`${pondColorClasses.bg} border-2 ${pondColorClasses.border} rounded-xl p-6 hover:shadow-lg transition-all duration-200`}
+              className={`relative border-2 rounded-xl p-6 hover:shadow-lg transition-all duration-200 ${
+                isClosed
+                  ? 'bg-gray-100 border-gray-300 opacity-75'
+                  : `${pondColorClasses.bg} ${pondColorClasses.border}`
+              }`}
             >
+              {isClosed && (
+                <div className="absolute top-3 right-3">
+                  <span className="bg-gray-600 text-white text-xs font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                    <i className="fas fa-lock text-xs"></i> CLOSED
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between mb-4">
-                <span className="text-4xl">🐠</span>
-                <div className={`px-3 py-1 ${pondColorClasses.bg} border ${pondColorClasses.border} rounded-full`}>
-                  <span className={`text-sm font-bold ${pondColorClasses.text}`}>
+                <span className="text-4xl">{isClosed ? '🔒' : '🐠'}</span>
+                <div className={`px-3 py-1 ${isClosed ? 'bg-gray-200 border-gray-300' : `${pondColorClasses.bg} border ${pondColorClasses.border}`} rounded-full`}>
+                  <span className={`text-sm font-bold ${isClosed ? 'text-gray-500' : pondColorClasses.text}`}>
                     {recordCount} counts
                   </span>
                 </div>
               </div>
-              <h3 className={`text-lg font-bold ${pondColorClasses.text} mb-2`}>{pond.name}</h3>
+              <h3 className={`text-lg font-bold ${isClosed ? 'text-gray-500' : pondColorClasses.text} mb-2`}>{pond.name}</h3>
 
               <div className="space-y-2">
                 <div>
@@ -453,6 +523,15 @@ const FishCount: React.FC = () => {
                     </span>
                     <span className="text-xs text-gray-500">vs last count</span>
                   </div>
+                )}
+
+                {!isClosed && (
+                  <button
+                    onClick={() => openClosePondModal(pond)}
+                    className="mt-2 w-full text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 border border-orange-300 py-1.5 rounded-lg font-semibold transition-colors flex items-center justify-center gap-1"
+                  >
+                    <i className="fas fa-lock"></i> Close Pond
+                  </button>
                 )}
               </div>
             </div>
@@ -945,6 +1024,75 @@ const FishCount: React.FC = () => {
                     setPondToDelete(null);
                     setDeleteConfirmationText('');
                   }}
+                  className="px-6 py-3 border-2 border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close Pond Confirmation Modal */}
+      {isClosePondModalOpen && pondToClose && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+            <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-2xl font-bold flex items-center gap-2">
+                  <i className="fas fa-lock"></i>
+                  Close Pond
+                </h3>
+                <button
+                  onClick={() => { setIsClosePondModalOpen(false); setPondToClose(null); }}
+                  className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-lg transition-colors"
+                >
+                  <i className="fas fa-times text-xl"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded">
+                <div className="flex items-start gap-3">
+                  <i className="fas fa-exclamation-triangle text-orange-500 text-xl mt-0.5"></i>
+                  <div>
+                    <h4 className="font-bold text-orange-800 mb-1">Close "{pondToClose.name}"?</h4>
+                    <ul className="text-sm text-orange-700 space-y-1 list-disc list-inside">
+                      <li>No new expenses can be added for this pond</li>
+                      <li>No new revenue can be recorded for this pond</li>
+                      <li>Pond data remains visible in Profit/Loss reports</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={handleClosePond}
+                  disabled={isClosingPond}
+                  className={`flex-1 bg-gradient-to-r from-orange-500 to-orange-600 text-white py-3 rounded-lg font-semibold shadow-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                    isClosingPond ? 'opacity-70 cursor-not-allowed' : 'hover:from-orange-600 hover:to-orange-700'
+                  }`}
+                >
+                  {isClosingPond ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      Closing...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fas fa-lock"></i>
+                      Close Pond
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => { setIsClosePondModalOpen(false); setPondToClose(null); }}
                   className="px-6 py-3 border-2 border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg font-semibold transition-colors"
                 >
                   Cancel

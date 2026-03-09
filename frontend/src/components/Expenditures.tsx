@@ -21,6 +21,7 @@ interface Pond {
   id: number;
   name: string;
   color: string;
+  status?: string;
 }
 
 interface InventoryItem {
@@ -326,6 +327,13 @@ const Expenditures: React.FC = () => {
   const handleAddExpenditure = async () => {
     if (!selectedCategory || !formData.subcategory || !formData.amount || !formData.pondId) {
       alert('Please fill all required fields including pond selection');
+      return;
+    }
+
+    // Block expenditures for closed ponds
+    const pondForExp = ponds.find(p => p.id === parseInt(formData.pondId));
+    if (pondForExp?.status === 'CLOSED') {
+      alert('Cannot add expenses to a closed pond.');
       return;
     }
 
@@ -1371,7 +1379,7 @@ const Expenditures: React.FC = () => {
                       required
                     >
                       <option value="">-- Select Pond --</option>
-                      {ponds.map((pond) => (
+                      {ponds.filter(pond => pond.status !== 'CLOSED').map((pond) => (
                         <option key={pond.id} value={pond.id}>
                           {pond.name}
                         </option>

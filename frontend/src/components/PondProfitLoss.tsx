@@ -157,6 +157,15 @@ const PondProfitLoss: React.FC = () => {
       alert('Pond, quantity, and price per fish are required.');
       return;
     }
+
+    // Block new sales for closed ponds
+    if (!editingSale) {
+      const pondForSale = ponds.find(p => p.id === Number(saleForm.pondId));
+      if (pondForSale?.status === 'CLOSED') {
+        alert('Cannot add revenue to a closed pond.');
+        return;
+      }
+    }
     const payload = {
       date: saleForm.date,
       pondId: Number(saleForm.pondId),
@@ -305,9 +314,12 @@ const PondProfitLoss: React.FC = () => {
         {ponds.map((p, i) => (
           <button key={p.id}
             onClick={() => setSelectedPond(p.id)}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${selectedPond === p.id ? 'text-white shadow' : 'bg-white text-gray-600 border hover:bg-gray-50'}`}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium transition flex items-center gap-1.5 ${selectedPond === p.id ? 'text-white shadow' : 'bg-white text-gray-600 border hover:bg-gray-50'}`}
             style={selectedPond === p.id ? { backgroundColor: POND_COLORS[i % POND_COLORS.length] } : {}}>
             {p.name}
+            {p.status === 'CLOSED' && (
+              <span className="bg-gray-500 text-white text-xs px-1.5 py-0.5 rounded font-bold">CLOSED</span>
+            )}
           </button>
         ))}
       </div>
@@ -352,7 +364,14 @@ const PondProfitLoss: React.FC = () => {
                     <div className="h-1.5" style={{ backgroundColor: accent }} />
                     <div className="p-5">
                       <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-bold text-gray-800 text-lg">{s.pond.name}</h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-gray-800 text-lg">{s.pond.name}</h3>
+                          {s.pond.status === 'CLOSED' && (
+                            <span className="text-xs bg-gray-600 text-white px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                              🔒 CLOSED
+                            </span>
+                          )}
+                        </div>
                         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${net >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                           {net >= 0 ? '✅ Profit' : '❌ Loss'}
                         </span>
@@ -497,7 +516,14 @@ const PondProfitLoss: React.FC = () => {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="flex items-center justify-between p-5 border-b">
               <h3 className="font-bold text-gray-800">🐟 Fish Sale Records</h3>
-              <button onClick={() => openAddSale(selectedPond !== 'all' ? selectedPond : undefined)}
+              <button onClick={() => {
+                const selPond = ponds.find(p => p.id === selectedPond);
+                if (selPond?.status === 'CLOSED') {
+                  alert('Cannot add revenue to a closed pond.');
+                  return;
+                }
+                openAddSale(selectedPond !== 'all' ? selectedPond : undefined);
+              }}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2">
                 <span>+</span> Add Fish Sale
               </button>
@@ -604,11 +630,17 @@ const PondProfitLoss: React.FC = () => {
                           </td>
                           <td className="px-4 py-3 text-purple-600 font-semibold">{pct(margin)}%</td>
                           <td className="px-4 py-3">
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                              net >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                            }`}>
-                              {net >= 0 ? '✅ Profitable' : '❌ Loss'}
-                            </span>
+                            {s.pond.status === 'CLOSED' ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-200 text-gray-600">
+                                🔒 Closed
+                              </span>
+                            ) : (
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                net >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                              }`}>
+                                {net >= 0 ? '✅ Profitable' : '❌ Loss'}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -692,7 +724,7 @@ const PondProfitLoss: React.FC = () => {
                     onChange={e => setSaleForm(f => ({ ...f, pondId: Number(e.target.value) }))}
                     className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500">
                     <option value={0}>Select pond…</option>
-                    {ponds.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {ponds.filter(p => p.status !== 'CLOSED').map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div>
