@@ -109,6 +109,8 @@ public class SensorDataController {
             System.out.println("   Turbidity: " + request.getTurbidity());
             System.out.println("   CO2: " + request.getCo2Level() + " PPM");
             System.out.println("   NH3: " + request.getAmmonia() + " PPM");
+            System.out.println("   AQI: " + request.getAirQualityIndex());
+            System.out.println("   Gas Status: " + request.getGasStatus());
             System.out.println("   Status: " + request.getWaterQualityStatus());
 
             // Find or create device
@@ -135,6 +137,8 @@ public class SensorDataController {
             data.setCo2Level(request.getCo2Level());
             data.setAmmonia(request.getAmmonia());
             data.setWaterQualityStatus(request.getWaterQualityStatus());
+            data.setAirQualityIndex(request.getAirQualityIndex());
+            data.setGasStatus(request.getGasStatus());
             data.setTimestamp(LocalDateTime.now());
 
             // Save to database

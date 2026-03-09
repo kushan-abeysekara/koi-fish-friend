@@ -39,6 +39,10 @@ interface SensorPayloadData {
   rain_detected?: boolean;
   rainStatus?: string;
   rain_status?: string;
+  airQualityIndex?: number;
+  air_quality_index?: number;
+  gasStatus?: string;
+  gas_status?: string;
   waterQualityStatus?: string;
   water_quality_status?: string;
   timestamp?: number;
@@ -92,6 +96,8 @@ const WaterQualityDashboard: React.FC = () => {
             rainLevel: wqRow.rain_level ?? 0,
             rainDetected: wqRow.rain_detected ?? false,
             rainStatus: wqRow.rain_status ?? 'dry',
+            airQualityIndex: wqRow.air_quality_index ?? 0,
+            gasStatus: wqRow.gas_status ?? 'normal',
             waterQualityStatus: wqRow.water_quality_status ?? 'normal',
             status: wqRow.status ?? 'normal',
             timestamp: wqRow.updated_at || new Date().toISOString(),
@@ -145,6 +151,8 @@ const WaterQualityDashboard: React.FC = () => {
       rainLevel: data.rainLevel ?? data.rain_level ?? 0,
       rainDetected: data.rainDetected ?? data.rain_detected ?? false,
       rainStatus: data.rainStatus ?? data.rain_status ?? 'dry',
+      airQualityIndex: data.airQualityIndex ?? data.air_quality_index ?? 0,
+      gasStatus: data.gasStatus ?? data.gas_status ?? 'normal',
       waterQualityStatus: data.waterQualityStatus ?? data.water_quality_status ?? 'normal',
       status: 'active',
       timestamp: new Date().toISOString(),
@@ -180,6 +188,8 @@ const WaterQualityDashboard: React.FC = () => {
           rain_level: row.rain_level,
           rain_detected: row.rain_detected,
           rain_status: row.rain_status,
+          air_quality_index: row.air_quality_index,
+          gas_status: row.gas_status,
           rssi: row.rssi,
           source: 'poll',
         });
@@ -272,6 +282,17 @@ const WaterQualityDashboard: React.FC = () => {
         icon: '🌧️',
         safeRange: { min: 0, max: 10 },
         warningRange: { min: 0, max: 60 },
+        lastUpdated: timestamp,
+      },
+      {
+        id: 'aqi',
+        name: 'Air Quality Index',
+        value: latestData.airQualityIndex || 0,
+        unit: 'AQI',
+        status: getStatus(latestData.airQualityIndex || 0, { min: 0, max: 100 }, { min: 0, max: 200 }),
+        icon: '🌬️',
+        safeRange: { min: 0, max: 100 },
+        warningRange: { min: 0, max: 200 },
         lastUpdated: timestamp,
       },
     ];
