@@ -35,6 +35,10 @@ public class SensorData {
     private Boolean rainDetected; // Digital rain detection flag
     private String rainStatus;    // dry, light, moderate, heavy
     
+    // Air quality parameters (from MQ135)
+    private Integer airQualityIndex; // 0-500 AQI scale
+    private String gasStatus;        // normal, warning, critical
+    
     private String status; // normal, warning, critical
 
     @Column(name = "timestamp")
@@ -176,6 +180,22 @@ public class SensorData {
 
     public void setRainStatus(String rainStatus) {
         this.rainStatus = rainStatus;
+    }
+
+    public Integer getAirQualityIndex() {
+        return airQualityIndex;
+    }
+
+    public void setAirQualityIndex(Integer airQualityIndex) {
+        this.airQualityIndex = airQualityIndex;
+    }
+
+    public String getGasStatus() {
+        return gasStatus;
+    }
+
+    public void setGasStatus(String gasStatus) {
+        this.gasStatus = gasStatus;
     }
 
     public LocalDateTime getTimestamp() {

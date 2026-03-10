@@ -99,6 +99,14 @@ const ProfitLoss: React.FC = () => {
 
     const pondId = parseInt(formData.pondId);
     const quantitySold = parseFloat(formData.quantitySold);
+
+    // Block revenue for closed ponds
+    const pondForRev = ponds.find(p => p.id === pondId);
+    if (pondForRev?.status === 'CLOSED') {
+      alert('Cannot add revenue to a closed pond.');
+      return;
+    }
+
     const maxSellable = getMaxSellableQuantity(pondId);
 
     if (quantitySold > maxSellable) {
@@ -427,7 +435,7 @@ const ProfitLoss: React.FC = () => {
                     className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                   >
                     <option value="">Select Pond</option>
-                    {ponds.map((pond) => (
+                    {ponds.filter((pond) => pond.status !== 'CLOSED').map((pond) => (
                       <option key={pond.id} value={pond.id}>
                         {pond.name}
                       </option>

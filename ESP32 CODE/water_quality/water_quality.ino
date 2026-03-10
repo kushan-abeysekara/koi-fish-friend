@@ -24,6 +24,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 
 // ===================== WiFi CONFIG =====================
 const char *ssid = "KoiFishFriend";
@@ -81,6 +82,17 @@ const float PH_STEP = 0.18;
 const float TURBIDITY_CLEAR_WATER_VOLTAGE = 4.2;
 const float TURBIDITY_MAX_NTU = 3000.0;
 
+// ===================== MQ135 GAS CALIBRATION =====================
+#define MQ135_RL 10.0      // Load resistor in kΩ (module standard)
+#define MQ135_R0 29.3      // Your calibrated R0 value
+#define MQ135_CLEAN_AIR_RATIO 3.6  // Rs/R0 in clean air (baseline)
+#define EEPROM_SIZE 64
+#define EEPROM_R0_ADDR 0   // EEPROM address to store R0
+#define EEPROM_R0_MAGIC_ADDR 4 // Magic byte to verify valid R0
+#define EEPROM_R0_MAGIC 0xA5
+
+float mq135_R0 = MQ135_R0; // Active R0 value (loaded from EEPROM or default)
+
 // ===================== SENSOR VARIABLES =====================
 float phValue = 7.0;
 float turbidity = 0.0;
@@ -90,6 +102,28 @@ float rainLevel = 0.0;
 bool rainDetected = false;
 String rainStatus = "dry";
 String waterQualityStatus = "normal";
+
+// ===================== AIR QUALITY INDEX & GAS STATUS =====================
+float co2PPM = 400.0;
+float ammoniaPPM = 0.0;
+int airQualityIndex = 0;       // 0–500 scale (0=good, 500=hazardous)
+String gasStatus = "normal";   // normal / warning / critical
+
+// ===================== GAS SMOOTHING (EMA filter) =====================
+const float SMOOTH_ALPHA = 0.15;  // Smoothing factor (0.0–1.0, lower = smoother)
+float smoothedCO2 = 400.0;
+float smoothedNH3 = 0.0;
+bool smoothingInitialized = false;
+
+// ===================== TOXIC GAS ALERT =====================
+bool toxicAlertSent = false;
+unsigned long lastToxicAlertTime = 0;
+const unsigned long TOXIC_ALERT_COOLDOWN = 300000; // 5 min cooldown between alerts
+
+// ===================== MQ135 WARMUP =====================
+unsigned long bootTime = 0;
+const unsigned long MQ135_WARMUP_MS = 300000;  // 5 min warmup (ideal: 10 min)
+bool mq135WarmedUp = false;
 
 // ===============================================================
 //                      WiFi CONNECTION
@@ -215,6 +249,7 @@ void upsertSensorLive()
     String sql = "INSERT INTO sensor_live "
                  "(device_id, ph_value, turbidity, co2_level, ammonia, "
                  "water_quality_status, rain_level, rain_detected, rain_status, "
+                 "air_quality_index, gas_status, "
                  "status, rssi, updated_at) VALUES ('" +
                  deviceId + "', " +
                  String(phValue, 2) + ", " +
@@ -224,7 +259,9 @@ void upsertSensorLive()
                  waterQualityStatus + "', " +
                  String(rainLevel, 1) + ", " +
                  String(rainDetected ? "true" : "false") + ", '" +
-                 rainStatus + "', 'normal', " +
+                 rainStatus + "', " +
+                 String(airQualityIndex) + ", '" +
+                 gasStatus + "', 'normal', " +
                  String(WiFi.RSSI()) + ", NOW()) "
                  "ON CONFLICT (device_id) DO UPDATE SET "
                  "ph_value = EXCLUDED.ph_value, turbidity = EXCLUDED.turbidity, "
@@ -232,6 +269,7 @@ void upsertSensorLive()
                  "water_quality_status = EXCLUDED.water_quality_status, "
                  "rain_level = EXCLUDED.rain_level, rain_detected = EXCLUDED.rain_detected, "
                  "rain_status = EXCLUDED.rain_status, "
+                 "air_quality_index = EXCLUDED.air_quality_index, gas_status = EXCLUDED.gas_status, "
                  "status = EXCLUDED.status, rssi = EXCLUDED.rssi, updated_at = NOW()";
 
     bool ok = executeSupabaseQuery(sql);
@@ -263,6 +301,7 @@ void insertSensorHistory()
     String sql = "INSERT INTO sensor_history "
                  "(device_id, ph_value, turbidity, co2_level, ammonia, "
                  "water_quality_status, rain_level, rain_detected, rain_status, "
+                 "air_quality_index, gas_status, "
                  "status, recorded_at) VALUES ('" +
                  deviceId + "', " +
                  String(phValue, 2) + ", " +
@@ -272,7 +311,9 @@ void insertSensorHistory()
                  waterQualityStatus + "', " +
                  String(rainLevel, 1) + ", " +
                  String(rainDetected ? "true" : "false") + ", '" +
-                 rainStatus + "', 'normal', NOW())";
+                 rainStatus + "', " +
+                 String(airQualityIndex) + ", '" +
+                 gasStatus + "', 'normal', NOW())";
 
     bool ok = executeSupabaseQuery(sql);
 
@@ -280,6 +321,190 @@ void insertSensorHistory()
     {
         Serial.println("sensor_history inserted (1/min)");
     }
+}
+
+// ===============================================================
+//                  MQ135 GAS HELPER FUNCTIONS
+// ===============================================================
+
+float mq135ReadVoltage(int pin)
+{
+    int adc = analogRead(pin);
+    if (adc < 1) adc = 1;  // prevent divide-by-zero
+    return adc * (V_REF / ADC_MAX);
+}
+
+float mq135ReadRs(int pin)
+{
+    float v = mq135ReadVoltage(pin);
+    return ((V_REF - v) / v) * MQ135_RL;
+}
+
+float mq135ReadRatio(int pin, int samples)
+{
+    float rs = 0;
+    for (int i = 0; i < samples; i++)
+    {
+        rs += mq135ReadRs(pin);
+        delay(5);
+    }
+    rs /= samples;
+    return rs / mq135_R0;
+}
+
+// ===============================================================
+//                EEPROM R0 AUTO-SAVE
+// ===============================================================
+
+void loadR0FromEEPROM()
+{
+    uint8_t magic = EEPROM.read(EEPROM_R0_MAGIC_ADDR);
+    if (magic == EEPROM_R0_MAGIC)
+    {
+        float storedR0;
+        EEPROM.get(EEPROM_R0_ADDR, storedR0);
+        if (storedR0 > 1.0 && storedR0 < 500.0) // sanity check
+        {
+            mq135_R0 = storedR0;
+            if (ENABLE_SERIAL)
+            {
+                Serial.print("[EEPROM] Loaded R0 = ");
+                Serial.println(mq135_R0, 2);
+            }
+            return;
+        }
+    }
+    // No valid R0 stored, use default
+    mq135_R0 = MQ135_R0;
+    if (ENABLE_SERIAL)
+    {
+        Serial.print("[EEPROM] No saved R0, using default = ");
+        Serial.println(mq135_R0, 2);
+    }
+}
+
+void saveR0ToEEPROM(float r0)
+{
+    if (r0 < 1.0 || r0 > 500.0) return; // sanity check
+    EEPROM.put(EEPROM_R0_ADDR, r0);
+    EEPROM.write(EEPROM_R0_MAGIC_ADDR, EEPROM_R0_MAGIC);
+    EEPROM.commit();
+    if (ENABLE_SERIAL)
+    {
+        Serial.print("[EEPROM] Saved R0 = ");
+        Serial.println(r0, 2);
+    }
+}
+
+// Recalibrate R0 in clean air (call after 24h burn-in in fresh air)
+void calibrateMQ135R0(int pin, int samples = 50)
+{
+    float rs = 0;
+    for (int i = 0; i < samples; i++)
+    {
+        rs += mq135ReadRs(pin);
+        delay(50);
+    }
+    rs /= samples;
+    // In clean air, Rs/R0 ratio ≈ 3.6 for MQ135
+    float newR0 = rs / 3.6;
+    mq135_R0 = newR0;
+    saveR0ToEEPROM(newR0);
+    if (ENABLE_SERIAL)
+    {
+        Serial.print("[Calibration] New R0 = ");
+        Serial.println(newR0, 2);
+    }
+}
+
+// ===============================================================
+//              GAS SMOOTHING FILTER (EMA)
+// ===============================================================
+
+float applySmoothing(float current, float previous, float alpha)
+{
+    return alpha * current + (1.0 - alpha) * previous;
+}
+
+// ===============================================================
+//           TOXIC GAS ALERT → SUPABASE
+// ===============================================================
+
+void checkAndSendToxicAlert(float co2, float nh3)
+{
+    bool isToxic = (co2 > 2000 || nh3 > 1.0);
+    unsigned long now = millis();
+
+    if (isToxic && (!toxicAlertSent || (now - lastToxicAlertTime > TOXIC_ALERT_COOLDOWN)))
+    {
+        String alertType = "";
+        if (co2 > 2000 && nh3 > 1.0)
+            alertType = "HIGH_CO2_AND_NH3";
+        else if (co2 > 2000)
+            alertType = "HIGH_CO2";
+        else
+            alertType = "HIGH_NH3";
+
+        String sql = "INSERT INTO notifications "
+                     "(device_id, notification_type, title, message, severity, pond_id, created_at) VALUES ('"
+                     + deviceId + "', '" + alertType + "', "
+                     "'Toxic Gas Alert', "
+                     "'" + alertType + ": CO2=" + String(co2, 0) + " ppm, NH3=" + String(nh3, 2) + " ppm. "
+                     "Check pond " + String(assignedPondId) + " immediately!', "
+                     "'critical', " + String(assignedPondId) + ", NOW())";
+
+        bool ok = executeSupabaseQuery(sql);
+        if (ok)
+        {
+            toxicAlertSent = true;
+            lastToxicAlertTime = now;
+            if (ENABLE_SERIAL)
+            {
+                Serial.println("[ALERT] Toxic gas notification sent to Supabase!");
+                Serial.print("  Type: "); Serial.println(alertType);
+                Serial.print("  CO2: "); Serial.print(co2, 0); Serial.println(" PPM");
+                Serial.print("  NH3: "); Serial.print(nh3, 2); Serial.println(" PPM");
+            }
+        }
+    }
+    else if (!isToxic)
+    {
+        toxicAlertSent = false; // Reset when levels return to normal
+    }
+}
+
+// ===============================================================
+//         AIR QUALITY INDEX (AQI) CALCULATION
+// ===============================================================
+
+// Map a gas PPM value to a 0–500 sub-index using breakpoints
+int gasSubIndex(float ppm, float good, float moderate, float unhealthy, float hazardous)
+{
+    if (ppm <= good)       return (int)map(ppm * 100, 0, good * 100, 0, 50);
+    if (ppm <= moderate)   return (int)map(ppm * 100, good * 100, moderate * 100, 51, 100);
+    if (ppm <= unhealthy)  return (int)map(ppm * 100, moderate * 100, unhealthy * 100, 101, 200);
+    if (ppm <= hazardous)  return (int)map(ppm * 100, unhealthy * 100, hazardous * 100, 201, 300);
+    return (int)constrain(map(ppm * 100, hazardous * 100, hazardous * 200, 301, 500), 301, 500);
+}
+
+int calculateAirQualityIndex(float co2, float nh3)
+{
+    // CO2 breakpoints (ppm): good<600, moderate<1000, unhealthy<2000, hazardous<5000
+    int co2Index = gasSubIndex(co2, 600.0, 1000.0, 2000.0, 5000.0);
+
+    // NH3 breakpoints (ppm): good<0.25, moderate<0.5, unhealthy<1.0, hazardous<5.0
+    int nh3Index = gasSubIndex(nh3, 0.25, 0.5, 1.0, 5.0);
+
+    // AQI = worst of all sub-indices
+    int aqi = max(co2Index, nh3Index);
+    return constrain(aqi, 0, 500);
+}
+
+String evaluateGasStatus(int aqi)
+{
+    if (aqi <= 100)  return "normal";
+    if (aqi <= 200)  return "warning";
+    return "critical";
 }
 
 // ===============================================================
@@ -394,115 +619,73 @@ float readTurbidity(int pin, int samples = 20)
 
 float readCO2(int pin, int samples = 20)
 {
-    unsigned long sum = 0;
-    int minRaw = 4095;
-    int maxRaw = 0;
+    float ratio = mq135ReadRatio(pin, samples);
 
-    for (int i = 0; i < samples; i++)
-    {
-        int reading = analogRead(pin);
-        sum += reading;
-        if (reading < minRaw) minRaw = reading;
-        if (reading > maxRaw) maxRaw = reading;
-        delay(2);
-    }
+    // CO2 curve from MQ135 datasheet (log scale)
+    float ppm = 116.6020682 * pow(ratio, -2.769034857);
 
-    float avgReading = sum / (float)samples;
-    float voltage = (avgReading / ADC_MAX) * V_REF;
-
-    // Check if sensor is disconnected
-    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
-    if (disconnected)
-    {
-        static unsigned long lastWarn = 0;
-        if (millis() - lastWarn > 10000)
-        {
-            lastWarn = millis();
-            if (ENABLE_SERIAL)
-                Serial.println("WARNING: MQ135 Sensor disconnected -> using default 400 PPM");
-        }
-        return 400.0; // Normal atmospheric CO2
-    }
-
-    float ppm = 400.0;
-    if (voltage > 0.4)
-    {
-        ppm = 116.6020682 * exp((voltage - 2.462) / -0.263);
-    }
-
-    ppm += 300.0;
-    if (ppm < 400) ppm = 400;
+    if (ppm < 400) ppm = 400;      // atmospheric minimum
     if (ppm > 5000) ppm = 5000;
+
+    // Debug
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 5000)
+    {
+        lastDebug = millis();
+        if (ENABLE_SERIAL)
+        {
+            Serial.print("CO2 Debug | Ratio: ");
+            Serial.print(ratio, 3);
+            Serial.print(" | CO2: ");
+            Serial.print(ppm, 0);
+            Serial.println(" PPM");
+        }
+    }
 
     return ppm;
 }
 
 float readAmmonia(int pin, int samples = 20)
 {
-    unsigned long sum = 0;
-    int minRaw = 4095;
-    int maxRaw = 0;
+    float ratio = mq135ReadRatio(pin, samples);
 
-    for (int i = 0; i < samples; i++)
+    // In clean air Rs/R0 ≈ 3.6. NH3 gas causes ratio to DROP.
+    // If ratio is at or above clean-air baseline → no NH3 present.
+    if (ratio >= MQ135_CLEAN_AIR_RATIO)
     {
-        int reading = analogRead(pin);
-        sum += reading;
-        if (reading < minRaw) minRaw = reading;
-        if (reading > maxRaw) maxRaw = reading;
-        delay(2);
-    }
-
-    float avgReading = sum / (float)samples;
-    float voltage = (avgReading / ADC_MAX) * V_REF;
-
-    // Check if sensor is disconnected
-    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
-    if (disconnected)
-    {
-        static unsigned long lastWarn = 0;
-        if (millis() - lastWarn > 10000)
+        // Debug
+        static unsigned long lastCleanDebug = 0;
+        if (millis() - lastCleanDebug > 5000)
         {
-            lastWarn = millis();
+            lastCleanDebug = millis();
             if (ENABLE_SERIAL)
-                Serial.println("WARNING: NH3 Sensor disconnected -> using default 0.0 PPM");
+            {
+                Serial.print("NH3 Debug | Ratio: ");
+                Serial.print(ratio, 3);
+                Serial.println(" | Clean air → 0.00 PPM");
+            }
         }
         return 0.0;
     }
 
-    float ppm = 0.0;
+    // NH3 curve from MQ135 datasheet, with clean-air baseline subtracted
+    float ppm = 102.2 * pow(ratio, -2.473);
+    float baseline = 102.2 * pow(MQ135_CLEAN_AIR_RATIO, -2.473);
+    ppm = ppm - baseline;
 
-    if (voltage < 1.0)
-    {
-        ppm = 10.0;
-    }
-    else if (voltage < 2.0)
-    {
-        ppm = 5.0 * exp((2.0 - voltage) / 0.4);
-    }
-    else if (voltage < 2.5)
-    {
-        ppm = (2.5 - voltage) * 2.0;
-    }
-    else
-    {
-        ppm = max(0.0, (2.8 - voltage) * 0.5);
-    }
+    if (ppm < 0.05) ppm = 0;   // Dead zone to suppress noise
+    if (ppm > 100) ppm = 100;
 
-    if (ppm < 0) ppm = 0;
-    if (ppm > 10.0) ppm = 10.0;
-
-    // Debug every 5 seconds
-    static unsigned long lastAmmoniaDebug = 0;
-    if (millis() - lastAmmoniaDebug > 5000)
+    // Debug
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 5000)
     {
-        lastAmmoniaDebug = millis();
+        lastDebug = millis();
         if (ENABLE_SERIAL)
         {
-            Serial.print("NH3 Debug - Raw: ");
-            Serial.print(avgReading, 0);
-            Serial.print(" | Voltage: ");
-            Serial.print(voltage, 3);
-            Serial.print("V | NH3: ");
+            Serial.print("NH3 Debug | Ratio: ");
+            Serial.print(ratio, 3);
+            Serial.print(" | NH3: ");
             Serial.print(ppm, 2);
             Serial.println(" PPM");
         }
@@ -586,6 +769,10 @@ void setup()
         Serial.println("=====================================");
     }
 
+    // Initialize EEPROM and load saved R0
+    EEPROM.begin(EEPROM_SIZE);
+    loadR0FromEEPROM();
+
     // Configure ADC
     analogSetAttenuation(ADC_11db);
     analogReadResolution(12);
@@ -596,6 +783,8 @@ void setup()
     pinMode(TURBIDITY_PIN, INPUT);
     pinMode(RAIN_ANALOG_PIN, INPUT);
     pinMode(RAIN_DIGITAL_PIN, INPUT_PULLUP);
+
+    bootTime = millis();
 
     // Generate device ID with WQ_ prefix
     uint8_t mac[6];
@@ -640,6 +829,9 @@ void setup()
         Serial.println("Setup complete! Supabase Mode Active");
         Serial.println("  Writing directly to sensor_live table");
         Serial.println("  History stored every 60 seconds");
+        Serial.print("  MQ135 R0: ");
+        Serial.println(mq135_R0, 2);
+        Serial.println("  MQ135 warmup: 5 min (readings may drift until warmed up)");
         Serial.print("  Free heap: ");
         Serial.print(ESP.getFreeHeap());
         Serial.println(" bytes");
@@ -666,15 +858,54 @@ void loop()
         }
     }
 
+    // -- Check MQ135 warmup status --
+    if (!mq135WarmedUp && (now - bootTime >= MQ135_WARMUP_MS))
+    {
+        mq135WarmedUp = true;
+        if (ENABLE_SERIAL)
+            Serial.println("[MQ135] Warmup complete - readings are now stable");
+    }
+
     // -- Read all sensors (fast sampling for real-time) --
     phValue = readPH(PH_PIN, 30);
     turbidity = readTurbidity(TURBIDITY_PIN, 30);
-    co2Level = readCO2(MQ135_PIN, 30);
-    ammonia = readAmmonia(MQ135_PIN, 30);
+
+    // Read CO2 and NH3 from MQ135 (Rs/R0 ratio method)
+    float rawCO2 = readCO2(MQ135_PIN, 30);
+    float rawNH3 = readAmmonia(MQ135_PIN, 30);
+
+    // Apply EMA smoothing filter for stable graphs
+    if (!smoothingInitialized)
+    {
+        smoothedCO2 = rawCO2;
+        smoothedNH3 = rawNH3;
+        smoothingInitialized = true;
+    }
+    else
+    {
+        smoothedCO2 = applySmoothing(rawCO2, smoothedCO2, SMOOTH_ALPHA);
+        smoothedNH3 = applySmoothing(rawNH3, smoothedNH3, SMOOTH_ALPHA);
+    }
+
+    co2Level = smoothedCO2;
+    ammonia = smoothedNH3;
+    co2PPM = co2Level;
+    ammoniaPPM = ammonia;
+
+    // Calculate Air Quality Index from gas readings
+    airQualityIndex = calculateAirQualityIndex(co2PPM, ammoniaPPM);
+    gasStatus = evaluateGasStatus(airQualityIndex);
+
     rainLevel = readRainLevel(RAIN_ANALOG_PIN, 20);
     rainDetected = (digitalRead(RAIN_DIGITAL_PIN) == LOW);
     rainStatus = evaluateRainStatus(rainLevel, rainDetected);
     waterQualityStatus = evaluateWaterQuality(phValue, turbidity, co2Level, ammonia);
+
+    // -- Check for toxic gas levels and send alert --
+    if (mq135WarmedUp)
+    {
+        checkAndSendToxicAlert(co2Level, ammonia);
+    }
 
     // -- Serial logging --
     if (ENABLE_SERIAL)
@@ -702,7 +933,11 @@ void loop()
             Serial.print(co2Level, 0);
             Serial.print(" PPM | NH3: ");
             Serial.print(ammonia, 2);
-            Serial.print(" PPM | Rain: ");
+            Serial.print(" PPM | AQI: ");
+            Serial.print(airQualityIndex);
+            Serial.print(" (");
+            Serial.print(gasStatus);
+            Serial.print(") | Rain: ");
             Serial.print(rainLevel, 1);
             Serial.print("% (");
             Serial.print(rainStatus);

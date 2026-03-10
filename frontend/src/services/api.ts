@@ -45,6 +45,7 @@ export interface Pond {
   id: number;
   name: string;
   color: string;
+  status?: 'ACTIVE' | 'CLOSED';
   capacity?: number;
   currentFishCount?: number;
   createdAt?: string;
@@ -74,6 +75,11 @@ export const pondApi = {
 
   delete: async (id: number): Promise<ApiResponse> => {
     const response = await api.delete<ApiResponse>(`/ponds/${id}`);
+    return response.data;
+  },
+
+  closePond: async (id: number): Promise<ApiResponse<Pond>> => {
+    const response = await api.patch<ApiResponse<Pond>>(`/ponds/${id}/close`);
     return response.data;
   },
 };
@@ -647,9 +653,9 @@ export interface SensorData {
   turbidity?: number;
   co2Level?: number;  // CO2 in PPM from MQ135
   ammonia?: number;   // Ammonia in PPM from MQ135
-  airQuality?: number;
+  airQualityIndex?: number; // 0-500 AQI scale
+  gasStatus?: string;       // normal, warning, critical
   waterQualityStatus?: string;
-  dissolvedOxygen?: number;
   // Rain sensor parameters
   rainLevel?: number;      // Rain intensity 0-100%
   rainDetected?: boolean;  // Digital rain detection flag
@@ -745,6 +751,8 @@ export interface SupabaseSensorLiveRow {
   rain_level: number;
   rain_detected: boolean;
   rain_status: string;
+  air_quality_index: number;
+  gas_status: string;
   status: string;
   rssi: number;
   updated_at: string;

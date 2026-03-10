@@ -11,6 +11,8 @@ interface WaterQualityLive {
   phValue: number;
   turbidity: number;
   waterQualityStatus: string;
+  airQualityIndex: number;
+  gasStatus: string;
 }
 
 interface DashboardHomeProps {
@@ -60,6 +62,8 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
         phValue: ph,
         turbidity: (raw.turbidity ?? 0) as number,
         waterQualityStatus: (raw.waterQualityStatus ?? raw.water_quality_status ?? 'normal') as string,
+        airQualityIndex: (raw.airQualityIndex ?? raw.air_quality_index ?? 0) as number,
+        gasStatus: (raw.gasStatus ?? raw.gas_status ?? 'normal') as string,
       });
     };
 
@@ -437,11 +441,11 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
                 }`}>{waterQuality.turbidity.toFixed(0)} <span className="text-xs text-gray-400">NTU</span></p>
               </div>
               <div className="text-center p-2 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-500">Status</p>
-                <p className={`text-sm font-bold ${
-                  waterQuality.waterQualityStatus === 'normal' ? 'text-green-600' :
-                  waterQuality.waterQualityStatus === 'warning' ? 'text-yellow-600' : 'text-red-600'
-                }`}>{waterQuality.waterQualityStatus.charAt(0).toUpperCase() + waterQuality.waterQualityStatus.slice(1)}</p>
+                <p className="text-xs text-gray-500">AQI</p>
+                <p className={`text-lg font-bold ${
+                  waterQuality.airQualityIndex <= 100 ? 'text-green-600' :
+                  waterQuality.airQualityIndex <= 200 ? 'text-yellow-600' : 'text-red-600'
+                }`}>{waterQuality.airQualityIndex} <span className="text-xs text-gray-400">{waterQuality.gasStatus}</span></p>
               </div>
             </div>
           ) : (

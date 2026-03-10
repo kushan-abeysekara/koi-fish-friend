@@ -369,6 +369,10 @@ public class MqttService {
                 data.setRainDetected(json.get("rainDetected").asBoolean());
             if (json.has("rainStatus"))
                 data.setRainStatus(json.get("rainStatus").asText());
+            if (json.has("airQualityIndex"))
+                data.setAirQualityIndex(json.get("airQualityIndex").asInt());
+            if (json.has("gasStatus"))
+                data.setGasStatus(json.get("gasStatus").asText());
 
             // Water quality: skip MySQL, save only to Supabase
             supabaseService.storeSensorLive(deviceId, json);
