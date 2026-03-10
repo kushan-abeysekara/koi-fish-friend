@@ -75,7 +75,7 @@ const float ADC_MAX = 4095.0;
 const float V_REF = 3.3;
 
 // pH calibration
-const float PH_NEUTRAL_VOLTAGE = 2.5;
+const float PH_NEUTRAL_VOLTAGE = 2.8;
 const float PH_STEP = 0.18;
 
 // Turbidity calibration
@@ -337,6 +337,8 @@ float mq135ReadVoltage(int pin)
 float mq135ReadRs(int pin)
 {
     float v = mq135ReadVoltage(pin);
+    if (v < 0.01) v = 0.01;           // sensor shorted or disconnected (low)
+    if (v > (V_REF - 0.01)) v = V_REF - 0.01; // sensor open or disconnected (high)
     return ((V_REF - v) / v) * MQ135_RL;
 }
 
@@ -349,7 +351,10 @@ float mq135ReadRatio(int pin, int samples)
         delay(5);
     }
     rs /= samples;
-    return rs / mq135_R0;
+    if (mq135_R0 < 1.0) return MQ135_CLEAN_AIR_RATIO; // R0 invalid → assume clean air
+    float ratio = rs / mq135_R0;
+    if (isnan(ratio) || isinf(ratio)) return MQ135_CLEAN_AIR_RATIO;
+    return ratio;
 }
 
 // ===============================================================
@@ -374,11 +379,11 @@ void loadR0FromEEPROM()
             return;
         }
     }
-    // No valid R0 stored, use default
+    // No valid R0 stored (or stored value was corrupt/zero), use default
     mq135_R0 = MQ135_R0;
     if (ENABLE_SERIAL)
     {
-        Serial.print("[EEPROM] No saved R0, using default = ");
+        Serial.print("[EEPROM] No valid R0 saved, using default = ");
         Serial.println(mq135_R0, 2);
     }
 }
@@ -408,6 +413,19 @@ void calibrateMQ135R0(int pin, int samples = 50)
     rs /= samples;
     // In clean air, Rs/R0 ratio ≈ 3.6 for MQ135
     float newR0 = rs / 3.6;
+    if (newR0 < 1.0 || newR0 > 500.0 || isnan(newR0))
+    {
+        if (ENABLE_SERIAL)
+        {
+            Serial.print("[Calibration] FAILED — got R0 = ");
+            Serial.print(newR0, 2);
+            Serial.println(" (invalid). Keeping previous R0.");
+            Serial.println("  → Check MQ135 wiring: VCC=5V, AOUT→GPIO33, GND→GND");
+        }
+        // Keep previous R0 (from EEPROM or default)
+        if (mq135_R0 < 1.0) mq135_R0 = MQ135_R0; // fallback to compile-time default
+        return;
+    }
     mq135_R0 = newR0;
     saveR0ToEEPROM(newR0);
     if (ENABLE_SERIAL)
@@ -526,18 +544,24 @@ float readPH(int pin, int samples = 20)
     }
 
     float avgReading = sum / (float)samples;
+
+    // Allow probe voltage to settle after sampling
+    delay(800);
+
     float voltage = (avgReading / ADC_MAX) * V_REF;
 
-    // Check if sensor is disconnected (ADC pegged at max or min)
-    bool disconnected = (maxRaw >= 4090 || maxRaw <= 5);
+    // Only treat as disconnected if readings are REALLY stuck (flat signal at extremes)
+    bool disconnected = (maxRaw - minRaw < 3) && (avgReading > 4090 || avgReading < 5);
 
     // CALIBRATED formula: shifted by -2.3 based on real measurement
-    float ph = 7.0 + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_STEP) - 2.3;
+    float ph = 7.0 + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_STEP);
 
     if (ph < 0) ph = 0;
     if (ph > 14) ph = 14;
 
-    // If sensor disconnected, return safe default (neutral pH)
+    // If sensor disconnected, preserve last valid reading instead of forcing 7.0
+    static float lastValidPH = 7.0;
+
     if (disconnected)
     {
         static unsigned long lastWarn = 0;
@@ -545,10 +569,12 @@ float readPH(int pin, int samples = 20)
         {
             lastWarn = millis();
             if (ENABLE_SERIAL)
-                Serial.println("WARNING: pH Sensor disconnected -> using default 7.0");
+                Serial.println("WARNING: pH Sensor disconnected -> using last valid pH");
         }
-        return 7.0;
+        return lastValidPH;
     }
+
+    lastValidPH = ph;
 
     // Debug every 10 seconds
     static unsigned long lastDebug = 0;
@@ -622,9 +648,24 @@ float readCO2(int pin, int samples = 20)
     float ratio = mq135ReadRatio(pin, samples);
 
     // CO2 curve from MQ135 datasheet (log scale)
+    if (isnan(ratio) || ratio <= 0) return 400.0; // sensor error → safe default
+
+    // If ratio is unreasonably low (<0.1), R0 is miscalibrated — return safe default
+    if (ratio < 0.1)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("CO2: Ratio too low (bad R0) -> default 400 PPM");
+        }
+        return 400.0;
+    }
+
     float ppm = 116.6020682 * pow(ratio, -2.769034857);
 
-    if (ppm < 400) ppm = 400;      // atmospheric minimum
+    if (isnan(ppm) || ppm < 400) ppm = 400;      // atmospheric minimum
     if (ppm > 5000) ppm = 5000;
 
     // Debug
@@ -649,6 +690,19 @@ float readAmmonia(int pin, int samples = 20)
 {
     float ratio = mq135ReadRatio(pin, samples);
 
+    // If ratio is unreasonably low (<0.1), R0 is miscalibrated — return safe default
+    if (ratio < 0.1)
+    {
+        static unsigned long lastWarn = 0;
+        if (millis() - lastWarn > 10000)
+        {
+            lastWarn = millis();
+            if (ENABLE_SERIAL)
+                Serial.println("NH3: Ratio too low (bad R0) -> default 0.00 PPM");
+        }
+        return 0.0;
+    }
+
     // In clean air Rs/R0 ≈ 3.6. NH3 gas causes ratio to DROP.
     // If ratio is at or above clean-air baseline → no NH3 present.
     if (ratio >= MQ135_CLEAN_AIR_RATIO)
@@ -669,11 +723,12 @@ float readAmmonia(int pin, int samples = 20)
     }
 
     // NH3 curve from MQ135 datasheet, with clean-air baseline subtracted
+    if (isnan(ratio) || ratio <= 0) return 0.0; // sensor error → safe default
     float ppm = 102.2 * pow(ratio, -2.473);
     float baseline = 102.2 * pow(MQ135_CLEAN_AIR_RATIO, -2.473);
     ppm = ppm - baseline;
 
-    if (ppm < 0.05) ppm = 0;   // Dead zone to suppress noise
+    if (isnan(ppm) || ppm < 0.05) ppm = 0;   // Dead zone to suppress noise
     if (ppm > 100) ppm = 100;
 
     // Debug
@@ -823,6 +878,40 @@ void setup()
         Serial.println(testOk ? "OK" : "FAILED");
     }
 
+    // *** AUTO-CALIBRATE R0 IN CLEAN AIR ***
+    // Only calibrate if NO valid R0 is saved in EEPROM yet.
+    // MQ135 needs 5+ minutes warmup for accurate R0; 10s is NOT enough.
+    // After first calibration, R0 is saved to EEPROM and reused on every boot.
+    {
+        uint8_t magic = EEPROM.read(EEPROM_R0_MAGIC_ADDR);
+        float storedR0;
+        EEPROM.get(EEPROM_R0_ADDR, storedR0);
+        bool hasValidR0 = (magic == EEPROM_R0_MAGIC && storedR0 > 1.0 && storedR0 < 500.0);
+
+        if (!hasValidR0)
+        {
+            // First boot ever — wait 10s and calibrate (place in clean air!)
+            if (ENABLE_SERIAL)
+                Serial.println("[Calibration] No saved R0 — waiting 10s for MQ135 heater...");
+            delay(10000);
+            calibrateMQ135R0(MQ135_PIN, 100);
+        }
+        else
+        {
+            if (ENABLE_SERIAL)
+            {
+                Serial.print("[Calibration] Using saved R0 from EEPROM: ");
+                Serial.println(mq135_R0, 2);
+                Serial.println("[Calibration] Skipping re-calibration (delete EEPROM to force recalibrate)");
+            }
+        }
+    }
+    if (ENABLE_SERIAL)
+    {
+        Serial.print("[Calibration] R0 after calibration: ");
+        Serial.println(mq135_R0, 2);
+    }
+
     if (ENABLE_SERIAL)
     {
         Serial.println("\n========================================");
@@ -870,6 +959,30 @@ void loop()
     phValue = readPH(PH_PIN, 30);
     turbidity = readTurbidity(TURBIDITY_PIN, 30);
 
+    // Debug: print raw MQ135 ratio so you can verify calibration
+    {
+        static unsigned long lastRatioDebug = 0;
+        if (now - lastRatioDebug >= 5000)
+        {
+            lastRatioDebug = now;
+            float debugRatio = mq135ReadRatio(MQ135_PIN, 10);
+            if (ENABLE_SERIAL)
+            {
+                Serial.print("[MQ135] R0=");
+                Serial.print(mq135_R0, 2);
+                Serial.print(" | Ratio=");
+                Serial.print(debugRatio, 3);
+                Serial.print(" | Expected clean-air: ~3.6");
+                if (debugRatio < 0.5)
+                    Serial.println(" ⚠️ RATIO TOO LOW — R0 needs recalibration!");
+                else if (debugRatio > 5.0)
+                    Serial.println(" ⚠️ RATIO TOO HIGH — check wiring");
+                else
+                    Serial.println(" ✅");
+            }
+        }
+    }
+
     // Read CO2 and NH3 from MQ135 (Rs/R0 ratio method)
     float rawCO2 = readCO2(MQ135_PIN, 30);
     float rawNH3 = readAmmonia(MQ135_PIN, 30);
@@ -889,6 +1002,14 @@ void loop()
 
     co2Level = smoothedCO2;
     ammonia = smoothedNH3;
+
+    // Final NaN safety net — never send nan to Supabase
+    if (isnan(co2Level))  co2Level  = 400.0;
+    if (isnan(ammonia))   ammonia   = 0.0;
+    if (isnan(phValue))   phValue   = 7.0;
+    if (isnan(turbidity)) turbidity = 0.0;
+    if (isnan(rainLevel)) rainLevel = 0.0;
+
     co2PPM = co2Level;
     ammoniaPPM = ammonia;
 
