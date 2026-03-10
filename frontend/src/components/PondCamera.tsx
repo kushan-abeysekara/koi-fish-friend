@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Video, VideoOff, AlertCircle, Download } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
+import MediaMTXCameraFeed from './MediaMTXCameraFeed';
 
 // Detection Event Interface
 interface DetectionEvent {
@@ -20,17 +21,23 @@ interface DetectionEvent {
   };
 }
 
+// Feed source type
+type FeedSource = 'hls' | 'ai';
+
 const PondCamera: React.FC = () => {
   // Camera feed states
   const [cameraConnected, setCameraConnected] = useState(false);
   const [cameraFPS, setCameraFPS] = useState(0);
   const [fishCount, setFishCount] = useState(0);
-  const [detections, setDetections] = useState<any[]>([]);
+  const [detections, setDetections] = useState<Array<{ id: number; health?: { class?: string; confidence?: number; is_critical?: boolean; needs_attention?: boolean } }>>([]);
   const [cameraFrame, setCameraFrame] = useState<string>('');
-  const cameraSocketRef = useRef<any>(null);
-  const CAMERA_SERVER_URL = 'http://192.168.8.101:5000';
+  const cameraSocketRef = useRef<ReturnType<typeof io> | null>(null);
+  const CAMERA_SERVER_URL = import.meta.env.VITE_CAMERA_SERVER_URL || 'http://192.168.8.101:5000';
   
-  // Camera performance mode
+  // Feed source toggle (HLS = MediaMTX live stream, AI = local detection server)
+  const [feedSource, setFeedSource] = useState<FeedSource>('hls');
+
+  // Camera performance mode (for AI feed)
   const [cameraMode, setCameraMode] = useState<'quality' | 'balanced' | 'performance'>('balanced');
   
   // Event logging states
@@ -38,22 +45,22 @@ const PondCamera: React.FC = () => {
   const [criticalAlerts, setCriticalAlerts] = useState<number>(0);
   const [, setTotalDetections] = useState<number>(0);
 
-  // Camera Feed WebSocket Connection
+  // AI Camera Feed WebSocket Connection (optional — connects to local detection server)
   useEffect(() => {
-    console.log('🎥 Connecting to camera server:', CAMERA_SERVER_URL);
+    console.log('🎥 Connecting to AI camera server:', CAMERA_SERVER_URL);
     
     const socket = io(CAMERA_SERVER_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionDelay: 2000,
-      reconnectionAttempts: 10
+      reconnectionDelay: 5000,
+      reconnectionAttempts: 5,
+      timeout: 8000,
     });
 
     socket.on('connect', () => {
-      console.log('✅ Camera server connected');
+      console.log('✅ AI camera server connected');
       setCameraConnected(true);
       
-      // Request optimized settings based on mode
       const config = {
         quality: { width: 960, height: 540, quality: 90 },
         balanced: { width: 640, height: 360, quality: 75 },
@@ -62,41 +69,36 @@ const PondCamera: React.FC = () => {
       
       const settings = config[cameraMode];
       
-      // Send configuration request
       fetch(`${CAMERA_SERVER_URL}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
-      }).catch(err => console.warn('Could not update config:', err));
+      }).catch(err => console.warn('Could not update AI config:', err));
       
-      // Start streaming
       socket.emit('start_stream');
     });
 
     socket.on('disconnect', () => {
-      console.log('❌ Camera server disconnected');
+      console.log('❌ AI camera server disconnected');
       setCameraConnected(false);
       setCameraFrame('');
       setFishCount(0);
       setDetections([]);
     });
 
-    socket.on('detection_update', (data: any) => {
+    socket.on('detection_update', (data: { fps?: number; fish_count?: number; detections?: Array<{ id: number; health?: { class?: string; confidence?: number; is_critical?: boolean; needs_attention?: boolean }; bbox?: { x1: number; y1: number; x2: number; y2: number } }>; frame?: string; timestamp?: string }) => {
       try {
-        // Update FPS and fish count
         setCameraFPS(data.fps || 0);
         setFishCount(data.fish_count || 0);
         setDetections(data.detections || []);
         setTotalDetections(prev => prev + (data.fish_count || 0));
         
-        // Update frame (base64 JPEG)
         if (data.frame) {
           setCameraFrame(`data:image/jpeg;base64,${data.frame}`);
         }
         
-        // Process detection events for logging
         if (data.detections && data.detections.length > 0) {
-          const newEvents: DetectionEvent[] = data.detections.map((fish: any) => ({
+          const newEvents: DetectionEvent[] = data.detections.map((fish) => ({
             id: `${Date.now()}-${fish.id}`,
             timestamp: data.timestamp || new Date().toISOString(),
             fishId: fish.id,
@@ -104,22 +106,17 @@ const PondCamera: React.FC = () => {
             confidence: fish.health?.confidence || 0,
             isCritical: fish.health?.is_critical || false,
             needsAttention: fish.health?.needs_attention || false,
-            bbox: fish.bbox
+            bbox: fish.bbox || { x1: 0, y1: 0, x2: 0, y2: 0 }
           }));
           
-          // Add new events to the log (keep last 100)
           setDetectionEvents(prev => [...newEvents, ...prev].slice(0, 100));
           
-          // Count critical alerts
           const criticalCount = newEvents.filter(e => e.isCritical).length;
           if (criticalCount > 0) {
             setCriticalAlerts(prev => prev + criticalCount);
-            
-            // Send critical alert to backend
             saveCriticalAlert(newEvents.filter(e => e.isCritical));
           }
           
-          // Save all events to backend
           saveDetectionEvents(newEvents);
         }
       } catch (error) {
@@ -127,14 +124,14 @@ const PondCamera: React.FC = () => {
       }
     });
 
-    socket.on('connect_error', (error: any) => {
-      console.warn('⚠️ Camera connection error:', error.message);
+    socket.on('connect_error', (error: Error) => {
+      console.warn('⚠️ AI camera connection error:', error.message);
     });
 
     cameraSocketRef.current = socket;
 
     return () => {
-      console.log('🔌 Disconnecting from camera server');
+      console.log('🔌 Disconnecting from AI camera server');
       socket.emit('stop_stream');
       socket.disconnect();
     };
@@ -142,8 +139,9 @@ const PondCamera: React.FC = () => {
 
   // Save detection events to backend
   const saveDetectionEvents = async (events: DetectionEvent[]) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
     try {
-      await axios.post('http://localhost:8080/api/camera/events', {
+      await axios.post(`${API_URL}/api/camera/events`, {
         events: events.map(e => ({
           timestamp: e.timestamp,
           fishId: e.fishId,
@@ -161,8 +159,9 @@ const PondCamera: React.FC = () => {
 
   // Save critical alerts
   const saveCriticalAlert = async (events: DetectionEvent[]) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
     try {
-      await axios.post('http://localhost:8080/api/camera/alerts/critical', {
+      await axios.post(`${API_URL}/api/camera/alerts/critical`, {
         timestamp: new Date().toISOString(),
         alertType: 'DEAD_FISH_DETECTED',
         severity: 'CRITICAL',
@@ -277,19 +276,21 @@ const PondCamera: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Camera Status</p>
+              <p className="text-gray-600 text-sm font-medium">Live Feed</p>
               <p className="text-2xl font-bold mt-2">
-                {cameraConnected ? (
-                  <span className="text-green-600">Online</span>
+                {feedSource === 'hls' ? (
+                  <span className="text-green-600">HLS Stream</span>
+                ) : cameraConnected ? (
+                  <span className="text-green-600">AI Online</span>
                 ) : (
-                  <span className="text-red-600">Offline</span>
+                  <span className="text-red-600">AI Offline</span>
                 )}
               </p>
             </div>
             <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-              cameraConnected ? 'bg-green-100' : 'bg-red-100'
+              feedSource === 'hls' || cameraConnected ? 'bg-green-100' : 'bg-red-100'
             }`}>
-              {cameraConnected ? (
+              {feedSource === 'hls' || cameraConnected ? (
                 <Video className="text-green-600" size={24} />
               ) : (
                 <VideoOff className="text-red-600" size={24} />
@@ -340,12 +341,55 @@ const PondCamera: React.FC = () => {
         {/* Live Camera Feed - 2/3 width */}
         <div className="lg:col-span-2">
           <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
-            <div className="bg-gray-700 px-4 py-3">
-              <h2 className="text-white font-semibold">Live Camera Feed</h2>
-              <p className="text-gray-400 text-sm">AI-Powered Fish Health Detection</p>
+            <div className="bg-gray-700 px-4 py-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-white font-semibold">Live Camera Feed</h2>
+                <p className="text-gray-400 text-sm">
+                  {feedSource === 'hls' ? 'Pond Camera via MediaMTX HLS' : 'AI-Powered Fish Health Detection'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Feed Source Toggle */}
+                <div className="flex bg-gray-600 rounded-lg p-0.5">
+                  <button
+                    onClick={() => setFeedSource('hls')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                      feedSource === 'hls'
+                        ? 'bg-cyan-500 text-white shadow'
+                        : 'text-gray-300 hover:text-white'
+                    }`}
+                  >
+                    📡 HLS Live
+                  </button>
+                  <button
+                    onClick={() => setFeedSource('ai')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                      feedSource === 'ai'
+                        ? 'bg-cyan-500 text-white shadow'
+                        : 'text-gray-300 hover:text-white'
+                    }`}
+                  >
+                    🤖 AI Detection
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-red-400 text-xs font-semibold">LIVE</span>
+                </div>
+              </div>
             </div>
             
-            <div className="relative aspect-video bg-gray-900 flex items-center justify-center">
+            {/* HLS Feed (primary — always works in production) */}
+            {feedSource === 'hls' && (
+              <div className="aspect-video">
+                <MediaMTXCameraFeed className="w-full h-full" showStatus={true} />
+              </div>
+            )}
+
+            {/* AI Detection Feed (optional — requires local camera server) */}
+            {feedSource === 'ai' && (
+              <>
+                <div className="relative aspect-video bg-gray-900 flex items-center justify-center">
               {cameraConnected && cameraFrame ? (
                 <>
                   {/* Live Video Feed with Detections */}
@@ -368,7 +412,7 @@ const PondCamera: React.FC = () => {
                             : 'bg-green-500 bg-opacity-80 text-white'
                         }`}
                       >
-                        {getHealthEmoji(fish.health?.class || 'unknown')} Fish #{fish.id}: {fish.health?.class || 'detecting'} ({(fish.health?.confidence * 100 || 0).toFixed(0)}%)
+                        {getHealthEmoji(fish.health?.class || 'unknown')} Fish #{fish.id}: {fish.health?.class || 'detecting'} ({((fish.health?.confidence ?? 0) * 100).toFixed(0)}%)
                       </div>
                     ))}
                   </div>
@@ -480,19 +524,41 @@ const PondCamera: React.FC = () => {
                   {cameraConnected ? (
                     <>
                       <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                      <span>Camera: Connected</span>
+                      <span>AI Server: Connected</span>
                     </>
                   ) : (
                     <>
                       <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                      <span>Camera: Disconnected</span>
+                      <span>AI Server: Disconnected</span>
                     </>
                   )}
                 </span>
                 <span>|</span>
-                <span>📹 Real-time AI Detection</span>
+                <span>📹 AI Detection Mode — Switch to HLS for live stream</span>
               </div>
             </div>
+              </>
+            )}
+
+            {/* Bottom status bar for HLS mode */}
+            {feedSource === 'hls' && (
+              <div className="bg-gray-700 px-4 py-2 text-center text-sm">
+                <div className="flex items-center justify-center gap-4 text-gray-300">
+                  <span className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                    <span>Pond Camera (RPi + MediaMTX)</span>
+                  </span>
+                  <span>|</span>
+                  <span>📡 HLS Live Stream</span>
+                  {cameraConnected && (
+                    <>
+                      <span>|</span>
+                      <span className="text-green-400">🤖 AI Server Available</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
