@@ -1,16 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Video, VideoOff, AlertCircle, Download, Camera, X, ChevronDown, ChevronUp, Filter, Image } from 'lucide-react';
+import { Video, VideoOff, AlertCircle, Download, Camera, X, Filter, Image } from 'lucide-react';
 import io from 'socket.io-client';
+import axios from 'axios';
 import MediaMTXCameraFeed from './MediaMTXCameraFeed';
 import {
   supabase,
-  saveFishDetectionEvents,
-  fetchFishDetectionHistory,
-  fetchDetectionImage,
-  fetchFishDetectionSummary,
-  fetchAllDetectionsForExport,
   type FishDetectionEvent,
-  type FishDetectionSummary,
 } from '../services/supabase';
 
 // Feed source type
@@ -18,6 +13,8 @@ type FeedSource = 'hls' | 'ai';
 type TabView = 'live' | 'history';
 
 const HEALTH_CLASSES = ['healthy', 'bacterial', 'fungal', 'parasitic', 'white_tail', 'dead'] as const;
+
+const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
 
 const getHealthColor = (cls: string) => {
   switch (cls) {
@@ -28,18 +25,6 @@ const getHealthColor = (cls: string) => {
     case 'white_tail': return 'text-yellow-600';
     case 'dead': return 'text-red-600';
     default: return 'text-gray-500';
-  }
-};
-
-const getHealthBg = (cls: string) => {
-  switch (cls) {
-    case 'healthy': return 'bg-green-100 border-green-300';
-    case 'bacterial': return 'bg-orange-100 border-orange-300';
-    case 'fungal': return 'bg-purple-100 border-purple-300';
-    case 'parasitic': return 'bg-blue-100 border-blue-300';
-    case 'white_tail': return 'bg-yellow-100 border-yellow-300';
-    case 'dead': return 'bg-red-100 border-red-300';
-    default: return 'bg-gray-100 border-gray-300';
   }
 };
 
@@ -67,12 +52,10 @@ const PondCamera: React.FC = () => {
   const cameraSocketRef = useRef<ReturnType<typeof io> | null>(null);
   const CAMERA_SERVER_URL = (import.meta.env.VITE_CAMERA_SERVER_URL as string) || 'http://192.168.8.101:5000';
 
-  // --- Summary counts (from Supabase) ---
-  const [summary, setSummary] = useState<FishDetectionSummary[]>([]);
+  // --- Summary counts (from backend API) ---
   const [totalEvents, setTotalEvents] = useState(0);
-  const [criticalCount, setCriticalCount] = useState(0);
 
-  // --- Detection history (Supabase persisted) ---
+  // --- Detection history (backend API → Supabase) ---
   const [historyEvents, setHistoryEvents] = useState<FishDetectionEvent[]>([]);
   const [historyFilter, setHistoryFilter] = useState<string>('');
   const [historyPage, setHistoryPage] = useState(0);
@@ -85,45 +68,37 @@ const PondCamera: React.FC = () => {
   const [imageLoading, setImageLoading] = useState(false);
   const [fullImage, setFullImage] = useState<string | null>(null);
 
-  // --- Stats expand on mobile ---
-  const [statsExpanded, setStatsExpanded] = useState(false);
-
   // --- Export ---
   const [exporting, setExporting] = useState(false);
 
-  // ─── Load summary counts from Supabase ───
-  const loadSummary = useCallback(async () => {
-    try {
-      const data = await fetchFishDetectionSummary();
-      setSummary(data);
-      const total = data.reduce((s, r) => s + r.total_count, 0);
-      const critical = data.find(r => r.health_class === 'dead')?.total_count ?? 0;
-      setTotalEvents(total);
-      setCriticalCount(critical);
-    } catch { /* silent */ }
-  }, []);
-
-  // ─── Load history page from Supabase ───
+  // ─── Load history from backend API ───
   const loadHistory = useCallback(async (page: number, filter: string, append = false) => {
     setHistoryLoading(true);
     try {
       const PAGE_SIZE = 20;
-      const rows = await fetchFishDetectionHistory(PAGE_SIZE, page * PAGE_SIZE, filter || undefined);
+      const params: Record<string, string | number> = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
+      if (filter) params.healthClass = filter;
+      const res = await axios.get(`${API_URL}/api/fish-detection/history`, { params });
+      const rows: FishDetectionEvent[] = res.data.data || [];
       if (append) {
         setHistoryEvents(prev => [...prev, ...rows]);
       } else {
         setHistoryEvents(rows);
       }
       setHasMore(rows.length === PAGE_SIZE);
+      // Also load total count
+      const summaryRes = await axios.get(`${API_URL}/api/fish-detection/summary`);
+      const summaryData = summaryRes.data.data || [];
+      const total = summaryData.reduce((s: number, r: { total_count: number }) => s + r.total_count, 0);
+      setTotalEvents(total);
     } catch { /* silent */ }
     setHistoryLoading(false);
   }, []);
 
   // Initial load
   useEffect(() => {
-    loadSummary();
     loadHistory(0, '');
-  }, [loadSummary, loadHistory]);
+  }, [loadHistory]);
 
   // Reload history when filter changes
   useEffect(() => {
@@ -150,14 +125,13 @@ const PondCamera: React.FC = () => {
             }
             return prev;
           });
-          // Update summary counts
-          loadSummary();
+          setTotalEvents(prev => prev + 1);
         }
       })
       .subscribe();
 
     return () => { supabase?.removeChannel(channel); };
-  }, [historyFilter, loadSummary]);
+  }, [historyFilter]);
 
   // ─── AI Camera WebSocket Connection ───
   useEffect(() => {
@@ -207,27 +181,7 @@ const PondCamera: React.FC = () => {
         if (data.frame) {
           setCameraFrame(`data:image/jpeg;base64,${data.frame}`);
         }
-
-        // Save every detection to Supabase — persists even if user closes browser
-        if (data.detections && data.detections.length > 0) {
-          const events = data.detections.map(fish => ({
-            device_id: 'POND_CAM_001',
-            recorded_at: data.timestamp || new Date().toISOString(),
-            fish_id: fish.id,
-            health_class: fish.health?.class || 'unknown',
-            confidence: fish.health?.confidence || 0,
-            is_critical: fish.health?.is_critical || false,
-            needs_attention: fish.health?.needs_attention || false,
-            bbox_x1: fish.bbox?.x1,
-            bbox_y1: fish.bbox?.y1,
-            bbox_x2: fish.bbox?.x2,
-            bbox_y2: fish.bbox?.y2,
-            image_base64: data.frame || undefined,
-            fish_count: data.fish_count || 0,
-            fps: data.fps || 0,
-          }));
-          saveFishDetectionEvents(events);
-        }
+        // Detection history is saved by the backend continuously — no frontend saving needed
       } catch (err) {
         console.error('Error processing detection:', err);
       }
@@ -248,17 +202,20 @@ const PondCamera: React.FC = () => {
     setFullImage(null);
     if (event.id) {
       setImageLoading(true);
-      const img = await fetchDetectionImage(event.id);
-      setFullImage(img);
+      try {
+        const res = await axios.get(`${API_URL}/api/fish-detection/image/${event.id}`);
+        setFullImage(res.data.data || null);
+      } catch { setFullImage(null); }
       setImageLoading(false);
     }
   };
 
-  // ─── Export CSV from Supabase ───
+  // ─── Export CSV via backend API ───
   const handleExport = async () => {
     setExporting(true);
     try {
-      const rows = await fetchAllDetectionsForExport(5000);
+      const res = await axios.get(`${API_URL}/api/fish-detection/export`, { params: { limit: 5000 } });
+      const rows: FishDetectionEvent[] = res.data.data || [];
       const csv = [
         ['ID', 'Timestamp', 'Fish ID', 'Health Class', 'Confidence', 'Critical', 'Needs Attention', 'Fish Count', 'FPS'].join(','),
         ...rows.map(r =>
@@ -282,10 +239,6 @@ const PondCamera: React.FC = () => {
     setHistoryPage(next);
     loadHistory(next, historyFilter, true);
   };
-
-  // Summary helpers
-  const getSummaryCount = (cls: string) => summary.find(s => s.health_class === cls)?.total_count ?? 0;
-  const getLast24h = (cls: string) => summary.find(s => s.health_class === cls)?.last_24h ?? 0;
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-6">
@@ -324,39 +277,6 @@ const PondCamera: React.FC = () => {
         >
           📋 History ({totalEvents})
         </button>
-      </div>
-
-      {/* ═══ Stats cards — collapsible on mobile ═══ */}
-      <div>
-        <button
-          className="sm:hidden flex items-center justify-between w-full bg-white rounded-xl shadow-sm border p-3"
-          onClick={() => setStatsExpanded(!statsExpanded)}
-        >
-          <span className="font-semibold text-gray-700 text-sm">
-            Detection Stats: <span className="text-cyan-600">{totalEvents} total</span>
-            {criticalCount > 0 && <span className="text-red-600 ml-2">({criticalCount} dead)</span>}
-          </span>
-          {statsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </button>
-
-        <div className={`${statsExpanded ? 'block' : 'hidden'} sm:block mt-2 sm:mt-0`}>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-3">
-            {HEALTH_CLASSES.map((cls) => (
-              <div
-                key={cls}
-                onClick={() => { setHistoryFilter(historyFilter === cls ? '' : cls); setActiveTab('history'); }}
-                className={`cursor-pointer text-center p-2 sm:p-3 rounded-xl border transition hover:shadow-md ${
-                  historyFilter === cls ? getHealthBg(cls) + ' ring-2 ring-offset-1 ring-cyan-400' : 'bg-white border-gray-200'
-                }`}
-              >
-                <div className="text-lg sm:text-2xl">{getHealthEmoji(cls)}</div>
-                <p className={`font-bold text-lg sm:text-xl ${getHealthColor(cls)}`}>{getSummaryCount(cls)}</p>
-                <p className="text-[10px] sm:text-xs text-gray-500 capitalize leading-tight">{cls.replace('_', ' ')}</p>
-                <p className="text-[9px] sm:text-[10px] text-gray-400 mt-0.5">24h: {getLast24h(cls)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
       {/* ═══ Main content ═══ */}
@@ -464,28 +384,6 @@ const PondCamera: React.FC = () => {
               </div>
             </div>
           </div>
-
-          {/* Quick summary below video on desktop */}
-          <div className="hidden sm:grid grid-cols-4 gap-3 mt-4">
-            <div className="bg-white rounded-xl shadow-sm border p-3 text-center">
-              <p className="text-gray-500 text-xs">Total Detections</p>
-              <p className="text-2xl font-bold text-cyan-600">{totalEvents}</p>
-            </div>
-            <div className="bg-white rounded-xl shadow-sm border p-3 text-center">
-              <p className="text-gray-500 text-xs">Healthy</p>
-              <p className="text-2xl font-bold text-green-600">{getSummaryCount('healthy')}</p>
-            </div>
-            <div className="bg-white rounded-xl shadow-sm border p-3 text-center">
-              <p className="text-gray-500 text-xs">Unhealthy</p>
-              <p className="text-2xl font-bold text-orange-500">
-                {getSummaryCount('bacterial') + getSummaryCount('fungal') + getSummaryCount('parasitic') + getSummaryCount('white_tail')}
-              </p>
-            </div>
-            <div className="bg-white rounded-xl shadow-sm border p-3 text-center">
-              <p className="text-gray-500 text-xs">Dead Fish</p>
-              <p className="text-2xl font-bold text-red-600">{criticalCount}</p>
-            </div>
-          </div>
         </div>
 
         {/* ── Detection History Panel ── */}
@@ -531,7 +429,7 @@ const PondCamera: React.FC = () => {
                   )}
                 </div>
                 <button
-                  onClick={() => { setHistoryPage(0); loadHistory(0, historyFilter); loadSummary(); }}
+                  onClick={() => { setHistoryPage(0); loadHistory(0, historyFilter); }}
                   className="bg-white/20 hover:bg-white/30 text-white px-2 py-1 rounded-lg text-xs"
                   title="Refresh"
                 >
