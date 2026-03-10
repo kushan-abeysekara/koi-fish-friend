@@ -198,30 +198,7 @@ public class SupabaseService {
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'",
                 "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
-                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'",
-
-                // Fish detection: event history (AI detection results with captured images)
-                "CREATE TABLE IF NOT EXISTS fish_detection_events (" +
-                        "  id            BIGSERIAL PRIMARY KEY," +
-                        "  device_id     TEXT NOT NULL DEFAULT 'POND_CAM_001'," +
-                        "  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()," +
-                        "  fish_id       INTEGER," +
-                        "  health_class  TEXT NOT NULL DEFAULT 'unknown'," +
-                        "  confidence    DOUBLE PRECISION DEFAULT 0," +
-                        "  is_critical   BOOLEAN DEFAULT FALSE," +
-                        "  needs_attention BOOLEAN DEFAULT FALSE," +
-                        "  bbox_x1       DOUBLE PRECISION," +
-                        "  bbox_y1       DOUBLE PRECISION," +
-                        "  bbox_x2       DOUBLE PRECISION," +
-                        "  bbox_y2       DOUBLE PRECISION," +
-                        "  image_base64  TEXT," +
-                        "  fish_count    INTEGER DEFAULT 0," +
-                        "  fps           DOUBLE PRECISION DEFAULT 0" +
-                        ")",
-                "CREATE INDEX IF NOT EXISTS idx_fish_detection_device_time ON fish_detection_events (device_id, recorded_at DESC)",
-                "CREATE INDEX IF NOT EXISTS idx_fish_detection_health ON fish_detection_events (health_class)",
-                "CREATE INDEX IF NOT EXISTS idx_fish_detection_critical ON fish_detection_events (is_critical) WHERE is_critical = TRUE",
-                "ALTER TABLE fish_detection_events DISABLE ROW LEVEL SECURITY"
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'"
         };
 
         for (String sql : ddls) {
@@ -233,7 +210,7 @@ public class SupabaseService {
                 System.out.println("[Supabase] ℹ️ DDL note: " + e.getMessage());
             }
         }
-        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history, boat_telemetry, fish_detection_events)");
+        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history, boat_telemetry)");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -850,95 +827,5 @@ public class SupabaseService {
                 System.err.println("[Supabase] ❌ Failed to store boat telemetry: " + e.getMessage());
             }
         });
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // FISH DETECTION — AI detection events write/read
-    // ═══════════════════════════════════════════════════════════════
-
-    /**
-     * Insert a fish detection event into fish_detection_events table.
-     * Called by the background AI socket listener (FishDetectionListenerService).
-     */
-    public void storeFishDetection(String deviceId, String recordedAt, int fishId,
-            String healthClass, double confidence, boolean isCritical, boolean needsAttention,
-            Double bboxX1, Double bboxY1, Double bboxX2, Double bboxY2,
-            String imageBase64, int fishCount, double fps) {
-        if (!enabled || httpClient == null)
-            return;
-
-        executor.submit(() -> {
-            try {
-                String imgVal = (imageBase64 != null && !imageBase64.isEmpty())
-                        ? "'" + esc(imageBase64) + "'"
-                        : "NULL";
-
-                String sql = "INSERT INTO fish_detection_events " +
-                        "(device_id, recorded_at, fish_id, health_class, confidence, is_critical, " +
-                        "needs_attention, bbox_x1, bbox_y1, bbox_x2, bbox_y2, image_base64, fish_count, fps) " +
-                        "VALUES ('" + esc(deviceId) + "', '" + esc(recordedAt) + "', " + fishId + ", '" +
-                        esc(healthClass) + "', " + confidence + ", " + isCritical + ", " +
-                        needsAttention + ", " +
-                        (bboxX1 != null ? bboxX1 : "NULL") + ", " +
-                        (bboxY1 != null ? bboxY1 : "NULL") + ", " +
-                        (bboxX2 != null ? bboxX2 : "NULL") + ", " +
-                        (bboxY2 != null ? bboxY2 : "NULL") + ", " +
-                        imgVal + ", " + fishCount + ", " + fps + ")";
-
-                executePgQuery(sql);
-            } catch (Exception e) {
-                System.err.println("[Supabase] ❌ Error storing fish detection: " + e.getMessage());
-            }
-        });
-    }
-
-    /**
-     * Get fish detection history with pagination and optional health class filter.
-     */
-    public List<Map<String, Object>> getFishDetectionHistory(int limit, int offset, String healthClass) {
-        String where = "";
-        if (healthClass != null && !healthClass.isBlank()) {
-            where = "WHERE health_class = '" + esc(healthClass) + "' ";
-        }
-        String sql = "SELECT id, device_id, recorded_at, fish_id, health_class, confidence, " +
-                "is_critical, needs_attention, fish_count, fps, " +
-                "CASE WHEN image_base64 IS NOT NULL THEN 'has_image' ELSE NULL END AS image_base64 " +
-                "FROM fish_detection_events " + where +
-                "ORDER BY recorded_at DESC LIMIT " + limit + " OFFSET " + offset;
-        return queryRows(sql);
-    }
-
-    /**
-     * Get a single detection image by event ID.
-     */
-    public String getFishDetectionImage(long eventId) {
-        String sql = "SELECT image_base64 FROM fish_detection_events WHERE id = " + eventId + " LIMIT 1";
-        List<Map<String, Object>> rows = queryRows(sql);
-        if (!rows.isEmpty() && rows.get(0).get("image_base64") != null) {
-            return rows.get(0).get("image_base64").toString();
-        }
-        return null;
-    }
-
-    /**
-     * Get summary counts per health class.
-     */
-    public List<Map<String, Object>> getFishDetectionSummary() {
-        String sql = "SELECT health_class, COUNT(*) AS total_count, " +
-                "COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '1 hour') AS last_hour, " +
-                "COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '24 hours') AS last_24h, " +
-                "MAX(recorded_at) AS last_seen " +
-                "FROM fish_detection_events GROUP BY health_class";
-        return queryRows(sql);
-    }
-
-    /**
-     * Get detection events for CSV export (without image data to keep response small).
-     */
-    public List<Map<String, Object>> getFishDetectionsForExport(int limit) {
-        String sql = "SELECT id, device_id, recorded_at, fish_id, health_class, confidence, " +
-                "is_critical, needs_attention, fish_count, fps " +
-                "FROM fish_detection_events ORDER BY recorded_at DESC LIMIT " + limit;
-        return queryRows(sql);
     }
 }
