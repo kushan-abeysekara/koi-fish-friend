@@ -88,7 +88,7 @@ const DashboardHome: React.FC<DashboardHomeProps> = ({ username }) => {
           event: '*',
           schema: 'public',
           table: 'sensor_live',
-        }, (payload) => {
+        }, (payload: { new: Record<string, unknown> }) => {
           handleWqPayload(payload.new as Record<string, unknown>);
         })
         .subscribe();

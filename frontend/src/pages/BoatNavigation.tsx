@@ -125,7 +125,7 @@ const BoatNavigation: React.FC = () => {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: BOAT_TABLE, filter: 'device_id=eq.BOAT_ESP32_001' },
-        (payload) => {
+        (payload: { new: Record<string, unknown> }) => {
           const row = payload.new as Record<string, unknown>;
           if (!row) return;
           console.log('⚡ [BOAT] Supabase Realtime update:', { voltage: row.voltage, angle_x: row.angle_x, angle_y: row.angle_y });
@@ -148,7 +148,7 @@ const BoatNavigation: React.FC = () => {
           setConnectionMode('supabase');
         }
       )
-      .subscribe((status) => {
+      .subscribe((status: string) => {
         console.log('📡 [BOAT] Supabase Realtime status:', status);
         if (status === 'SUBSCRIBED') {
           setSupabaseConnected(true);

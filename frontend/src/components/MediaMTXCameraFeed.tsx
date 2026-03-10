@@ -99,7 +99,7 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
       videoRef.current?.play().catch(() => {});
     });
 
-    hls.on(Hls.Events.ERROR, (_event, data) => {
+    hls.on(Hls.Events.ERROR, (_event: typeof Hls.Events.ERROR, data: { fatal: boolean; type: string }) => {
       if (data.fatal) {
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
