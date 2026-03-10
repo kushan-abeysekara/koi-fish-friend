@@ -33,8 +33,4 @@ RUN echo 'log_format detailed '\''$remote_addr:$remote_port -> $server_addr:$ser
 EXPOSE 80
 
 # Start nginx with IP/port startup log
-CMD sh -c 'IP=$(hostname -i 2>/dev/null || echo "0.0.0.0"); \
-    echo "=========================================="; \
-    echo " Frontend running at http://${IP}:80"; \
-    echo "=========================================="; \
-    nginx -g "daemon off;"'
+CMD ["sh", "-c", "IP=$(hostname -i 2>/dev/null || echo '0.0.0.0'); echo '=========================================='; echo \" Frontend running at http://${IP}:80\"; echo '=========================================='; nginx -g 'daemon off;'"]
