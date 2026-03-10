@@ -54,7 +54,7 @@
 
 // HC-SR04 Ultrasonic Sensors (4 units)
 // Left sensor relocated to GPIO 25, 39 (previous pins 2, 36 had hardware issues)
-#define ULTRASONIC_FRONT_TRIG 18
+#define ULTRASONIC_FRONT_TRIG 18////////
 #define ULTRASONIC_FRONT_ECHO 19
 #define ULTRASONIC_BACK_TRIG 0
 #define ULTRASONIC_BACK_ECHO 35

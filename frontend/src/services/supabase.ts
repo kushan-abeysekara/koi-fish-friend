@@ -514,3 +514,129 @@ export async function fetchEnergyLive(deviceId: string): Promise<EnergyDbRow | n
     return null;
   }
 }
+
+// ─── Fish Detection — Supabase direct queries ────────────────────────────────
+
+/** Row from fish_detection_events table */
+export interface FishDetectionEvent {
+  id?: number;
+  device_id: string;
+  recorded_at: string;
+  fish_id: number;
+  health_class: string;
+  confidence: number;
+  is_critical: boolean;
+  needs_attention: boolean;
+  bbox_x1?: number;
+  bbox_y1?: number;
+  bbox_x2?: number;
+  bbox_y2?: number;
+  image_base64?: string;
+  fish_count: number;
+  fps: number;
+}
+
+/** Summary row from fish_detection_summary view */
+export interface FishDetectionSummary {
+  health_class: string;
+  total_count: number;
+  last_hour: number;
+  last_24h: number;
+  last_seen: string;
+}
+
+/**
+ * Save fish detection events to Supabase.
+ * Called from PondCamera on every detection_update frame.
+ */
+export async function saveFishDetectionEvents(events: Omit<FishDetectionEvent, 'id'>[]): Promise<boolean> {
+  if (events.length === 0) return true;
+  try {
+    const values = events.map(e => {
+      const ts = e.recorded_at.replace(/'/g, '');
+      const cls = e.health_class.replace(/'/g, '');
+      const img = e.image_base64 ? `'${e.image_base64.replace(/'/g, "''")}'` : 'NULL';
+      return `('${e.device_id}', '${ts}'::timestamptz, ${e.fish_id}, '${cls}', ${e.confidence}, ${e.is_critical}, ${e.needs_attention}, ${e.bbox_x1 ?? 'NULL'}, ${e.bbox_y1 ?? 'NULL'}, ${e.bbox_x2 ?? 'NULL'}, ${e.bbox_y2 ?? 'NULL'}, ${img}, ${e.fish_count}, ${e.fps})`;
+    }).join(',\n');
+
+    await supabasePgQuery(
+      `INSERT INTO fish_detection_events (device_id, recorded_at, fish_id, health_class, confidence, is_critical, needs_attention, bbox_x1, bbox_y1, bbox_x2, bbox_y2, image_base64, fish_count, fps) VALUES ${values}`
+    );
+    return true;
+  } catch (err) {
+    console.error('[Supabase] saveFishDetectionEvents error:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch detection history from Supabase. Sorted newest-first.
+ */
+export async function fetchFishDetectionHistory(
+  limit: number = 50,
+  offset: number = 0,
+  healthFilter?: string,
+): Promise<FishDetectionEvent[]> {
+  try {
+    const where = healthFilter ? `WHERE health_class = '${healthFilter.replace(/'/g, '')}'` : '';
+    return await supabasePgQuery<FishDetectionEvent>(
+      `SELECT id, device_id, recorded_at, fish_id, health_class, confidence, is_critical, needs_attention, bbox_x1, bbox_y1, bbox_x2, bbox_y2, fish_count, fps,
+       LEFT(image_base64, 200) AS image_base64
+       FROM fish_detection_events ${where} ORDER BY recorded_at DESC LIMIT ${limit} OFFSET ${offset}`
+    );
+  } catch (err) {
+    console.error('[Supabase] fetchFishDetectionHistory error:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch full image for a single detection event.
+ */
+export async function fetchDetectionImage(eventId: number): Promise<string | null> {
+  try {
+    const rows = await supabasePgQuery<{ image_base64: string }>(
+      `SELECT image_base64 FROM fish_detection_events WHERE id = ${eventId} LIMIT 1`
+    );
+    return rows.length > 0 ? rows[0].image_base64 : null;
+  } catch (err) {
+    console.error('[Supabase] fetchDetectionImage error:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetch detection summary counts by health class.
+ */
+export async function fetchFishDetectionSummary(): Promise<FishDetectionSummary[]> {
+  try {
+    return await supabasePgQuery<FishDetectionSummary>(
+      `SELECT health_class,
+        COUNT(*)::int AS total_count,
+        COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '1 hour')::int AS last_hour,
+        COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '24 hours')::int AS last_24h,
+        MAX(recorded_at) AS last_seen
+       FROM fish_detection_events GROUP BY health_class`
+    );
+  } catch (err) {
+    console.error('[Supabase] fetchFishDetectionSummary error:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch all detection events for CSV export (without images for performance).
+ */
+export async function fetchAllDetectionsForExport(
+  limit: number = 5000,
+): Promise<Omit<FishDetectionEvent, 'image_base64'>[]> {
+  try {
+    return await supabasePgQuery<Omit<FishDetectionEvent, 'image_base64'>>(
+      `SELECT id, device_id, recorded_at, fish_id, health_class, confidence, is_critical, needs_attention, bbox_x1, bbox_y1, bbox_x2, bbox_y2, fish_count, fps
+       FROM fish_detection_events ORDER BY recorded_at DESC LIMIT ${limit}`
+    );
+  } catch (err) {
+    console.error('[Supabase] fetchAllDetectionsForExport error:', err);
+    return [];
+  }
+}
