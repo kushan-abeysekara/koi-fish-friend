@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Wifi, WifiOff, AlertCircle, Video, Activity } from 'lucide-react';
 import MediaMTXCameraFeed from '../components/MediaMTXCameraFeed';
 import BoatTilt3D from '../components/BoatTilt3D';
@@ -12,7 +12,8 @@ import { supabase, supabasePgQuery } from '../services/supabase';
 // ═══════════════════════════════════════════════════════════════════
 
 // Backend REST API (for commands + polling fallback)
-const API_URL: string = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8081';
+// In dev without VITE_API_URL set, falls back to '' so Vite proxy (/api → backend) is used
+const API_URL: string = (import.meta.env.VITE_API_URL as string) || '';
 
 // Supabase table
 const BOAT_TABLE = 'boat_telemetry';
@@ -153,6 +154,10 @@ const BoatNavigation: React.FC = () => {
         if (status === 'SUBSCRIBED') {
           setSupabaseConnected(true);
           setConnectionMode('supabase');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          setSupabaseConnected(false);
+          // Let REST polling take over
+          setConnectionMode(prev => prev === 'supabase' ? 'rest' : prev);
         }
       });
 

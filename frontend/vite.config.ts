@@ -6,6 +6,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      // Proxy /api to backend (avoids CORS issues in local dev and localhost:8081 fallback)
+      '/api': {
+        target: 'https://backend.koifishfriend.online',
+        changeOrigin: true,
+        secure: true,
+      },
       // Proxy /supabase-pg to self-hosted Supabase pg/query (avoids CORS issues)
       '/supabase-pg': {
         target: 'https://superbase.koifishfriend.online',

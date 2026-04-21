@@ -37,13 +37,25 @@ public class BoatController {
     public ResponseEntity<?> sendBoatCommand(@RequestBody Map<String, Object> command) {
         try {
             String commandType = (String) command.get("command");
-            Integer speed = command.get("speed") != null ? (Integer) command.get("speed") : 128;
+            Object speedObj = command.get("speed");
+            int speed = 128;
+            if (speedObj instanceof Number) {
+                speed = ((Number) speedObj).intValue();
+            }
 
             // Create JSON payload
             String payload = String.format("{\"command\":\"%s\",\"speed\":%d}", commandType, speed);
-            
-            // Publish to MQTT
-            mqttService.publishMessage("koifish/boat/command", payload);
+
+            // Publish to MQTT — returns false if broker is unreachable
+            boolean published = mqttService.publishMessage("koifish/boat/command", payload);
+            if (!published) {
+                return ResponseEntity.status(503).body(Map.of(
+                    "success", false,
+                    "message", "MQTT broker unreachable — command not delivered to ESP32",
+                    "command", commandType,
+                    "speed", speed
+                ));
+            }
 
             return ResponseEntity.ok(Map.of(
                 "success", true,

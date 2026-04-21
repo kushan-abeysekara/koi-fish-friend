@@ -557,9 +557,10 @@ public class MqttService {
     }
 
     /**
-     * Publish a message to a specific MQTT topic
+     * Publish a message to a specific MQTT topic.
+     * Returns true if the message was queued without exception.
      */
-    public void publishMessage(String topic, String payload) {
+    public boolean publishMessage(String topic, String payload) {
         try {
             System.out.println("Publishing to MQTT:");
             System.out.println("  Topic: " + topic);
@@ -571,9 +572,11 @@ public class MqttService {
                             .build());
 
             System.out.println("Message published successfully");
+            return true;
         } catch (Exception e) {
             System.err.println("Error publishing message: " + e.getMessage());
             e.printStackTrace();
+            return false;
         }
     }
 

@@ -1,6 +1,6 @@
 import axios, { type AxiosInstance } from 'axios';
 
-// Use environment variable or fallback to localhost
+// Use environment variable; fall back to localhost for local dev
 const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 // Create a pre-configured Axios instance

@@ -4,7 +4,7 @@ import axios from 'axios';
 // Self-hosted Supabase instance (kept for optional real-time subscriptions)
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://superbase.koifishfriend.online';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE2NDE3NjkyMDAsImV4cCI6MTc5OTUzNTYwMH0.Ts-dlDAliVYIQXhieBSTn3GHkL8W5bnW5YQX73obNYU';
 
 // Backend REST API base URL (reads from Supabase via pg/query)
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
@@ -14,8 +14,8 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 //   Dev:  Vite proxy   /supabase-pg → https://superbase.koifishfriend.online/pg/query
 //   Prod: Nginx proxy  /supabase-pg → https://superbase.koifishfriend.online/pg/query
 const SUPABASE_PG_URL = '/supabase-pg';
-const SUPABASE_SERVICE_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q';
+const SUPABASE_SERVICE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.Ir4JTpoRDgWovxTyAAB_SvVbEAtCo7bN8JIlCBLRRDk';
 
 /**
  * Execute a raw SQL query against Supabase pg/query endpoint.
