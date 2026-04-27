@@ -272,9 +272,14 @@ public class SupabaseService {
 
             HttpResponse<String> createRes = httpClient.send(createReq, HttpResponse.BodyHandlers.ofString());
 
+            // Supabase self-hosted may return HTTP 400 with statusCode "409" in the body
+            // instead of a proper HTTP 409 when the bucket already exists.
+            boolean alreadyExists = createRes.statusCode() == 409 ||
+                    (createRes.statusCode() == 400 && createRes.body().contains("409"));
+
             if (createRes.statusCode() >= 200 && createRes.statusCode() < 300) {
                 System.out.println("[Supabase] ✅ Storage bucket '" + bucketId + "' created (public=" + isPublic + ")");
-            } else if (createRes.statusCode() == 409) {
+            } else if (alreadyExists) {
                 // Bucket already exists — update access policy to ensure it's public
                 String updateBody = "{\"public\":" + isPublic + "}";
                 HttpRequest updateReq = HttpRequest.newBuilder()
