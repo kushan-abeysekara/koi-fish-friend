@@ -14,18 +14,56 @@ interface MediaMTXCameraFeedProps {
 
 type StreamStatus = 'connecting' | 'live' | 'waiting' | 'error' | 'unsupported';
 
-const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
+const LIVE_EDGE_TARGET_SECONDS = 1.5;
+const MAX_ALLOWED_DRIFT_SECONDS = 3;
+const CATCH_UP_PLAYBACK_RATE = 1.08;
+
+const MediaMTXCameraFeed = React.forwardRef<HTMLVideoElement, MediaMTXCameraFeedProps>(({
   streamPath,
   className = '',
   showStatus = true,
-}) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+}, forwardedRef) => {
+  const internalVideoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const syncVideoToLiveEdge = useCallback((liveSyncPosition?: number | null) => {
+    const video = internalVideoRef.current;
+    if (!video || liveSyncPosition == null || Number.isNaN(liveSyncPosition)) {
+      return;
+    }
+
+    const drift = liveSyncPosition - video.currentTime;
+
+    if (drift > MAX_ALLOWED_DRIFT_SECONDS) {
+      video.currentTime = Math.max(0, liveSyncPosition - LIVE_EDGE_TARGET_SECONDS);
+      video.playbackRate = 1;
+      return;
+    }
+
+    if (drift > LIVE_EDGE_TARGET_SECONDS) {
+      video.playbackRate = CATCH_UP_PLAYBACK_RATE;
+      return;
+    }
+
+    if (video.playbackRate !== 1) {
+      video.playbackRate = 1;
+    }
+  }, []);
+
+  // Callback ref that merges internal ref + forwarded ref
+  const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
+    internalVideoRef.current = node;
+    if (typeof forwardedRef === 'function') {
+      forwardedRef(node);
+    } else if (forwardedRef) {
+      (forwardedRef as React.MutableRefObject<HTMLVideoElement | null>).current = node;
+    }
+  }, [forwardedRef]);
 
   // Build HLS URL
   const hlsUrl = streamPath
@@ -46,10 +84,10 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
   const connectHls = useCallback(() => {
     cleanup();
 
-    if (!videoRef.current) return;
+    if (!internalVideoRef.current) return;
 
     // Check HLS support
-    if (!Hls.isSupported() && !videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+    if (!Hls.isSupported() && !internalVideoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
       setStatus('unsupported');
       return;
     }
@@ -57,20 +95,25 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
     setStatus('connecting');
 
     // Safari has native HLS support
-    if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-      videoRef.current.src = hlsUrl;
-      videoRef.current.addEventListener('loadedmetadata', () => {
+    if (internalVideoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      const video = internalVideoRef.current;
+      const handleLoadedMetadata = () => {
         setStatus('live');
         setRetryCount(0);
-        videoRef.current?.play().catch(() => {});
-      });
-      videoRef.current.addEventListener('error', () => {
+        video.playbackRate = 1;
+        video.play().catch(() => {});
+      };
+      const handleError = () => {
         setStatus('waiting');
         retryTimerRef.current = setTimeout(() => {
           setRetryCount(c => c + 1);
           connectHls();
         }, 3000);
-      });
+      };
+
+      video.src = hlsUrl;
+      video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+      video.addEventListener('error', handleError, { once: true });
       return;
     }
 
@@ -78,11 +121,13 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
     const hls = new Hls({
       enableWorker: true,
       lowLatencyMode: true,
-      backBufferLength: 5,
-      maxBufferLength: 10,
-      maxMaxBufferLength: 15,
-      liveSyncDurationCount: 2,
-      liveMaxLatencyDurationCount: 5,
+      backBufferLength: 2,
+      maxBufferLength: 4,
+      maxMaxBufferLength: 6,
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 2,
+      maxLiveSyncPlaybackRate: CATCH_UP_PLAYBACK_RATE,
+      highBufferWatchdogPeriod: 1,
       manifestLoadingTimeOut: 8000,
       manifestLoadingMaxRetry: 3,
       levelLoadingTimeOut: 8000,
@@ -91,12 +136,21 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
 
     hlsRef.current = hls;
     hls.loadSource(hlsUrl);
-    hls.attachMedia(videoRef.current);
+    hls.attachMedia(internalVideoRef.current);
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       setStatus('live');
       setRetryCount(0);
-      videoRef.current?.play().catch(() => {});
+      internalVideoRef.current?.play().catch(() => {});
+      syncVideoToLiveEdge(hls.liveSyncPosition);
+    });
+
+    hls.on(Hls.Events.LEVEL_UPDATED, () => {
+      syncVideoToLiveEdge(hls.liveSyncPosition);
+    });
+
+    hls.on(Hls.Events.FRAG_BUFFERED, () => {
+      syncVideoToLiveEdge(hls.liveSyncPosition);
     });
 
     hls.on(Hls.Events.ERROR, (_event: typeof Hls.Events.ERROR, data: { fatal: boolean; type: string }) => {
@@ -127,7 +181,7 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
         }
       }
     });
-  }, [hlsUrl, cleanup]);
+  }, [hlsUrl, cleanup, syncVideoToLiveEdge]);
 
   useEffect(() => {
     connectHls();
@@ -154,11 +208,13 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
     <div ref={containerRef} className={`relative bg-gray-900 ${className}`} style={{ minHeight: '300px' }}>
       {/* Video element */}
       <video
-        ref={videoRef}
+        ref={setVideoRef}
         className="w-full h-full object-contain"
         muted
         autoPlay
         playsInline
+        preload="metadata"
+        crossOrigin="anonymous"
         style={{ display: status === 'live' ? 'block' : 'none' }}
       />
 
@@ -254,6 +310,8 @@ const MediaMTXCameraFeed: React.FC<MediaMTXCameraFeedProps> = ({
       )}
     </div>
   );
-};
+});
+
+MediaMTXCameraFeed.displayName = 'MediaMTXCameraFeed';
 
 export default MediaMTXCameraFeed;

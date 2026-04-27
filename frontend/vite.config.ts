@@ -19,6 +19,13 @@ export default defineConfig({
         secure: false,
         rewrite: (path) => path.replace(/^\/supabase-pg/, '/pg/query'),
       },
+      // Proxy /camera-api to Pi camera server (bypasses browser CORS / unreachable LAN IP)
+      '/camera-api': {
+        target: 'http://192.168.8.101:5000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/camera-api/, ''),
+      },
     },
   },
 })

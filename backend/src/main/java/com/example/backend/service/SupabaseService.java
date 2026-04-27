@@ -153,10 +153,6 @@ public class SupabaseService {
                         "  status               TEXT    DEFAULT 'normal'," +
                         "  recorded_at          TIMESTAMPTZ DEFAULT NOW()" +
                         ")",
-
-                // Enable Realtime on live tables
-                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS energydb",
-                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS sensor_live",
                 // REPLICA IDENTITY FULL required for Supabase Realtime to see UPDATE payloads
                 "ALTER TABLE sensor_live REPLICA IDENTITY FULL",
                 "ALTER TABLE energydb REPLICA IDENTITY FULL",
@@ -180,9 +176,9 @@ public class SupabaseService {
                         "  connected       BOOLEAN DEFAULT TRUE," +
                         "  updated_at      TIMESTAMPTZ DEFAULT NOW()" +
                         ")",
-                "ALTER PUBLICATION supabase_realtime ADD TABLE IF NOT EXISTS boat_telemetry",
 
-                // Migration: Add rain sensor columns to existing sensor_live and sensor_history tables
+                // Migration: Add rain sensor columns to existing sensor_live and sensor_history
+                // tables
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_level FLOAT DEFAULT 0",
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_detected BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS rain_status TEXT DEFAULT 'dry'",
@@ -198,7 +194,34 @@ public class SupabaseService {
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
                 "ALTER TABLE sensor_live ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'",
                 "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS air_quality_index INT DEFAULT 0",
-                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'"
+                "ALTER TABLE sensor_history ADD COLUMN IF NOT EXISTS gas_status TEXT DEFAULT 'normal'",
+
+                // Detection Events: AI detection logs (health issues, fish detection, etc.)
+                "CREATE TABLE IF NOT EXISTS detection_events (" +
+                        "  id BIGSERIAL PRIMARY KEY," +
+                        "  fish_id INTEGER," +
+                        "  health_status TEXT NOT NULL DEFAULT 'unknown'," +
+                        "  confidence FLOAT DEFAULT 0," +
+                        "  is_critical BOOLEAN DEFAULT FALSE," +
+                        "  needs_attention BOOLEAN DEFAULT FALSE," +
+                        "  x1 FLOAT DEFAULT 0," +
+                        "  y1 FLOAT DEFAULT 0," +
+                        "  x2 FLOAT DEFAULT 0," +
+                        "  y2 FLOAT DEFAULT 0," +
+                        "  status TEXT DEFAULT 'new' CHECK (status IN ('new', 'acknowledged', 'false_alarm'))," +
+                        "  notes TEXT," +
+                        "  image_url TEXT," +
+                        "  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()," +
+                        "  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" +
+                        ")",
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_created_at ON detection_events(created_at DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_fish_id ON detection_events(fish_id)",
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_health_status ON detection_events(health_status)",
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_is_critical ON detection_events(is_critical)",
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_status ON detection_events(status)",
+                "ALTER TABLE detection_events REPLICA IDENTITY FULL",
+                // Migration: Add image_url column if not already present
+                "ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS image_url TEXT"
         };
 
         for (String sql : ddls) {
@@ -210,7 +233,89 @@ public class SupabaseService {
                 System.out.println("[Supabase] ℹ️ DDL note: " + e.getMessage());
             }
         }
-        System.out.println("[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history, boat_telemetry)");
+
+        ensureRealtimePublicationMembership("energydb");
+        ensureRealtimePublicationMembership("sensor_live");
+        ensureRealtimePublicationMembership("boat_telemetry");
+        ensureRealtimePublicationMembership("detection_events");
+
+        // Ensure Supabase Storage bucket for detection event screenshots exists and is
+        // public
+        ensureStorageBucket("detection_events", true);
+
+        System.out.println(
+                "[Supabase] ✅ All tables ensured (energydb, energy_history, sensor_live, sensor_history, boat_telemetry, detection_events)");
+    }
+
+    /**
+     * Creates a Supabase Storage bucket if it doesn't exist, then ensures it has
+     * the requested public/private access policy.
+     * Safe to call on every startup — 409 (already exists) is handled gracefully.
+     */
+    private void ensureStorageBucket(String bucketId, boolean isPublic) {
+        if (!enabled || httpClient == null)
+            return;
+        try {
+            String base = supabaseUrl.replaceAll("/$", "");
+            String createBody = "{\"id\":\"" + bucketId + "\",\"name\":\"" + bucketId + "\",\"public\":" + isPublic
+                    + "}";
+
+            // Try to create the bucket
+            HttpRequest createReq = HttpRequest.newBuilder()
+                    .uri(URI.create(base + "/storage/v1/bucket"))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .header("apikey", supabaseKey)
+                    .header("Authorization", "Bearer " + supabaseKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(createBody))
+                    .build();
+
+            HttpResponse<String> createRes = httpClient.send(createReq, HttpResponse.BodyHandlers.ofString());
+
+            if (createRes.statusCode() >= 200 && createRes.statusCode() < 300) {
+                System.out.println("[Supabase] ✅ Storage bucket '" + bucketId + "' created (public=" + isPublic + ")");
+            } else if (createRes.statusCode() == 409) {
+                // Bucket already exists — update access policy to ensure it's public
+                String updateBody = "{\"public\":" + isPublic + "}";
+                HttpRequest updateReq = HttpRequest.newBuilder()
+                        .uri(URI.create(base + "/storage/v1/bucket/" + bucketId))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Content-Type", "application/json")
+                        .header("apikey", supabaseKey)
+                        .header("Authorization", "Bearer " + supabaseKey)
+                        .PUT(HttpRequest.BodyPublishers.ofString(updateBody))
+                        .build();
+                HttpResponse<String> updateRes = httpClient.send(updateReq, HttpResponse.BodyHandlers.ofString());
+                System.out.println("[Supabase] ✅ Storage bucket '" + bucketId + "' exists, ensured public=" + isPublic
+                        + " (HTTP " + updateRes.statusCode() + ")");
+            } else {
+                System.err.println("[Supabase] ⚠️ Storage bucket setup failed: HTTP " + createRes.statusCode()
+                        + " - " + createRes.body());
+            }
+        } catch (Exception e) {
+            System.err.println("[Supabase] ⚠️ Storage bucket setup error (non-critical): " + e.getMessage());
+        }
+    }
+
+    /**
+     * Adds a table to the Supabase realtime publication only when it is not already
+     * present.
+     * PostgreSQL does not support IF NOT EXISTS for ALTER PUBLICATION ... ADD
+     * TABLE.
+     */
+    private void ensureRealtimePublicationMembership(String tableName) {
+        try {
+            String checkSql = "SELECT 1 FROM pg_publication_tables " +
+                    "WHERE pubname = 'supabase_realtime' AND tablename = '" + esc(tableName) + "' LIMIT 1";
+            List<Map<String, Object>> rows = queryRows(checkSql);
+            if (!rows.isEmpty()) {
+                return;
+            }
+
+            executePgQuery("ALTER PUBLICATION supabase_realtime ADD TABLE " + tableName);
+        } catch (Exception e) {
+            System.out.println("[Supabase] ℹ️ Realtime publication note for " + tableName + ": " + e.getMessage());
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -778,49 +883,274 @@ public class SupabaseService {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // DETECTION EVENTS - AI detection logs
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Store a single detection event to Supabase.
+     * 
+     * @param screenshotBase64 Optional: base64 encoded screenshot
+     *                         (data:image/jpeg;base64,... format)
+     */
+    public Map<String, Object> storeDetectionEvent(Integer fishId, String healthStatus, double confidence,
+            boolean isCritical, boolean needsAttention,
+            double x1, double y1, double x2, double y2, String screenshotBase64) {
+        if (!enabled || httpClient == null)
+            return new HashMap<>();
+
+        try {
+            String imageUrl = null;
+
+            // Upload screenshot to Supabase Storage if provided
+            if (screenshotBase64 != null && !screenshotBase64.isEmpty()) {
+                imageUrl = uploadDetectionEventImage(fishId, screenshotBase64);
+            }
+
+            String sql = "INSERT INTO detection_events (fish_id, health_status, confidence, is_critical, " +
+                    "needs_attention, x1, y1, x2, y2, status" +
+                    (imageUrl != null ? ", image_url" : "") + ") VALUES (" +
+                    (fishId != null ? fishId : "NULL") + ", '" + esc(healthStatus) + "', " +
+                    confidence + ", " + isCritical + ", " + needsAttention + ", " +
+                    x1 + ", " + y1 + ", " + x2 + ", " + y2 + ", 'new'" +
+                    (imageUrl != null ? ", '" + esc(imageUrl) + "'" : "") + ") " +
+                    "RETURNING id, created_at, image_url";
+            List<Map<String, Object>> rows = queryRows(sql);
+            if (!rows.isEmpty()) {
+                System.out.println("[Supabase] ✅ Detection event stored for fish " + fishId +
+                        (imageUrl != null ? " (with image)" : ""));
+                return rows.get(0);
+            }
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Error storing detection event: " + e.getMessage());
+        }
+        return new HashMap<>();
+    }
+
+    /**
+     * Upload detection event screenshot to Supabase Storage.
+     * Stores in detection_events/ folder with timestamp-based filename.
+     */
+    private String uploadDetectionEventImage(Integer fishId, String screenshotBase64) {
+        try {
+            // Remove data URL prefix if present
+            String base64Data = screenshotBase64;
+            if (screenshotBase64.contains(",")) {
+                base64Data = screenshotBase64.split(",")[1];
+            }
+
+            // Decode base64
+            byte[] imageBytes = java.util.Base64.getDecoder().decode(base64Data);
+
+            // Generate filename — stored directly in bucket root (no subfolder prefix)
+            long timestamp = System.currentTimeMillis();
+            String filename = String.format("fish_%d_%d.jpg", fishId != null ? fishId : 0, timestamp);
+
+            // Upload to Supabase Storage
+            String url = supabaseUrl.replaceAll("/$", "") + "/storage/v1/object/detection_events/" + filename;
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("apikey", supabaseKey)
+                    .header("Authorization", "Bearer " + supabaseKey)
+                    .header("Content-Type", "image/jpeg")
+                    .header("x-upsert", "true")
+                    .PUT(HttpRequest.BodyPublishers.ofByteArray(imageBytes))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                String imageUrl = supabaseUrl.replaceAll("/$", "") + "/storage/v1/object/public/detection_events/"
+                        + filename;
+                System.out.println("[Supabase] 📸 Image uploaded: " + filename);
+                return imageUrl;
+            } else {
+                System.err.println("[Supabase] ⚠️ Image upload failed: HTTP " + response.statusCode());
+                return null;
+            }
+        } catch (Exception e) {
+            System.err.println("[Supabase] ⚠️ Image upload error (non-critical): " + e.getMessage());
+            return null; // Don't fail the event if image upload fails
+        }
+    }
+
+    /**
+     * Store multiple detection events in batch (for performance).
+     * Events should be a List of Maps with keys: fishId, healthStatus, confidence,
+     * isCritical, needsAttention, x1, y1, x2, y2
+     */
+    public void storeDetectionEventsBatch(List<Map<String, Object>> events) {
+        if (!enabled || httpClient == null || events.isEmpty())
+            return;
+
+        executor.submit(() -> {
+            try {
+                StringBuilder valuesClause = new StringBuilder();
+                for (int i = 0; i < events.size(); i++) {
+                    if (i > 0)
+                        valuesClause.append(", ");
+
+                    Map<String, Object> event = events.get(i);
+                    Integer fishId = (Integer) event.getOrDefault("fishId", null);
+                    String healthStatus = (String) event.getOrDefault("healthStatus", "unknown");
+                    double confidence = ((Number) event.getOrDefault("confidence", 0)).doubleValue();
+                    boolean isCritical = (boolean) event.getOrDefault("isCritical", false);
+                    boolean needsAttention = (boolean) event.getOrDefault("needsAttention", false);
+                    double x1 = ((Number) event.getOrDefault("x1", 0)).doubleValue();
+                    double y1 = ((Number) event.getOrDefault("y1", 0)).doubleValue();
+                    double x2 = ((Number) event.getOrDefault("x2", 0)).doubleValue();
+                    double y2 = ((Number) event.getOrDefault("y2", 0)).doubleValue();
+
+                    valuesClause.append("(").append(fishId != null ? fishId : "NULL")
+                            .append(", '").append(esc(healthStatus)).append("', ").append(confidence)
+                            .append(", ").append(isCritical).append(", ").append(needsAttention)
+                            .append(", ").append(x1).append(", ").append(y1)
+                            .append(", ").append(x2).append(", ").append(y2).append(")");
+                }
+
+                String sql = "INSERT INTO detection_events (fish_id, health_status, confidence, " +
+                        "is_critical, needs_attention, x1, y1, x2, y2) VALUES " + valuesClause;
+
+                executePgQuery(sql);
+                System.out.println("[Supabase] ✅ Batch stored " + events.size() + " detection events");
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error storing detection events batch: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Get detection events with optional filters.
+     */
+    public List<Map<String, Object>> getDetectionEvents(Integer fishId, String healthStatus,
+            Boolean isCritical, int hoursBack, int limit) {
+        StringBuilder sql = new StringBuilder("SELECT * FROM detection_events WHERE 1=1");
+
+        if (fishId != null) {
+            sql.append(" AND fish_id = ").append(fishId);
+        }
+        if (healthStatus != null && !healthStatus.isEmpty()) {
+            sql.append(" AND health_status = '").append(esc(healthStatus)).append("'");
+        }
+        if (isCritical != null) {
+            sql.append(" AND is_critical = ").append(isCritical);
+        }
+
+        sql.append(" AND created_at > now() - interval '").append(hoursBack).append(" hours'")
+                .append(" ORDER BY created_at DESC LIMIT ").append(limit);
+
+        return queryRows(sql.toString());
+    }
+
+    /**
+     * Get all detection events (last 24 hours, max 1000).
+     */
+    public List<Map<String, Object>> getAllDetectionEvents() {
+        return getDetectionEvents(null, null, null, 24, 1000);
+    }
+
+    /**
+     * Get critical detection events only.
+     */
+    public List<Map<String, Object>> getCriticalDetectionEvents(int hoursBack, int limit) {
+        return getDetectionEvents(null, null, true, hoursBack, limit);
+    }
+
+    /**
+     * Update detection event status and/or notes.
+     */
+    public void updateDetectionEventStatus(long eventId, String newStatus, String notes) {
+        StringBuilder sql = new StringBuilder("UPDATE detection_events SET ");
+
+        if (newStatus != null && !newStatus.isEmpty()) {
+            sql.append("status = '").append(esc(newStatus)).append("'");
+            if (notes != null && !notes.isEmpty()) {
+                sql.append(", ");
+            }
+        }
+
+        if (notes != null && !notes.isEmpty()) {
+            sql.append("notes = '").append(esc(notes)).append("'");
+        }
+
+        sql.append(", updated_at = NOW() WHERE id = ").append(eventId);
+
+        try {
+            executePgQuery(sql.toString());
+            System.out.println("[Supabase] ✅ Detection event #" + eventId + " updated");
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Error updating detection event: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Delete all detection events from the database.
+     * WARNING: This is permanent and cannot be undone.
+     */
+    public void deleteAllDetectionEvents() {
+        try {
+            String sql = "DELETE FROM detection_events";
+            executePgQuery(sql);
+            System.out.println("[Supabase] ✅ All detection events deleted");
+        } catch (Exception e) {
+            System.err.println("[Supabase] ❌ Error deleting detection events: " + e.getMessage());
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Boat Telemetry - UPSERT live reading to boat_telemetry table
     // ═══════════════════════════════════════════════════════════════
 
     /**
      * Upsert boat telemetry data into boat_telemetry table.
-     * Uses ON CONFLICT (device_id) DO UPDATE so there is always one live row per boat.
-     * Called from MqttService when messages arrive on koifish/boat/sensor or koifish/boat/status.
+     * Uses ON CONFLICT (device_id) DO UPDATE so there is always one live row per
+     * boat.
+     * Called from MqttService when messages arrive on koifish/boat/sensor or
+     * koifish/boat/status.
      */
     public void storeBoatTelemetry(String deviceId, JsonNode data) {
-        if (!enabled || httpClient == null) return;
+        if (!enabled || httpClient == null)
+            return;
 
         executor.submit(() -> {
             try {
-                double voltage       = data.has("voltage")       ? data.get("voltage").asDouble()       : 0;
-                double distFront     = data.has("distanceFront") ? data.get("distanceFront").asDouble() : 0;
-                double distBack      = data.has("distanceBack")  ? data.get("distanceBack").asDouble()  : 0;
-                double distLeft      = data.has("distanceLeft")  ? data.get("distanceLeft").asDouble()  : 0;
-                double distRight     = data.has("distanceRight") ? data.get("distanceRight").asDouble() : 0;
-                double angleX        = data.has("angleX")        ? data.get("angleX").asDouble()        : 0;
-                double angleY        = data.has("angleY")        ? data.get("angleY").asDouble()        : 0;
-                double temperature   = data.has("temperature")   ? data.get("temperature").asDouble()   : 0;
-                int    motorLeft     = data.has("motorLeft")     ? data.get("motorLeft").asInt()        : 0;
-                int    motorRight    = data.has("motorRight")    ? data.get("motorRight").asInt()       : 0;
-                String command       = data.has("command")       ? data.get("command").asText()         : "STOP";
-                String mode          = data.has("mode")          ? data.get("mode").asText()            : "manual";
-                int    rssi          = data.has("rssi")          ? data.get("rssi").asInt()             : 0;
-                boolean connected    = data.has("connected")     ? data.get("connected").asBoolean()    : true;
+                double voltage = data.has("voltage") ? data.get("voltage").asDouble() : 0;
+                double distFront = data.has("distanceFront") ? data.get("distanceFront").asDouble() : 0;
+                double distBack = data.has("distanceBack") ? data.get("distanceBack").asDouble() : 0;
+                double distLeft = data.has("distanceLeft") ? data.get("distanceLeft").asDouble() : 0;
+                double distRight = data.has("distanceRight") ? data.get("distanceRight").asDouble() : 0;
+                double angleX = data.has("angleX") ? data.get("angleX").asDouble() : 0;
+                double angleY = data.has("angleY") ? data.get("angleY").asDouble() : 0;
+                double temperature = data.has("temperature") ? data.get("temperature").asDouble() : 0;
+                int motorLeft = data.has("motorLeft") ? data.get("motorLeft").asInt() : 0;
+                int motorRight = data.has("motorRight") ? data.get("motorRight").asInt() : 0;
+                String command = data.has("command") ? data.get("command").asText() : "STOP";
+                String mode = data.has("mode") ? data.get("mode").asText() : "manual";
+                int rssi = data.has("rssi") ? data.get("rssi").asInt() : 0;
+                boolean connected = data.has("connected") ? data.get("connected").asBoolean() : true;
 
                 String sql = String.format(
-                    "INSERT INTO boat_telemetry " +
-                    "(device_id, voltage, distance_front, distance_back, distance_left, distance_right, " +
-                    " angle_x, angle_y, temperature, motor_left, motor_right, command, mode, rssi, connected, updated_at) " +
-                    "VALUES ('%s', %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %d, %d, '%s', '%s', %d, %b, NOW()) " +
-                    "ON CONFLICT (device_id) DO UPDATE SET " +
-                    " voltage=EXCLUDED.voltage, distance_front=EXCLUDED.distance_front, " +
-                    " distance_back=EXCLUDED.distance_back, distance_left=EXCLUDED.distance_left, " +
-                    " distance_right=EXCLUDED.distance_right, angle_x=EXCLUDED.angle_x, angle_y=EXCLUDED.angle_y, " +
-                    " temperature=EXCLUDED.temperature, motor_left=EXCLUDED.motor_left, motor_right=EXCLUDED.motor_right, " +
-                    " command=EXCLUDED.command, mode=EXCLUDED.mode, rssi=EXCLUDED.rssi, connected=EXCLUDED.connected, " +
-                    " updated_at=NOW()",
-                    deviceId.replace("'", ""), voltage, distFront, distBack, distLeft, distRight,
-                    angleX, angleY, temperature, motorLeft, motorRight,
-                    command.replace("'", ""), mode.replace("'", ""), rssi, connected);
+                        "INSERT INTO boat_telemetry " +
+                                "(device_id, voltage, distance_front, distance_back, distance_left, distance_right, " +
+                                " angle_x, angle_y, temperature, motor_left, motor_right, command, mode, rssi, connected, updated_at) "
+                                +
+                                "VALUES ('%s', %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %d, %d, '%s', '%s', %d, %b, NOW()) "
+                                +
+                                "ON CONFLICT (device_id) DO UPDATE SET " +
+                                " voltage=EXCLUDED.voltage, distance_front=EXCLUDED.distance_front, " +
+                                " distance_back=EXCLUDED.distance_back, distance_left=EXCLUDED.distance_left, " +
+                                " distance_right=EXCLUDED.distance_right, angle_x=EXCLUDED.angle_x, angle_y=EXCLUDED.angle_y, "
+                                +
+                                " temperature=EXCLUDED.temperature, motor_left=EXCLUDED.motor_left, motor_right=EXCLUDED.motor_right, "
+                                +
+                                " command=EXCLUDED.command, mode=EXCLUDED.mode, rssi=EXCLUDED.rssi, connected=EXCLUDED.connected, "
+                                +
+                                " updated_at=NOW()",
+                        deviceId.replace("'", ""), voltage, distFront, distBack, distLeft, distRight,
+                        angleX, angleY, temperature, motorLeft, motorRight,
+                        command.replace("'", ""), mode.replace("'", ""), rssi, connected);
 
                 executePgQuery(sql);
             } catch (Exception e) {

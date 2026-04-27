@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Video, VideoOff, AlertCircle, Download } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Video, VideoOff, AlertCircle, Download, RefreshCw } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import MediaMTXCameraFeed from './MediaMTXCameraFeed';
@@ -13,12 +13,29 @@ interface DetectionEvent {
   confidence: number;
   isCritical: boolean;
   needsAttention: boolean;
+  screenshotDataUrl: string;
   bbox: {
     x1: number;
     y1: number;
     x2: number;
     y2: number;
   };
+}
+
+// API Detection Event Response Interface
+interface ApiDetectionEvent {
+  id: number;
+  created_at: string;
+  fish_id: number;
+  health_status: string;
+  confidence: number;
+  is_critical: boolean;
+  needs_attention: boolean;
+  image_url: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 }
 
 // Feed source type
@@ -44,9 +61,127 @@ const PondCamera: React.FC = () => {
   const [detectionEvents, setDetectionEvents] = useState<DetectionEvent[]>([]);
   const [criticalAlerts, setCriticalAlerts] = useState<number>(0);
   const [, setTotalDetections] = useState<number>(0);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
 
-  // AI Camera Feed WebSocket Connection (optional — connects to local detection server)
+  // Ref to the HLS <video> element exposed by MediaMTXCameraFeed
+  const hlsVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Tracks the last time we generated detection events (to avoid duplicates every interval)
+  const hlsLastDetectionRef = useRef<{ count: number; healthLabel: string; timestamp: number }>({
+    count: 0,
+    healthLabel: '',
+    timestamp: 0,
+  });
+
+  const playAlertSound = useCallback(() => {
+    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjGH0fPTgjMGHm7A7+OZURE');
+    audio.play().catch(e => console.log('Could not play alert sound:', e));
+  }, []);
+
+  // Fetch old detection events from database — retries up to 5 times with
+  // increasing delays so a backend restart doesn't silently leave the log empty.
+  const fetchDetectionEvents = useCallback(async (retryCount = 0) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+    const MAX_RETRIES = 5;
+    const RETRY_DELAYS = [3000, 5000, 8000, 12000, 20000];
+    setIsLoadingEvents(true);
+    try {
+      const response = await axios.get(`${API_URL}/api/camera/events`, {
+        params: { hoursBack: 720, limit: 1000 },
+        timeout: 10000,
+      });
+      if (response.data?.success && Array.isArray(response.data?.data)) {
+        const fetchedEvents: DetectionEvent[] = response.data.data.map((e: ApiDetectionEvent) => ({
+          id: `db-${e.id}`,
+          timestamp: e.created_at || new Date().toISOString(),
+          fishId: e.fish_id || 0,
+          healthClass: e.health_status || 'unknown',
+          confidence: Number(e.confidence || 0),
+          isCritical: e.is_critical || false,
+          needsAttention: e.needs_attention || false,
+          screenshotDataUrl: (e.image_url || (e as { imageUrl?: string }).imageUrl || '') as string,
+          bbox: {
+            x1: e.x1 || 0,
+            y1: e.y1 || 0,
+            x2: e.x2 || 0,
+            y2: e.y2 || 0
+          }
+        }));
+        setDetectionEvents(fetchedEvents);
+      }
+      setIsLoadingEvents(false);
+    } catch (error) {
+      if (retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAYS[retryCount];
+        console.warn(`[DetectionEvents] Fetch failed (attempt ${retryCount + 1}/${MAX_RETRIES + 1}), retrying in ${delay / 1000}s...`, error);
+        setTimeout(() => fetchDetectionEvents(retryCount + 1), delay);
+      } else {
+        console.warn('[DetectionEvents] All fetch attempts failed. Use the refresh button to retry.', error);
+        setIsLoadingEvents(false);
+      }
+    }
+  }, []);
+
+  const saveDetectionEvents = useCallback(async (events: DetectionEvent[]) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+    try {
+      await axios.post(`${API_URL}/api/camera/events`, {
+        events: events.map(e => ({
+          timestamp: e.timestamp,
+          fishId: e.fishId,
+          healthStatus: e.healthClass,
+          confidence: e.confidence,
+          isCritical: e.isCritical,
+          needsAttention: e.needsAttention,
+          boundingBox: e.bbox,
+          screenshot: e.screenshotDataUrl || null
+        }))
+      });
+    } catch (error) {
+      console.error('Failed to save detection events:', error);
+    }
+  }, []);
+
+  const saveCriticalAlert = useCallback(async (events: DetectionEvent[]) => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+    try {
+      await axios.post(`${API_URL}/api/camera/alerts/critical`, {
+        timestamp: new Date().toISOString(),
+        alertType: 'DEAD_FISH_DETECTED',
+        severity: 'CRITICAL',
+        fishCount: events.length,
+        details: events.map(e => ({
+          fishId: e.fishId,
+          healthClass: e.healthClass,
+          confidence: e.confidence
+        }))
+      });
+
+      playAlertSound();
+    } catch (error) {
+      console.error('Failed to save critical alert:', error);
+    }
+  }, [playAlertSound]);
+
+  // Fetch detection events from database on component mount
   useEffect(() => {
+    fetchDetectionEvents();
+  }, [fetchDetectionEvents]);
+
+  // AI Camera Feed WebSocket Connection (optional — only when AI feed is selected)
+  useEffect(() => {
+    // Only connect to the Pi camera server when the user explicitly selects 'AI Detection' mode
+    if (feedSource !== 'ai') {
+      // Ensure we clean up if switching away
+      if (cameraSocketRef.current) {
+        cameraSocketRef.current.disconnect();
+        cameraSocketRef.current = null;
+      }
+      setCameraConnected(false);
+      setCameraFrame('');
+      return;
+    }
+
     console.log('🎥 Connecting to AI camera server:', CAMERA_SERVER_URL);
     
     const socket = io(CAMERA_SERVER_URL, {
@@ -98,6 +233,7 @@ const PondCamera: React.FC = () => {
         }
         
         if (data.detections && data.detections.length > 0) {
+          const aiScreenshotDataUrl = data.frame ? `data:image/jpeg;base64,${data.frame}` : '';
           const newEvents: DetectionEvent[] = data.detections.map((fish) => ({
             id: `${Date.now()}-${fish.id}`,
             timestamp: data.timestamp || new Date().toISOString(),
@@ -106,10 +242,11 @@ const PondCamera: React.FC = () => {
             confidence: fish.health?.confidence || 0,
             isCritical: fish.health?.is_critical || false,
             needsAttention: fish.health?.needs_attention || false,
+            screenshotDataUrl: aiScreenshotDataUrl,
             bbox: fish.bbox || { x1: 0, y1: 0, x2: 0, y2: 0 }
           }));
           
-          setDetectionEvents(prev => [...newEvents, ...prev].slice(0, 100));
+          setDetectionEvents(prev => [...newEvents, ...prev].slice(0, 500));
           
           const criticalCount = newEvents.filter(e => e.isCritical).length;
           if (criticalCount > 0) {
@@ -134,56 +271,288 @@ const PondCamera: React.FC = () => {
       console.log('🔌 Disconnecting from AI camera server');
       socket.emit('stop_stream');
       socket.disconnect();
+      cameraSocketRef.current = null;
     };
-  }, [cameraMode]);
+  }, [CAMERA_SERVER_URL, cameraMode, feedSource, saveCriticalAlert, saveDetectionEvents]);
 
-  // Save detection events to backend
-  const saveDetectionEvents = async (events: DetectionEvent[]) => {
-    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
-    try {
-      await axios.post(`${API_URL}/api/camera/events`, {
-        events: events.map(e => ({
-          timestamp: e.timestamp,
-          fishId: e.fishId,
-          healthStatus: e.healthClass,
-          confidence: e.confidence,
-          isCritical: e.isCritical,
-          needsAttention: e.needsAttention,
-          boundingBox: e.bbox
-        }))
-      });
-    } catch (error) {
-      console.error('Failed to save detection events:', error);
+  // ─── HLS Frame Capture → Client-Side Overlay Detection ───
+  // The Pi's YOLOv8 draws colored bounding boxes + text labels onto the HLS stream.
+  // The overlay text format is: "Fish#N: <status> (<confidence>%)"
+  // Bounding box colours:
+  //   • Green rectangles  = healthy fish
+  //   • Red rectangles    = dead/critical fish  
+  //   • Orange rectangles = unhealthy / needs attention
+  //
+  // IMPORTANT: We must avoid counting natural green (water, plants) as "healthy" boxes.
+  // We focus on high-saturation overlay colours and scan bounding-box-likely regions
+  // (edges of detected rectangles, text label areas at the top of the frame).
+
+  /**
+   * Analyze canvas pixel data for YOLOv8 overlay colors.
+   * Scans for bounding box rectangles and label text colours,
+   * ignoring natural scene colours (pond water, plants, etc).
+   * Returns detected overlay regions with health classifications.
+   */
+  const analyzeFrameOverlays = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    // --- Strategy ---
+    // YOLOv8 draws:
+    //  1) A coloured bounding box (2-3px lines) around each fish
+    //  2) A coloured text label above the box: "Fish#1: unhealthy (100%)"
+    //  3) An info bar at the top: "FPS: X | Fish: N"
+    //
+    // The bounding box lines and text use pure, saturated overlay colours that
+    // stand out from the natural scene. We check colour saturation and value
+    // to distinguish overlays from pond water/plants.
+
+    /**
+     * Convert RGB to HSV. Returns [h: 0-360, s: 0-1, v: 0-1].
+     */
+    const rgbToHsv = (r: number, g: number, b: number): [number, number, number] => {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      let h = 0;
+      const s = max === 0 ? 0 : d / max;
+      const v = max;
+      if (d !== 0) {
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+        else if (max === g) h = ((b - r) / d + 2) * 60;
+        else h = ((r - g) / d + 4) * 60;
+      }
+      return [h, s, v];
+    };
+
+    /**
+     * Check if a pixel is a YOLOv8 overlay colour (high saturation, bright).
+     * Returns the classification or null.
+     */
+    const classifyOverlayPixel = (r: number, g: number, b: number): string | null => {
+      const [h, s, v] = rgbToHsv(r, g, b);
+
+      // Overlay colours are highly saturated and bright
+      // Natural greens (water/plants) have lower saturation and are darker
+      if (s < 0.5 || v < 0.5) return null; // not saturated/bright enough for an overlay
+
+      // Pure green overlay (healthy): H ≈ 90-150, very saturated
+      // YOLOv8 uses (0, 255, 0) style green → H=120, S=1, V=1
+      if (h >= 80 && h <= 160 && s >= 0.7 && v >= 0.7) {
+        return 'healthy';
+      }
+
+      // Red overlay (dead/critical): H ≈ 0-15 or 345-360
+      // YOLOv8 uses (255, 0, 0) or (0, 0, 255) style red → H=0, S=1, V=1
+      if ((h <= 15 || h >= 345) && s >= 0.7 && v >= 0.6) {
+        return 'dead';
+      }
+
+      // Orange overlay (unhealthy): H ≈ 15-45
+      // YOLOv8 uses orange (255, 165, 0) style → H≈39, S=1, V=1
+      if (h >= 10 && h <= 50 && s >= 0.6 && v >= 0.7) {
+        return 'unhealthy';
+      }
+
+      // Yellow overlay (needs attention): H ≈ 45-70
+      if (h >= 45 && h <= 70 && s >= 0.6 && v >= 0.7) {
+        return 'unhealthy';
+      }
+
+      return null;
+    };
+
+    // --- Scan strategy: focus on areas where overlays are drawn ---
+    // 1) Text label region: top 20% of the frame (where FPS bar and fish labels are)
+    // 2) Frame edges: scan along edges where bounding box lines appear
+    // 3) Skip the interior of the frame to avoid counting water/plants
+
+    const overlaySignals: Record<string, { labelPixels: number; edgePixels: number }> = {
+      healthy: { labelPixels: 0, edgePixels: 0 },
+      dead: { labelPixels: 0, edgePixels: 0 },
+      unhealthy: { labelPixels: 0, edgePixels: 0 },
+    };
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const pixels = imageData.data;
+
+    // Helper to get pixel classification at (x, y)
+    const getPixelClass = (x: number, y: number): string | null => {
+      const idx = (y * width + x) * 4;
+      return classifyOverlayPixel(pixels[idx], pixels[idx + 1], pixels[idx + 2]);
+    };
+
+    // Region 1: Top label area (top 25% of frame) — text labels and info bar
+    const labelRegionHeight = Math.floor(height * 0.25);
+    const step = 2; // sample every 2nd pixel for speed
+    for (let y = 0; y < labelRegionHeight; y += step) {
+      for (let x = 0; x < width; x += step) {
+        const cls = getPixelClass(x, y);
+        if (cls) overlaySignals[cls].labelPixels++;
+      }
     }
-  };
 
-  // Save critical alerts
-  const saveCriticalAlert = async (events: DetectionEvent[]) => {
-    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
-    try {
-      await axios.post(`${API_URL}/api/camera/alerts/critical`, {
-        timestamp: new Date().toISOString(),
-        alertType: 'DEAD_FISH_DETECTED',
-        severity: 'CRITICAL',
-        fishCount: events.length,
-        details: events.map(e => ({
-          fishId: e.fishId,
-          healthClass: e.healthClass,
-          confidence: e.confidence
-        }))
-      });
-      
-      // Play alert sound
-      playAlertSound();
-    } catch (error) {
-      console.error('Failed to save critical alert:', error);
+    // Region 2: Scan horizontal bands across the frame (bounding box top/bottom edges)
+    // Sample a few horizontal lines spaced across the frame
+    const bandStep = Math.floor(height / 12);
+    for (let band = labelRegionHeight; band < height; band += bandStep) {
+      for (let dy = 0; dy < 4 && band + dy < height; dy++) {
+        for (let x = 0; x < width; x += step) {
+          const cls = getPixelClass(x, band + dy);
+          if (cls) overlaySignals[cls].edgePixels++;
+        }
+      }
     }
-  };
 
-  const playAlertSound = () => {
-    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjGH0fPTgjMGHm7A7+OZURE');
-    audio.play().catch(e => console.log('Could not play alert sound:', e));
-  };
+    // Region 3: Scan vertical bands (bounding box left/right edges)
+    const vBandStep = Math.floor(width / 12);
+    for (let band = 0; band < width; band += vBandStep) {
+      for (let dx = 0; dx < 4 && band + dx < width; dx++) {
+        for (let y = labelRegionHeight; y < height; y += step) {
+          const cls = getPixelClass(band + dx, y);
+          if (cls) overlaySignals[cls].edgePixels++;
+        }
+      }
+    }
+
+    // --- Determine detections ---
+    // Threshold: bounding box lines + text labels produce many saturated pixels.
+    // We need at least ~20 overlay pixels from our focused scan to confirm a detection.
+    const threshold = 20;
+    const healthyLabelThreshold = 12;
+    const healthyEdgeThreshold = 8;
+
+    const detections: Array<{
+      healthClass: string;
+      confidence: number;
+      isCritical: boolean;
+      needsAttention: boolean;
+      pixelCount: number;
+    }> = [];
+
+    // Find the dominant overlay colour — this is what the model actually says
+    const sortedClasses = Object.entries(overlaySignals)
+      .map(([healthClass, signal]) => ({
+        healthClass,
+        labelPixels: signal.labelPixels,
+        edgePixels: signal.edgePixels,
+        totalPixels: signal.labelPixels + signal.edgePixels,
+      }))
+      .filter(({ healthClass, labelPixels, edgePixels, totalPixels }) => {
+        if (healthClass === 'healthy') {
+          return labelPixels >= healthyLabelThreshold && edgePixels >= healthyEdgeThreshold;
+        }
+
+        return totalPixels >= threshold;
+      })
+      .sort((a, b) => b.totalPixels - a.totalPixels);
+
+    if (sortedClasses.length === 0) return detections;
+
+    // Use the dominant classification for all detected fish
+    // (If there are multiple overlay colours, each one represents different fish)
+    for (const { healthClass, totalPixels: pixelCount } of sortedClasses) {
+      // Estimate fish count from pixel density
+      const estimatedCount = Math.max(1, Math.min(5, Math.round(pixelCount / 100)));
+
+      for (let i = 0; i < estimatedCount; i++) {
+        const isCritical = healthClass === 'dead';
+        const needsAttention = healthClass === 'unhealthy' || healthClass === 'dead';
+
+        detections.push({
+          healthClass,
+          confidence: Math.min(0.99, 0.80 + (pixelCount / 2000)),
+          isCritical,
+          needsAttention,
+          pixelCount,
+        });
+      }
+    }
+
+    return detections;
+  }, []);
+
+  const captureHlsFrame = useCallback(() => {
+    const video = hlsVideoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+
+    // Draw the current video frame onto an offscreen canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Analyze the frame for YOLOv8 overlay colours
+    const overlayDetections = analyzeFrameOverlays(ctx, canvas.width, canvas.height);
+
+    if (overlayDetections.length === 0) return;
+
+    // Capture the screenshot as a base64 data URL
+    const screenshotDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+    const now = Date.now();
+    const timestamp = new Date().toISOString();
+    const lastDet = hlsLastDetectionRef.current;
+
+    // Build a summary key for deduplication (e.g. "2-healthy,1-dead")
+    const summaryKey = overlayDetections
+      .map((d) => d.healthClass)
+      .sort()
+      .join(',');
+
+    // Deduplicate: skip if same detection count + same health composition within 10s
+    if (
+      lastDet.count === overlayDetections.length &&
+      lastDet.healthLabel === summaryKey &&
+      now - lastDet.timestamp < 10000
+    ) {
+      return;
+    }
+    hlsLastDetectionRef.current = { count: overlayDetections.length, healthLabel: summaryKey, timestamp: now };
+
+    // Update fish count for the stats card
+    setFishCount(overlayDetections.length);
+
+    const newEvents: DetectionEvent[] = overlayDetections.map((det, idx) => ({
+      id: `hls-${now}-${idx}`,
+      timestamp,
+      fishId: idx + 1,
+      healthClass: det.healthClass,
+      confidence: parseFloat(det.confidence.toFixed(2)),
+      isCritical: det.isCritical,
+      needsAttention: det.needsAttention,
+      screenshotDataUrl,
+      bbox: { x1: 0, y1: 0, x2: 0, y2: 0 },
+    }));
+
+    setDetectionEvents((prev) => [...newEvents, ...prev].slice(0, 500));
+    setTotalDetections((prev) => prev + newEvents.length);
+
+    const criticalCount = newEvents.filter((e) => e.isCritical).length;
+    if (criticalCount > 0) {
+      setCriticalAlerts((prev) => prev + criticalCount);
+      saveCriticalAlert(newEvents.filter((e) => e.isCritical));
+    }
+
+    saveDetectionEvents(newEvents);
+    console.log(
+      `🐟 HLS overlay detection: ${overlayDetections.length} fish detected [${summaryKey}]`
+    );
+  }, [analyzeFrameOverlays, saveCriticalAlert, saveDetectionEvents]);
+
+  // Interval: capture HLS frames every 3 seconds when feedSource === 'hls'
+  useEffect(() => {
+    if (feedSource !== 'hls') return;
+
+    // Reset dedup ref when switching to HLS
+    hlsLastDetectionRef.current = { count: 0, healthLabel: '', timestamp: 0 };
+
+    const intervalId = setInterval(() => {
+      captureHlsFrame();
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [feedSource, captureHlsFrame]);
 
   const handleCameraModeChange = (mode: 'quality' | 'balanced' | 'performance') => {
     setCameraMode(mode);
@@ -196,6 +565,7 @@ const PondCamera: React.FC = () => {
   const getHealthColor = (healthClass: string) => {
     switch (healthClass) {
       case 'healthy': return 'text-green-500';
+      case 'unhealthy': return 'text-orange-500';
       case 'bacterial': return 'text-orange-500';
       case 'fungal': return 'text-purple-500';
       case 'parasitic': return 'text-blue-500';
@@ -208,6 +578,7 @@ const PondCamera: React.FC = () => {
   const getHealthEmoji = (healthClass: string) => {
     switch (healthClass) {
       case 'healthy': return '🟢';
+      case 'unhealthy': return '🟠';
       case 'bacterial': return '🟠';
       case 'fungal': return '🟣';
       case 'parasitic': return '🔵';
@@ -233,11 +604,19 @@ const PondCamera: React.FC = () => {
     a.click();
   };
 
-  const clearEvents = () => {
-    if (confirm('Clear all detection events?')) {
-      setDetectionEvents([]);
-      setCriticalAlerts(0);
-      setTotalDetections(0);
+  const clearEvents = async () => {
+    if (confirm('Clear all detection events from database? This cannot be undone.')) {
+      try {
+        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+        await axios.delete(`${API_URL}/api/camera/events`);
+        setDetectionEvents([]);
+        setCriticalAlerts(0);
+        setTotalDetections(0);
+        alert('All detection events have been deleted successfully.');
+      } catch (error) {
+        console.error('Failed to delete events:', error);
+        alert('Failed to delete events. Please try again.');
+      }
     }
   };
 
@@ -382,7 +761,7 @@ const PondCamera: React.FC = () => {
             {/* HLS Feed (primary — always works in production) */}
             {feedSource === 'hls' && (
               <div className="aspect-video">
-                <MediaMTXCameraFeed className="w-full h-full" showStatus={true} />
+                <MediaMTXCameraFeed ref={hlsVideoRef} className="w-full h-full" showStatus={true} />
               </div>
             )}
 
@@ -565,9 +944,19 @@ const PondCamera: React.FC = () => {
         {/* Event Log - 1/3 width */}
         <div className="lg:col-span-1">
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-4 py-3">
-              <h3 className="font-semibold">Detection Events Log</h3>
-              <p className="text-sm text-cyan-100">Real-time event tracking</p>
+            <div className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-4 py-3 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold">Detection Events Log</h3>
+                <p className="text-sm text-cyan-100">Real-time event tracking</p>
+              </div>
+              <button
+                onClick={() => fetchDetectionEvents(0)}
+                disabled={isLoadingEvents}
+                title="Refresh logs from database"
+                className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 disabled:opacity-50 transition"
+              >
+                <RefreshCw size={16} className={isLoadingEvents ? 'animate-spin' : ''} />
+              </button>
             </div>
             
             <div className="h-[600px] overflow-y-auto">
@@ -608,9 +997,17 @@ const PondCamera: React.FC = () => {
                       <div className="space-y-1 text-sm text-gray-600">
                         <p>Confidence: {(event.confidence * 100).toFixed(1)}%</p>
                         <p className="text-xs text-gray-500">
-                          {new Date(event.timestamp).toLocaleTimeString()}
+                          {new Date(event.timestamp).toLocaleString()}
                         </p>
                       </div>
+                      
+                      {event.screenshotDataUrl && (
+                        <img
+                          src={event.screenshotDataUrl}
+                          alt={`Detection screenshot for Fish #${event.fishId}`}
+                          className="w-full rounded mt-2 border border-gray-200"
+                        />
+                      )}
                       
                       {event.needsAttention && !event.isCritical && (
                         <div className="mt-2 px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded">
@@ -629,8 +1026,8 @@ const PondCamera: React.FC = () => {
       {/* Health Statistics */}
       <div className="bg-white rounded-lg shadow-md p-6">
         <h3 className="text-lg font-semibold text-gray-800 mb-4">Health Status Distribution</h3>
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-          {['healthy', 'bacterial', 'fungal', 'parasitic', 'white_tail', 'dead'].map((status) => {
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
+          {['healthy', 'unhealthy', 'bacterial', 'fungal', 'parasitic', 'white_tail', 'dead'].map((status) => {
             const count = detectionEvents.filter(e => e.healthClass === status).length;
             const percentage = detectionEvents.length > 0 
               ? ((count / detectionEvents.length) * 100).toFixed(1) 
