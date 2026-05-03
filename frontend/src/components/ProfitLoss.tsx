@@ -13,6 +13,8 @@ const ProfitLoss: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
+  
+
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
     pondId: '',
@@ -192,6 +194,8 @@ const ProfitLoss: React.FC = () => {
       setIsUpdating(false);
     }
   };
+
+  
 
   const handleDeleteRevenue = async (id: number) => {
     if (isDeleting) return;

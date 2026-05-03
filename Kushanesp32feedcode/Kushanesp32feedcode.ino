@@ -48,7 +48,7 @@ PubSubClient mqttClient(espClient);
 const char* supabase_url = "https://superbase.koifishfriend.online/pg/query";
 const char* supabase_rest_url = "https://superbase.koifishfriend.online/rest/v1";
 const char* supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzIxODYyMzcsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.EfWDPx24M0OjJa5QjzEX4SbMwM_gG_71fhGLkYrBprY";
-const char* supabase_service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q";
+const char* supabase_service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ.Ir4JTpoRDgWovxTyAAB_SvVbEAtCo7bN8JIlCBLRRDk";
 unsigned long lastSupabaseUpdate = 0;
 const unsigned long supabaseUpdateInterval = 2000;  // Update feeddb every 2 seconds
 unsigned long lastWeightHistoryInsert = 0;

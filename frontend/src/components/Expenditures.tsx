@@ -181,6 +181,11 @@ const Expenditures: React.FC = () => {
     yellow: { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-300' },
   };
 
+  const getPondColorClasses = (color?: string) => {
+    if (!color) return pondColors.blue;
+    return pondColors[color] || pondColors.blue;
+  };
+
   // Categories for manual entry (shown in Add Expenditure modal)
   const categories = {
     'Maintenance and Repairs': {
@@ -672,7 +677,7 @@ const Expenditures: React.FC = () => {
           </button>
 
           {ponds.map((pond) => {
-            const pondColorClasses = pondColors[pond.color];
+            const pondColorClasses = getPondColorClasses(pond.color);
             const pondTotal = getTotalByPond(pond.id);
             const pondExpCount = expenditures.filter(exp => exp.pondId === pond.id).length;
 
@@ -945,7 +950,7 @@ const Expenditures: React.FC = () => {
                   const categoryData = allCategories[exp.category as keyof typeof allCategories];
                   const colorClasses = categoryData ? getColorClasses(categoryData.color) : getColorClasses('gray');
                   const pond = ponds.find(p => p.id === exp.pondId);
-                  const pondColorClasses = pond ? pondColors[pond.color] : pondColors.blue;
+                  const pondColorClasses = pond ? getPondColorClasses(pond.color) : pondColors.blue;
 
                   return (
                     <tr key={exp.id} className="hover:bg-gray-50 transition-colors">
@@ -1181,6 +1186,7 @@ const Expenditures: React.FC = () => {
                     {stockTransactions.slice(0, 10).map((transaction) => {
                       const item = inventoryItems.find(i => i.id === transaction.itemId);
                       const pond = ponds.find(p => p.id === transaction.pondId);
+                      const pondColorClasses = getPondColorClasses(pond?.color);
 
                       return (
                         <tr key={transaction.id} className="hover:bg-gray-50">
@@ -1204,7 +1210,7 @@ const Expenditures: React.FC = () => {
                           </td>
                           <td className="px-6 py-4">
                             {pond && (
-                              <span className={`px-3 py-1 rounded-full text-xs font-medium border ${pondColors[pond.color].bg} ${pondColors[pond.color].text} ${pondColors[pond.color].border}`}>
+                              <span className={`px-3 py-1 rounded-full text-xs font-medium border ${pondColorClasses.bg} ${pondColorClasses.text} ${pondColorClasses.border}`}>
                                 {pond.name}
                               </span>
                             )}

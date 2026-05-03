@@ -108,6 +108,11 @@ const FishCount: React.FC = () => {
     yellow: { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-300' },
   };
 
+  const getPondColorClasses = (color?: string) => {
+    if (!color) return pondColors.blue;
+    return pondColors[color] || pondColors.blue;
+  };
+
   const countMethods = [
     { value: 'manual', label: 'Manual Count', icon: '👁️' },
     { value: 'net', label: 'Net Count', icon: '🎣' },
@@ -415,7 +420,7 @@ const FishCount: React.FC = () => {
           </button>
 
           {ponds.map((pond) => {
-            const pondColorClasses = pondColors[pond.color];
+            const pondColorClasses = getPondColorClasses(pond.color);
             const latestCount = getLatestCountByPond(pond.id);
             const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
             const isClosed = pond.status === 'CLOSED';
@@ -475,7 +480,7 @@ const FishCount: React.FC = () => {
       {/* Statistics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {ponds.map((pond) => {
-          const pondColorClasses = pondColors[pond.color];
+          const pondColorClasses = getPondColorClasses(pond.color);
           const latestCount = getLatestCountByPond(pond.id);
           const recordCount = fishCountRecords.filter(r => r.pondId === pond.id).length;
           const trend = getCountTrend(pond.id);
@@ -589,7 +594,7 @@ const FishCount: React.FC = () => {
               <tbody className="divide-y divide-gray-200">
                 {getFilteredRecords().map((record) => {
                   const pond = ponds.find(p => p.id === record.pondId);
-                  const pondColorClasses = pond ? pondColors[pond.color] : pondColors.blue;
+                  const pondColorClasses = pond ? getPondColorClasses(pond.color) : pondColors.blue;
                   const method = countMethods.find(m => m.value === record.countMethod);
 
                   return (

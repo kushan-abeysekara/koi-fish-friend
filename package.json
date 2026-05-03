@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "seed:demo": "node scripts/seed-demo-data.js --mode=reset-seed",
+    "seed:demo:append": "node scripts/seed-demo-data.js --mode=append",
+    "seed:demo:reset": "node scripts/seed-demo-data.js --mode=reset"
+  },
   "dependencies": {
+    "axios": "^1.16.0",
     "mqtt": "^5.14.1"
   }
 }

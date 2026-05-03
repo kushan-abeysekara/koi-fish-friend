@@ -43,9 +43,8 @@ const char *password = "FiberTarget255";
 const char *supabase_url = "https://superbase.koifishfriend.online/pg/query";
 const char *supabase_service_key =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwK"
-    "ICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ."
-    "DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q";
+    "eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ."
+    "Ir4JTpoRDgWovxTyAAB_SvVbEAtCo7bN8JIlCBLRRDk";
 
 // Device configuration
 String deviceId = "";
