@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <time.h>
@@ -46,6 +47,14 @@ const char *supabase_service_key =
     "eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTY0MTc2OTIwMCwiZXhwIjoxNzk5NTM1NjAwfQ."
     "Ir4JTpoRDgWovxTyAAB_SvVbEAtCo7bN8JIlCBLRRDk";
 
+// ===================== MQTT CONFIG =====================
+const char *mqtt_server = "187.77.189.5";
+const int mqtt_port = 1883;
+WiFiClient mqttNetClient;
+PubSubClient mqttClient(mqttNetClient);
+String commandTopic = "";
+String statusTopic = "";
+
 // ===================== DEVICE CONFIG =====================
 String deviceId = "";
 const char *deviceType = "BUDGET_MANAGEMENT";
@@ -77,18 +86,23 @@ unsigned long lastSample = 0;
 unsigned long lastDisplay = 0;
 unsigned long lastSupabaseLiveUpdate = 0;
 unsigned long lastSupabaseHistoryInsert = 0;
-unsigned long lastCommandPoll = 0;
 unsigned long lastWiFiCheck = 0;
+unsigned long lastStatusPublish = 0;
 
 const unsigned long SUPABASE_LIVE_INTERVAL = 5000;
 const unsigned long SUPABASE_HISTORY_INTERVAL = 60000;
-const unsigned long COMMAND_POLL_INTERVAL = 5000;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;
+const unsigned long MQTT_STATUS_INTERVAL = 5000;
 
 // ===================== RELAY CONTROL =====================
 bool manualMode = false;
 bool relayManualState = true;
 bool scheduleMode = false;
+
+void applyPowerCommand(const String &command);
+bool connectMQTT();
+void mqttCallback(char *topic, byte *payload, unsigned int length);
+void publishStatus();
 
 // ===============================================================
 // SETUP
@@ -127,8 +141,15 @@ void setup()
     WiFi.macAddress(mac);
     deviceId = "BM_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
     deviceId.toUpperCase();
+    commandTopic = "koi/sensors/" + deviceId + "/command";
+    statusTopic = "koi/sensors/" + deviceId + "/status";
 
     setupWiFi();
+    mqttClient.setServer(mqtt_server, mqtt_port);
+    mqttClient.setCallback(mqttCallback);
+    mqttClient.setBufferSize(1024);
+    mqttClient.setKeepAlive(20);
+    connectMQTT();
     initTime();
     loadSchedules();
 
@@ -141,6 +162,160 @@ void setup()
     delay(1500);
 
     lcd.clear();
+}
+
+bool connectMQTT()
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
+
+    if (mqttClient.connected())
+        return true;
+
+    String clientId = "ESP32_BM_" + deviceId + "_" + String(random(0xffff), HEX);
+    if (!mqttClient.connect(clientId.c_str()))
+    {
+        Serial.print("[MQTT] Connect failed, rc=");
+        Serial.println(mqttClient.state());
+        return false;
+    }
+
+    if (mqttClient.subscribe(commandTopic.c_str()))
+    {
+        Serial.print("[MQTT] Subscribed: ");
+        Serial.println(commandTopic);
+    }
+    else
+    {
+        Serial.println("[MQTT] Subscribe failed");
+    }
+
+    publishStatus();
+    return true;
+}
+
+void publishStatus()
+{
+    if (!mqttClient.connected())
+        return;
+
+    StaticJsonDocument<384> doc;
+    doc["deviceId"] = deviceId;
+    doc["status"] = "online";
+    doc["relayState"] = digitalRead(RELAY_PIN) == HIGH ? "ON" : "OFF";
+    doc["controlMode"] = manualMode ? "manual" : (scheduleMode ? "schedule" : "auto");
+    doc["scheduleCount"] = scheduleCount;
+    doc["ipAddress"] = WiFi.localIP().toString();
+    doc["rssi"] = WiFi.RSSI();
+    doc["energyWh"] = energyWh;
+
+    String payload;
+    serializeJson(doc, payload);
+    mqttClient.publish(statusTopic.c_str(), payload.c_str(), true);
+}
+
+void applyPowerCommand(const String &command)
+{
+    if (command == "power_on")
+    {
+        manualMode = true;
+        scheduleMode = false;
+        relayManualState = true;
+        digitalWrite(RELAY_PIN, HIGH);
+        savePowerState();
+    }
+    else if (command == "power_off")
+    {
+        manualMode = true;
+        scheduleMode = false;
+        relayManualState = false;
+        digitalWrite(RELAY_PIN, LOW);
+        savePowerState();
+    }
+    else if (command == "auto_mode")
+    {
+        manualMode = false;
+        scheduleMode = false;
+        savePowerState();
+    }
+    else if (command == "schedule_mode")
+    {
+        manualMode = false;
+        scheduleMode = true;
+        savePowerState();
+    }
+    else if (command == "reset_energy")
+    {
+        energyWh = 0;
+    }
+}
+
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
+    if (String(topic) != commandTopic)
+        return;
+
+    String message;
+    message.reserve(length + 1);
+    for (unsigned int i = 0; i < length; i++)
+    {
+        message += (char)payload[i];
+    }
+
+    StaticJsonDocument<2048> doc;
+    DeserializationError err = deserializeJson(doc, message);
+    if (err)
+    {
+        Serial.print("[MQTT] JSON parse failed: ");
+        Serial.println(err.c_str());
+        return;
+    }
+
+    if (!doc.containsKey("command"))
+        return;
+
+    String command = doc["command"].as<const char *>();
+    Serial.print("[MQTT] Command: ");
+    Serial.println(command);
+
+    if (command == "sync_schedules")
+    {
+        JsonArray in = doc["schedules"].as<JsonArray>();
+        int index = 0;
+
+        for (JsonObject sch : in)
+        {
+            if (index >= MAX_SCHEDULES)
+                break;
+
+            schedules[index].enabled = sch["enabled"] | true;
+            schedules[index].startHour = sch["startHour"] | 0;
+            schedules[index].startMinute = sch["startMinute"] | 0;
+            schedules[index].endHour = sch["endHour"] | 0;
+            schedules[index].endMinute = sch["endMinute"] | 0;
+
+            JsonArray days = sch["daysOfWeek"].as<JsonArray>();
+            for (int d = 0; d < 7; d++)
+            {
+                schedules[index].daysOfWeek[d] = (d < days.size()) ? (bool)days[d] : false;
+            }
+
+            const char *name = sch["name"] | "Schedule";
+            strncpy(schedules[index].name, name, sizeof(schedules[index].name) - 1);
+            schedules[index].name[sizeof(schedules[index].name) - 1] = '\0';
+
+            index++;
+        }
+
+        scheduleCount = index;
+        saveSchedules();
+    }
+    else
+    {
+        applyPowerCommand(command);
+    }
+
+    publishStatus();
 }
 
 // ===============================================================
@@ -377,94 +552,6 @@ void insertEnergyHistory()
 }
 
 // ===============================================================
-// COMMAND POLLING
-// ===============================================================
-void pollEnergyCommands()
-{
-    String sql =
-        "SELECT id, command FROM energy_commands "
-        "WHERE device_id = '" +
-        deviceId + "' AND executed = false "
-                   "ORDER BY created_at ASC LIMIT 1";
-
-    if (WiFi.status() != WL_CONNECTED)
-        return;
-
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
-
-    HTTPClient http;
-    http.begin(secureClient, supabase_url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", supabase_service_key);
-    http.addHeader("Authorization", String("Bearer ") + supabase_service_key);
-    http.setTimeout(5000);
-
-    StaticJsonDocument<256> reqDoc;
-    reqDoc["query"] = sql;
-
-    String body;
-    serializeJson(reqDoc, body);
-
-    int httpCode = http.POST(body);
-    if (httpCode != 200)
-    {
-        http.end();
-        return;
-    }
-
-    String resp = http.getString();
-    http.end();
-
-    StaticJsonDocument<512> respDoc;
-    if (deserializeJson(respDoc, resp) != DeserializationError::Ok)
-        return;
-
-    JsonArray rows = respDoc.is<JsonArray>() ? respDoc.as<JsonArray>() : respDoc.containsKey("rows") ? respDoc["rows"].as<JsonArray>()
-                                                                                                     : JsonArray();
-
-    if (!rows || rows.size() == 0)
-        return;
-
-    int cmdId = rows[0]["id"].as<int>();
-    String command = rows[0]["command"].as<const char *>();
-
-    if (command == "power_on")
-    {
-        manualMode = true;
-        relayManualState = true;
-        digitalWrite(RELAY_PIN, HIGH);
-        savePowerState();
-    }
-    else if (command == "power_off")
-    {
-        manualMode = true;
-        relayManualState = false;
-        digitalWrite(RELAY_PIN, LOW);
-        savePowerState();
-    }
-    else if (command == "auto_mode")
-    {
-        manualMode = false;
-        scheduleMode = false;
-        savePowerState();
-    }
-    else if (command == "schedule_mode")
-    {
-        manualMode = false;
-        scheduleMode = true;
-        savePowerState();
-    }
-    else if (command == "reset_energy")
-    {
-        energyWh = 0;
-    }
-
-    String markSql = "UPDATE energy_commands SET executed = true WHERE id = " + String(cmdId);
-    executeSupabaseQuery(markSql);
-}
-
-// ===============================================================
 // SENSOR READ FUNCTIONS
 // ===============================================================
 float readNewVoltageModule()
@@ -529,6 +616,12 @@ void loop()
         }
     }
 
+    if (!mqttClient.connected())
+    {
+        connectMQTT();
+    }
+    mqttClient.loop();
+
     float deltaT = (now - lastSample) / 1000.0;
     lastSample = now;
 
@@ -571,10 +664,10 @@ void loop()
         insertEnergyHistory();
     }
 
-    if (now - lastCommandPoll >= COMMAND_POLL_INTERVAL)
+    if (now - lastStatusPublish >= MQTT_STATUS_INTERVAL)
     {
-        lastCommandPoll = now;
-        pollEnergyCommands();
+        lastStatusPublish = now;
+        publishStatus();
     }
 
     if (now - lastDisplay >= 1000)
