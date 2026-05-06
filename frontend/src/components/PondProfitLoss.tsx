@@ -610,7 +610,7 @@ const PondProfitLoss: React.FC = () => {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <h3 className="font-bold text-gray-800 mb-4">Revenue vs Expenses per Pond</h3>
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={pondChartData} margin={{ left: 10 }}>
+                <PieChart data={pondChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
@@ -619,7 +619,7 @@ const PondProfitLoss: React.FC = () => {
                   <Bar dataKey="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Net Profit" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                </BarChart>
+                </PieChart>
               </ResponsiveContainer>
             </div>
           )}
