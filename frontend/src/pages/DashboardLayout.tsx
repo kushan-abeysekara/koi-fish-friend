@@ -167,7 +167,7 @@ const Dashboard: React.FC = () => {
               {/* Hamburger Menu for Mobile */}
               <button
                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                className="lg:hidden text-gray-600 hover:text-gray-900 focus:outline-none"
+                className="lg:hiddenredtext-gray-600 hover:text-gray-900 focus:outline-none"
               >
                 <i className="fas fa-bars text-2xl"></i>
               </button>

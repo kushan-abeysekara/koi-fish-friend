@@ -780,7 +780,7 @@ const TreatmentDosingLog: React.FC = () => {
                         e.stopPropagation();
                         handleDeleteLog(log.id);
                       }}
-                      className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm font-medium"
+                      className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm font-medium"
                     >
                       <i className="fas fa-trash mr-1"></i>Delete
                     </button>
