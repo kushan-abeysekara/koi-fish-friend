@@ -15,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.cert.X509Certificate;
+import java.time.LocalDate;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -642,6 +643,8 @@ public class SupabaseService {
 
         executor.submit(() -> {
             try {
+                String relayState = getTextOrDefault(mqttPayload, "relayState", "");
+                boolean relayOff = "OFF".equalsIgnoreCase(relayState);
                 double voltage = getDoubleOrDefault(mqttPayload, "voltage", 0);
                 double current = getDoubleOrDefault(mqttPayload, "current", 0);
                 double power = getDoubleOrDefault(mqttPayload, "power", 0);
@@ -649,6 +652,13 @@ public class SupabaseService {
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
                 int rssi = getIntOrDefault(mqttPayload, "rssi", 0);
                 String ipAddress = getTextOrDefault(mqttPayload, "ipAddress", "");
+
+                // If relay is OFF, force electrical load metrics to zero.
+                if (relayOff) {
+                    current = 0;
+                    power = 0;
+                    status = "off";
+                }
 
                 String sql = "INSERT INTO energydb (device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) "
                         +
@@ -685,11 +695,20 @@ public class SupabaseService {
 
         executor.submit(() -> {
             try {
+                String relayState = getTextOrDefault(mqttPayload, "relayState", "");
+                boolean relayOff = "OFF".equalsIgnoreCase(relayState);
                 double voltage = getDoubleOrDefault(mqttPayload, "voltage", 0);
                 double current = getDoubleOrDefault(mqttPayload, "current", 0);
                 double power = getDoubleOrDefault(mqttPayload, "power", 0);
                 double energyWh = getDoubleOrDefault(mqttPayload, "energyWh", 0);
                 String status = getTextOrDefault(mqttPayload, "status", "normal");
+
+                // Keep history consistent with relay state in OFF periods.
+                if (relayOff) {
+                    current = 0;
+                    power = 0;
+                    status = "off";
+                }
 
                 String sql = "INSERT INTO energy_history (device_id, voltage, current, power, energy_wh, status, recorded_at) "
                         +
@@ -700,6 +719,43 @@ public class SupabaseService {
                 System.out.println("[Supabase] ⚡ energy_history saved (1/min): " + deviceId);
             } catch (Exception e) {
                 System.err.println("[Supabase] ❌ Error storing energy_history: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Force live energy state to OFF in Supabase when relay is opened.
+     *
+     * This keeps frontend current/power displays at 0 immediately after power-off
+     * commands or OFF status updates, even before the next telemetry frame arrives.
+     */
+    public void forceEnergyRelayOff(String deviceId, Double energyWh, Integer rssi, String ipAddress) {
+        if (!enabled || httpClient == null)
+            return;
+
+        executor.submit(() -> {
+            try {
+                double safeEnergyWh = energyWh != null ? energyWh : 0;
+                int safeRssi = rssi != null ? rssi : 0;
+                String safeIp = ipAddress != null ? ipAddress : "";
+
+                String upsertLiveSql = "INSERT INTO energydb (device_id, voltage, current, power, energy_wh, status, rssi, ip_address, updated_at) "
+                        +
+                        "VALUES ('" + esc(deviceId) + "', 0, 0, 0, " + safeEnergyWh + ", 'off', " + safeRssi + ", '"
+                        + esc(safeIp) + "', NOW()) " +
+                        "ON CONFLICT (device_id) DO UPDATE SET " +
+                        "current = 0, power = 0, status = 'off', rssi = EXCLUDED.rssi, ip_address = EXCLUDED.ip_address, updated_at = NOW()";
+                executePgQuery(upsertLiveSql);
+
+                // Insert an explicit OFF marker for historical charts/trends.
+                String insertHistorySql = "INSERT INTO energy_history (device_id, voltage, current, power, energy_wh, status, recorded_at) "
+                        +
+                        "VALUES ('" + esc(deviceId) + "', 0, 0, 0, " + safeEnergyWh + ", 'off', NOW())";
+                executePgQuery(insertHistorySql);
+
+                System.out.println("[Supabase] ⚡ Forced OFF energy state for " + deviceId);
+            } catch (Exception e) {
+                System.err.println("[Supabase] ❌ Error forcing OFF energy state: " + e.getMessage());
             }
         });
     }
@@ -731,6 +787,37 @@ public class SupabaseService {
                 "WHERE recorded_at >= NOW() - INTERVAL '" + hoursBack + " hours' " +
                 "ORDER BY recorded_at DESC LIMIT " + limit;
         return executePgQuery(sql);
+    }
+
+    /**
+     * Returns total daily kWh from energy_history by summing per-device
+     * (max energy_wh - min energy_wh) for the selected date.
+     */
+    public double getDailyEnergyKwh(LocalDate date) {
+        if (date == null)
+            return 0;
+
+        LocalDate nextDate = date.plusDays(1);
+        String sql = "SELECT COALESCE(SUM(device_kwh), 0) AS total_kwh FROM (" +
+                "SELECT GREATEST(MAX(energy_wh) - MIN(energy_wh), 0) / 1000.0 AS device_kwh " +
+                "FROM energy_history " +
+                "WHERE recorded_at >= '" + esc(date.toString()) + "'::date " +
+                "AND recorded_at < '" + esc(nextDate.toString()) + "'::date " +
+                "GROUP BY device_id" +
+                ") t";
+
+        List<Map<String, Object>> rows = queryRows(sql);
+        if (rows.isEmpty())
+            return 0;
+
+        Object total = rows.get(0).get("total_kwh");
+        if (total instanceof Number)
+            return ((Number) total).doubleValue();
+        try {
+            return total != null ? Double.parseDouble(total.toString()) : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
     }
 
     /**

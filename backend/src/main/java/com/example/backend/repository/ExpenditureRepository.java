@@ -33,4 +33,7 @@ public interface ExpenditureRepository extends JpaRepository<Expenditure, Long> 
 
     @Query("SELECT SUM(e.amount) FROM Expenditure e")
     BigDecimal sumTotalAmount();
+
+    boolean existsByDateAndCategoryAndSubcategoryAndPondId(LocalDate date, String category, String subcategory,
+            Long pondId);
 }

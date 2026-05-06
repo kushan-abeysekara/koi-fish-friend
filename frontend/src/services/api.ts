@@ -739,6 +739,19 @@ export const sensorDataApi = {
   },
 };
 
+// ==================== Energy Configuration ====================
+export const energyConfigApi = {
+  getRate: async (): Promise<ApiResponse<{ rate: number }>> => {
+    const response = await api.get<ApiResponse<{ rate: number }>>('/energy/rate');
+    return response.data;
+  },
+
+  setRate: async (rate: number): Promise<ApiResponse<{ rate: number }>> => {
+    const response = await api.put<ApiResponse<{ rate: number }>>('/energy/rate', { rate });
+    return response.data;
+  },
+};
+
 // ==================== Supabase-backed Water Quality API ====================
 // Proxied through the backend to avoid mixed-content issues on HTTPS
 export interface SupabaseSensorLiveRow {

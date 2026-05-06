@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { sensorDataApi } from '../services/api';
+import { energyConfigApi, sensorDataApi } from '../services/api';
 import type { SensorData } from '../services/api';
 // Live data now polled directly from Supabase energydb (same pattern as WaterQualityDashboard).
 import { supabasePgQuery } from '../services/supabase';
@@ -23,6 +23,8 @@ const statusStyle = (status: string) => {
   return 'bg-gray-100 text-gray-600';
 };
 
+const RATE_OPTIONS = [15, 20, 25, 30, 35, 40, 45, 50];
+
 // ── component ─────────────────────────────────────────────────────────────────
 export default function EnergyMonitor() {
   const [latestData, setLatestData] = useState<SensorData | null>(null);
@@ -33,6 +35,30 @@ export default function EnergyMonitor() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'realtime' | 'analysis'>('realtime');
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+
+  // Load persisted backend rate used by daily expenditure allocator
+  useEffect(() => {
+    const loadRate = async () => {
+      try {
+        const res = await energyConfigApi.getRate();
+        if (res.success && res.data && typeof res.data.rate === 'number') {
+          setElectricityRate(res.data.rate);
+        }
+      } catch (err) {
+        console.warn('[EnergyMonitor] Failed to load energy rate setting:', err);
+      }
+    };
+    loadRate();
+  }, []);
+
+  const handleRateChange = async (nextRate: number) => {
+    setElectricityRate(nextRate);
+    try {
+      await energyConfigApi.setRate(nextRate);
+    } catch (err) {
+      console.warn('[EnergyMonitor] Failed to persist energy rate setting:', err);
+    }
+  };
 
   // ── Supabase live poll: reads energydb table every 5 s ──────────────────
   // Matches the ESP32 UPSERT interval (SUPABASE_LIVE_INTERVAL = 5000 ms).
@@ -59,6 +85,7 @@ export default function EnergyMonitor() {
         );
         if (!active || rows.length === 0) return;
         const r = rows[0];
+        const isRelayOff = (r.status || '').toLowerCase() === 'off';
         const now = new Date();
         setLastUpdateTime(now);
         setLatestData({
@@ -66,8 +93,8 @@ export default function EnergyMonitor() {
           device: { deviceId: r.device_id } as SensorData['device'],
           pond: null,
           voltage:  r.voltage  ?? 0,
-          current:  r.current  ?? 0,
-          power:    r.power    ?? 0,
+          current:  isRelayOff ? 0 : (r.current ?? 0),
+          power:    isRelayOff ? 0 : (r.power ?? 0),
           energyWh: r.energy_wh ?? 0,
           status:   r.status   ?? 'normal',
           timestamp: r.updated_at ?? now.toISOString(),
@@ -102,12 +129,13 @@ export default function EnergyMonitor() {
       );
       if (rows.length > 0) {
         const mapped: SensorData[] = rows.map((r, i) => ({
+          // OFF relay rows are stored with status='off' and must render as 0 A / 0 W.
           id:        r.id ?? i,
           device:    { deviceId: r.device_id } as SensorData['device'],
           pond:      null,
           voltage:   r.voltage   ?? 0,
-          current:   r.current   ?? 0,
-          power:     r.power     ?? 0,
+          current:   (r.status || '').toLowerCase() === 'off' ? 0 : (r.current ?? 0),
+          power:     (r.status || '').toLowerCase() === 'off' ? 0 : (r.power ?? 0),
           energyWh:  r.energy_wh ?? 0,
           status:    r.status    ?? 'normal',
           timestamp: r.recorded_at ?? '',
@@ -256,14 +284,18 @@ export default function EnergyMonitor() {
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
                 Electricity Rate (LKR / kWh)
               </label>
-              <input
-                type="number"
+              <select
                 value={electricityRate}
-                onChange={(e) => setElectricityRate(parseFloat(e.target.value) || 0)}
+                onChange={(e) => handleRateChange(parseFloat(e.target.value) || 0)}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                min="0"
-                step="0.01"
-              />
+              >
+                {RATE_OPTIONS.map((rate) => (
+                  <option key={rate} value={rate}>{rate.toFixed(2)}</option>
+                ))}
+                {!RATE_OPTIONS.includes(electricityRate) && (
+                  <option value={electricityRate}>{electricityRate.toFixed(2)}</option>
+                )}
+              </select>
             </div>
             {/* Tabs live here in desktop toolbar */}
             <div className="ml-auto flex items-center gap-1 bg-gray-100 rounded-xl p-1">
@@ -421,7 +453,6 @@ export default function EnergyMonitor() {
                             <th className="text-right px-4 py-3 font-semibold">Voltage (V)</th>
                             <th className="text-right px-4 py-3 font-semibold">Current (A)</th>
                             <th className="text-right px-4 py-3 font-semibold">Power (W)</th>
-                            <th className="text-right px-4 py-3 font-semibold">Energy (kWh)</th>
                             <th className="text-center px-4 py-3 font-semibold">Status</th>
                           </tr>
                         </thead>
@@ -438,7 +469,6 @@ export default function EnergyMonitor() {
                               <td className="text-right px-4 py-3 font-medium text-blue-600">{data.voltage.toFixed(1)}</td>
                               <td className="text-right px-4 py-3 font-medium text-emerald-600">{data.current.toFixed(2)}</td>
                               <td className="text-right px-4 py-3 font-medium text-violet-600">{data.power.toFixed(1)}</td>
-                              <td className="text-right px-4 py-3 font-medium text-orange-600">{(data.energyWh / 1000).toFixed(3)}</td>
                               <td className="text-center px-4 py-3">
                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${statusStyle(data.status)}`}>
                                   {data.status}

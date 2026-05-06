@@ -5,6 +5,7 @@ import com.example.backend.entity.SensorDevice;
 import com.example.backend.repository.SensorDeviceRepository;
 import com.example.backend.repository.PondRepository;
 import com.example.backend.service.MqttService;
+import com.example.backend.service.SupabaseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +28,9 @@ public class SensorDeviceController {
 
     @Autowired
     private MqttService mqttService;
+
+    @Autowired
+    private SupabaseService supabaseService;
 
     @GetMapping
     public ResponseEntity<ApiResponse> getAllDevices() {
@@ -194,6 +198,9 @@ public class SensorDeviceController {
             }
 
             mqttService.sendCommand(deviceId, "power_on", null);
+            device.setRelayState("ON");
+            device.setControlMode("manual");
+            deviceRepository.save(device);
             System.out.println("⚡ Power ON command sent to device: " + deviceId);
 
             return ResponseEntity.ok(new ApiResponse(true, "Power ON command sent successfully", null));
@@ -219,6 +226,13 @@ public class SensorDeviceController {
             }
 
             mqttService.sendCommand(deviceId, "power_off", null);
+            device.setRelayState("OFF");
+            device.setControlMode("manual");
+            deviceRepository.save(device);
+            // Optimistically mirror OFF state in Supabase so live dashboards show 0 A/W
+            // immediately while waiting for the next MQTT telemetry/status frame.
+            supabaseService.forceEnergyRelayOff(deviceId, device.getEnergyWh(), device.getRssi(),
+                    device.getIpAddress());
             System.out.println("⚡ Power OFF command sent to device: " + deviceId);
 
             return ResponseEntity.ok(new ApiResponse(true, "Power OFF command sent successfully", null));

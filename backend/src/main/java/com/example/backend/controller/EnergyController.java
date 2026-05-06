@@ -1,9 +1,14 @@
 package com.example.backend.controller;
 
+import com.example.backend.dto.ApiResponse;
+import com.example.backend.service.EnergyRateService;
 import com.example.backend.service.SupabaseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.math.BigDecimal;
+import java.util.Map;
 
 /**
  * Proxies energy and water-quality data from Supabase through the
@@ -19,6 +24,9 @@ public class EnergyController {
 
     @Autowired
     private SupabaseService supabaseService;
+
+    @Autowired
+    private EnergyRateService energyRateService;
 
     /**
      * GET /api/energy/live
@@ -93,6 +101,38 @@ public class EnergyController {
         } catch (Exception e) {
             return ResponseEntity.status(503)
                     .body("{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * GET /api/energy/rate
+     * Returns the current configurable energy rate used by the daily allocator.
+     */
+    @GetMapping("/rate")
+    public ResponseEntity<ApiResponse> getEnergyRate() {
+        BigDecimal rate = energyRateService.getCurrentRate();
+        return ResponseEntity.ok(new ApiResponse(true, "Energy rate retrieved", Map.of("rate", rate)));
+    }
+
+    /**
+     * PUT /api/energy/rate
+     * Updates the daily energy rate used by cost calculations and daily allocation.
+     */
+    @PutMapping("/rate")
+    public ResponseEntity<ApiResponse> updateEnergyRate(@RequestBody Map<String, Object> body) {
+        try {
+            Object raw = body.get("rate");
+            if (raw == null) {
+                return ResponseEntity.badRequest().body(new ApiResponse(false, "Missing 'rate' value", null));
+            }
+            BigDecimal rate = new BigDecimal(String.valueOf(raw));
+            BigDecimal saved = energyRateService.setCurrentRate(rate);
+            return ResponseEntity.ok(new ApiResponse(true, "Energy rate updated", Map.of("rate", saved)));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(new ApiResponse(false, e.getMessage(), null));
+        } catch (Exception e) {
+            return ResponseEntity.status(500)
+                    .body(new ApiResponse(false, "Failed to update energy rate: " + e.getMessage(), null));
         }
     }
 }

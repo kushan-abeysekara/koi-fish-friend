@@ -14,6 +14,9 @@ interface DeviceState extends SensorDevice {
   relayState?: 'ON' | 'OFF';
   controlMode?: 'manual' | 'schedule' | 'auto';
   scheduleCount?: number;
+  voltage?: number;
+  current?: number;
+  power?: number;
 }
 
 export default function PowerManagement() {
@@ -90,6 +93,10 @@ export default function PowerManagement() {
           if (data.status !== undefined) {
             setDevice(prev => {
               const holdOptimistic = Date.now() - commandSentAt.current < 10000;
+              const effectiveRelayState = holdOptimistic
+                ? (prev?.relayState ?? data.relayState)
+                : (data.relayState ?? prev?.relayState);
+              const relayIsOff = effectiveRelayState === 'OFF';
               return {
                 ...(prev ?? {} as DeviceState),
                 deviceId: data.deviceId,
@@ -102,13 +109,28 @@ export default function PowerManagement() {
                 pond: prev?.pond ?? null,
                 id: prev?.id ?? 0,
                 createdAt: prev?.createdAt ?? '',
-                relayState: holdOptimistic
-                  ? (prev?.relayState ?? data.relayState)
-                  : (data.relayState ?? prev?.relayState),
+                relayState: effectiveRelayState,
                 controlMode: holdOptimistic
                   ? (prev?.controlMode ?? data.controlMode)
                   : (data.controlMode ?? prev?.controlMode),
                 scheduleCount: data.scheduleCount ?? prev?.scheduleCount,
+                voltage: data.voltage ?? prev?.voltage,
+                current: relayIsOff ? 0 : (data.current ?? prev?.current),
+                power: relayIsOff ? 0 : (data.power ?? prev?.power),
+              };
+            });
+          }
+
+          // Data message — has live voltage/current/power values
+          if (data.voltage !== undefined || data.current !== undefined || data.power !== undefined) {
+            setDevice(prev => {
+              if (!prev) return prev;
+              const relayIsOff = prev.relayState === 'OFF';
+              return {
+                ...prev,
+                voltage: data.voltage ?? prev.voltage,
+                current: relayIsOff ? 0 : (data.current ?? prev.current),
+                power: relayIsOff ? 0 : (data.power ?? prev.power),
               };
             });
           }

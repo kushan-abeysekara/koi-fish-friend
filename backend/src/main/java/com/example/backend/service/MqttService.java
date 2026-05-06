@@ -7,7 +7,9 @@ import com.example.backend.repository.SensorDeviceRepository;
 import com.example.backend.repository.FeedingHistoryRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.integration.annotation.ServiceActivator;
 import org.springframework.integration.mqtt.support.MqttHeaders;
 import org.springframework.messaging.Message;
@@ -41,6 +43,15 @@ public class MqttService {
     @Autowired
     private FeedingHistoryRepository feedingHistoryRepository;
 
+    // Calibration factors for BM energy telemetry.
+    // Default values correct a common sensor over-scaling issue observed in the
+    // field.
+    @Value("${energy.telemetry.current-scale:0.035}")
+    private double currentScale;
+
+    @Value("${energy.telemetry.power-scale:0.035}")
+    private double powerScale;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private boolean connected = true; // Assume connected (Spring Integration handles connection)
 
@@ -53,9 +64,14 @@ public class MqttService {
     private volatile long lastBoatTimestamp = 0;
 
     /** Returns the last received boat sensor JSON payload (or null). */
-    public String getLastBoatPayload() { return lastBoatPayload; }
+    public String getLastBoatPayload() {
+        return lastBoatPayload;
+    }
+
     /** Returns epoch-ms of last boat message. */
-    public long getLastBoatTimestamp() { return lastBoatTimestamp; }
+    public long getLastBoatTimestamp() {
+        return lastBoatTimestamp;
+    }
 
     @ServiceActivator(inputChannel = "mqttInputChannel")
     public void handleMessage(Message<?> message) {
@@ -83,15 +99,15 @@ public class MqttService {
             if (topic.startsWith("koifish/boat/")) {
                 String boatDeviceId = jsonNode.has("deviceId") ? jsonNode.get("deviceId").asText() : "BOAT_ESP32_001";
                 boolean isSensorData = topic.endsWith("/sensor");
-                
+
                 if (isSensorData) {
                     // Only cache SENSOR data (not heartbeats) for REST polling
                     lastBoatPayload = payload;
                     lastBoatTimestamp = System.currentTimeMillis();
                     supabaseService.storeBoatTelemetry(boatDeviceId, jsonNode);
-                    System.out.println("🚤 Boat SENSOR data stored for " + boatDeviceId + 
-                        " | angleX=" + jsonNode.path("angleX").asDouble() + 
-                        " voltage=" + jsonNode.path("voltage").asDouble());
+                    System.out.println("🚤 Boat SENSOR data stored for " + boatDeviceId +
+                            " | angleX=" + jsonNode.path("angleX").asDouble() +
+                            " voltage=" + jsonNode.path("voltage").asDouble());
                 } else {
                     System.out.println("🚤 Boat STATUS/heartbeat from " + boatDeviceId);
                 }
@@ -200,6 +216,15 @@ public class MqttService {
         // Handle power management fields (for BUDGET_MANAGEMENT devices)
         if (json.has("relayState")) {
             device.setRelayState(json.get("relayState").asText());
+
+            // Keep Supabase energy row consistent with relay OFF state so frontend
+            // immediately shows I=0 and P=0 when bulbs/equipment are switched off.
+            if (deviceId.startsWith("BM_") && "OFF".equalsIgnoreCase(device.getRelayState())) {
+                Integer rssi = json.has("rssi") ? json.get("rssi").asInt() : null;
+                String ipAddress = json.has("ipAddress") ? json.get("ipAddress").asText() : null;
+                Double energyWh = json.has("energyWh") ? json.get("energyWh").asDouble() : device.getEnergyWh();
+                supabaseService.forceEnergyRelayOff(deviceId, energyWh, rssi, ipAddress);
+            }
         }
         if (json.has("controlMode")) {
             device.setControlMode(json.get("controlMode").asText());
@@ -427,17 +452,51 @@ public class MqttService {
 
         } else if (json.has("voltage") && json.has("current") && json.has("power")) {
             // Store voltage/current data for budget management devices
-            data.setVoltage(json.get("voltage").asDouble());
-            data.setCurrent(json.get("current").asDouble());
-            data.setPower(json.get("power").asDouble());
-            data.setEnergyWh(json.get("energyWh").asDouble());
-            data.setStatus(json.has("status") ? json.get("status").asText() : "normal");
+            // and enforce OFF relay safety (0 A / 0 W) even if the telemetry payload
+            // does not explicitly include relayState.
+            double voltage = json.get("voltage").asDouble();
+            double current = json.get("current").asDouble();
+            double power = json.get("power").asDouble();
+            double energyWh = json.has("energyWh") ? json.get("energyWh").asDouble() : 0;
+            String status = json.has("status") ? json.get("status").asText() : "normal";
+
+            boolean relayOff = "OFF".equalsIgnoreCase(device.getRelayState())
+                    || (json.has("relayState") && "OFF".equalsIgnoreCase(json.get("relayState").asText()))
+                    || "off".equalsIgnoreCase(status);
+
+            if (relayOff) {
+                current = 0;
+                power = 0;
+                status = "off";
+            } else {
+                // Apply telemetry calibration (e.g., two 70W bulbs should be ~140W,
+                // not several kW). Clamp to avoid negative noise artifacts.
+                current = Math.max(0, current * currentScale);
+                power = Math.max(0, power * powerScale);
+            }
+
+            data.setVoltage(voltage);
+            data.setCurrent(current);
+            data.setPower(power);
+            data.setEnergyWh(energyWh);
+            data.setStatus(status);
+
+            ObjectNode supabasePayload = (json instanceof ObjectNode)
+                    ? ((ObjectNode) json).deepCopy()
+                    : objectMapper.createObjectNode();
+            supabasePayload.put("voltage", voltage);
+            supabasePayload.put("current", current);
+            supabasePayload.put("power", power);
+            supabasePayload.put("energyWh", energyWh);
+            supabasePayload.put("status", status);
+            supabasePayload.put("relayState",
+                    relayOff ? "OFF" : (device.getRelayState() != null ? device.getRelayState() : ""));
 
             // Energy data: skip MySQL, save only to Supabase
             // Supabase: UPSERT live status on every message (Realtime → frontend ~100ms)
-            supabaseService.storeEnergyLive(deviceId, json);
+            supabaseService.storeEnergyLive(deviceId, supabasePayload);
             // Supabase: INSERT history once per minute (for charts)
-            supabaseService.storeEnergyHistory(deviceId, json);
+            supabaseService.storeEnergyHistory(deviceId, supabasePayload);
             System.out.println("⚡ Energy received → Supabase: " + deviceId +
                     " V:" + data.getVoltage() + " I:" + data.getCurrent() +
                     " P:" + data.getPower() + "W E:" + data.getEnergyWh() + "Wh");

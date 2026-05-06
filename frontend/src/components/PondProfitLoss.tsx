@@ -7,6 +7,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
@@ -242,6 +244,172 @@ const PondProfitLoss: React.FC = () => {
   }, {});
   const revPieData = Object.entries(revSources).map(([name, value]) => ({ name, value }));
 
+  const downloadPondReport = (summary: PondSummary) => {
+    const pondRevenues = revenues
+      .filter(r => r.pond?.id === summary.pond.id && r.date >= startDate && r.date <= endDate)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const pondExpenses = expenditures
+      .filter(e => e.pond?.id === summary.pond.id && e.date >= startDate && e.date <= endDate)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const reportRevenue = summary.report ? Number(summary.report.totalRevenue) : pondRevenues.reduce((sum, item) => sum + Number(item.amount), 0);
+    const reportExpenses = summary.report ? Number(summary.report.totalExpenses) : pondExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
+    const reportNetProfit = summary.report ? Number(summary.report.netProfit) : reportRevenue - reportExpenses;
+    const reportRoi = summary.report
+      ? Number(summary.report.roi)
+      : (reportExpenses > 0 ? (reportNetProfit / reportExpenses) * 100 : 0);
+    const reportMargin = summary.report
+      ? Number(summary.report.profitMargin)
+      : (reportRevenue > 0 ? (reportNetProfit / reportRevenue) * 100 : 0);
+
+    const revenueBySource = pondRevenues.reduce<Record<string, number>>((acc, item) => {
+      const source = item.source || 'Other';
+      acc[source] = (acc[source] ?? 0) + Number(item.amount);
+      return acc;
+    }, {});
+
+    const expenseByCategory = pondExpenses.reduce<Record<string, number>>((acc, item) => {
+      const category = item.category || 'Uncategorized';
+      acc[category] = (acc[category] ?? 0) + Number(item.amount);
+      return acc;
+    }, {});
+
+    const fishSales = pondRevenues.filter(r => r.source === 'Fish Sales');
+    const totalFishSold = fishSales.reduce((sum, item) => sum + (item.quantitySold ?? 0), 0);
+    const fishSaleRevenue = fishSales.reduce((sum, item) => sum + Number(item.amount), 0);
+    const breakEvenProgress = reportExpenses > 0 ? Math.min(100, (reportRevenue / reportExpenses) * 100) : 0;
+
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const title = 'Pond Financial Detail Report';
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text(title, 40, 42);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(`Pond: ${summary.pond.name}   Status: ${summary.pond.status || 'ACTIVE'}`, 40, 62);
+    doc.text(`Period: ${startDate} to ${endDate}`, 40, 78);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 94);
+
+    const summaryRows: Array<[string, string]> = [
+      ['Total Revenue', fmt(reportRevenue)],
+      ['Total Expenses', fmt(reportExpenses)],
+      ['Net Profit', fmt(reportNetProfit)],
+      ['ROI', `${pct(reportRoi)}%`],
+      ['Profit Margin', `${pct(reportMargin)}%`],
+      ['Break-even Progress', `${pct(breakEvenProgress)}%`],
+      ['Fish Count', summary.totalFish.toLocaleString()],
+      ['Cost per Fish', summary.totalFish > 0 ? fmt(summary.costPerFish) : 'N/A'],
+      ['Fish Sales', `${fishSales.length.toLocaleString()} records (${fmt(fishSaleRevenue)})`],
+    ];
+
+    autoTable(doc, {
+      startY: 112,
+      head: [['Metric', 'Value']],
+      body: summaryRows,
+      theme: 'striped',
+      headStyles: { fillColor: [16, 185, 129] },
+      styles: { fontSize: 10, cellPadding: 6 },
+      columnStyles: {
+        0: { cellWidth: pageWidth * 0.35 },
+        1: { cellWidth: pageWidth * 0.45 },
+      },
+    });
+
+    const tableState = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    let nextY = (tableState?.finalY ?? 112) + 16;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('Revenue by Source', 40, nextY);
+    autoTable(doc, {
+      startY: nextY + 6,
+      head: [['Source', 'Amount']],
+      body: Object.entries(revenueBySource).length > 0
+        ? Object.entries(revenueBySource).map(([source, amount]) => [source, fmt(amount)])
+        : [['No revenue records in selected period', '-']],
+      theme: 'grid',
+      styles: { fontSize: 10, cellPadding: 5 },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+
+    nextY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? nextY) + 16;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('Expenses by Category', 40, nextY);
+    autoTable(doc, {
+      startY: nextY + 6,
+      head: [['Category', 'Amount']],
+      body: Object.entries(expenseByCategory).length > 0
+        ? Object.entries(expenseByCategory).map(([category, amount]) => [category, fmt(amount)])
+        : [['No expense records in selected period', '-']],
+      theme: 'grid',
+      styles: { fontSize: 10, cellPadding: 5 },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+
+    nextY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? nextY) + 16;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('Revenue Transactions', 40, nextY);
+    autoTable(doc, {
+      startY: nextY + 6,
+      head: [['Date', 'Source', 'Customer', 'Amount']],
+      body: pondRevenues.length > 0
+        ? pondRevenues.map(item => [
+            new Date(item.date).toLocaleDateString(),
+            item.source || 'Other',
+            item.customerName || '-',
+            fmt(Number(item.amount)),
+          ])
+        : [['No revenue transactions in selected period', '-', '-', '-']],
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: { 3: { halign: 'right' } },
+    });
+
+    nextY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? nextY) + 16;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('Expense Transactions', 40, nextY);
+    autoTable(doc, {
+      startY: nextY + 6,
+      head: [['Date', 'Category', 'Subcategory', 'Description', 'Amount']],
+      body: pondExpenses.length > 0
+        ? pondExpenses.map(item => [
+            new Date(item.date).toLocaleDateString(),
+            item.category || 'Uncategorized',
+            item.subcategory || '-',
+            item.description || '-',
+            fmt(Number(item.amount)),
+          ])
+        : [['No expense transactions in selected period', '-', '-', '-', '-']],
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: {
+        3: { cellWidth: 170 },
+        4: { halign: 'right' },
+      },
+    });
+
+    nextY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? nextY) + 16;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('Fish Sales Summary', 40, nextY);
+    autoTable(doc, {
+      startY: nextY + 6,
+      head: [['Total Fish Sold', 'Total Fish Sale Revenue']],
+      body: [[totalFishSold.toLocaleString(), fmt(fishSaleRevenue)]],
+      theme: 'grid',
+      styles: { fontSize: 10, cellPadding: 5 },
+    });
+
+    doc.save(`${summary.pond.name.replace(/\s+/g, '-').toLowerCase()}-financial-report-${startDate}-to-${endDate}.pdf`);
+  };
+
   // ── render ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -376,6 +544,13 @@ const PondProfitLoss: React.FC = () => {
                           {net >= 0 ? '✅ Profit' : '❌ Loss'}
                         </span>
                       </div>
+                      <button
+                        onClick={() => downloadPondReport(s)}
+                        className="mb-4 w-full px-3 py-2 text-sm font-semibold rounded-lg bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100 transition"
+                      >
+                        <i className="fas fa-download mr-2"></i>
+                        Download PDF Report
+                      </button>
                       <div className="grid grid-cols-2 gap-3 mb-4">
                         <div>
                           <p className="text-xs text-gray-400">Revenue</p>

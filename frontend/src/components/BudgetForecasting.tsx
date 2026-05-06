@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { expenditureApi, revenueApi, pondApi, type Pond } from '../services/api';
 
 interface ForecastData {
@@ -30,6 +30,12 @@ interface SeasonalPattern {
   trend: 'increasing' | 'decreasing' | 'stable';
 }
 
+const lkrFormatter = new Intl.NumberFormat('en-LK', {
+  style: 'currency',
+  currency: 'LKR',
+  maximumFractionDigits: 0,
+});
+
 const BudgetForecasting: React.FC = () => {
   const [forecastType, setForecastType] = useState<'revenue' | 'expenditure' | 'netProfit'>('revenue');
   const [selectedPond, setSelectedPond] = useState<number | 'all'>('all');
@@ -41,19 +47,9 @@ const BudgetForecasting: React.FC = () => {
   const [forecastMetrics, setForecastMetrics] = useState<ForecastMetrics | null>(null);
   const [seasonalPatterns, setSeasonalPatterns] = useState<SeasonalPattern[]>([]);
   const [trendAnalysis, setTrendAnalysis] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<'arima' | 'moving_average' | 'exponential' | 'linear'>('arima');
   const [confidenceLevel, setConfidenceLevel] = useState<80 | 90 | 95>(90);
 
-  useEffect(() => {
-    loadPonds();
-    loadHistoricalData();
-  }, []);
-
-  useEffect(() => {
-    loadHistoricalData();
-  }, [forecastType, selectedPond]);
-
-  const loadPonds = async () => {
+  const loadPonds = useCallback(async () => {
     try {
       const response = await pondApi.getAll();
       if (response.success && response.data) {
@@ -62,9 +58,9 @@ const BudgetForecasting: React.FC = () => {
     } catch (error) {
       console.error('Error loading ponds:', error);
     }
-  };
+  }, []);
 
-  const loadHistoricalData = async () => {
+  const loadHistoricalData = useCallback(async () => {
     try {
       setIsLoading(true);
       let data: HistoricalDataPoint[] = [];
@@ -106,12 +102,26 @@ const BudgetForecasting: React.FC = () => {
       }
 
       setHistoricalData(data.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
+
+      // Reset generated outputs whenever source history changes.
+      setForecastData([]);
+      setForecastMetrics(null);
+      setSeasonalPatterns([]);
+      setTrendAnalysis('');
     } catch (error) {
       console.error('Error loading historical data:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [forecastType, selectedPond]);
+
+  useEffect(() => {
+    loadPonds();
+  }, [loadPonds]);
+
+  useEffect(() => {
+    loadHistoricalData();
+  }, [loadHistoricalData]);
 
   const aggregateByMonth = (data: HistoricalDataPoint[]): HistoricalDataPoint[] => {
     const monthlyData: Record<string, number> = {};
@@ -153,25 +163,10 @@ const BudgetForecasting: React.FC = () => {
 
     setIsLoading(true);
     setTimeout(() => {
-      let forecast: ForecastData[] = [];
-
-      switch (selectedModel) {
-        case 'arima':
-          forecast = generateARIMAForecast();
-          break;
-        case 'moving_average':
-          forecast = generateMovingAverageForecast();
-          break;
-        case 'exponential':
-          forecast = generateExponentialSmoothingForecast();
-          break;
-        case 'linear':
-          forecast = generateLinearRegressionForecast();
-          break;
-      }
+      const forecast = generateARIMAForecast();
 
       setForecastData(forecast);
-      calculateMetrics(forecast);
+      calculateMetrics();
       analyzeSeasonalPatterns();
       generateTrendAnalysis();
       setIsLoading(false);
@@ -222,107 +217,6 @@ const BudgetForecasting: React.FC = () => {
     return forecast;
   };
 
-  const generateMovingAverageForecast = (): ForecastData[] => {
-    const values = historicalData.map(d => d.value);
-    const lastDate = new Date(historicalData[historicalData.length - 1].date);
-    const ma = calculateMovingAverage(values, 3);
-    const lastMA = ma[ma.length - 1];
-    const stdDev = calculateStdDev(values);
-    const confidenceMultiplier = confidenceLevel === 95 ? 1.96 : confidenceLevel === 90 ? 1.645 : 1.282;
-
-    const forecast: ForecastData[] = [];
-    for (let i = 1; i <= forecastPeriod; i++) {
-      const forecastDate = new Date(lastDate);
-      forecastDate.setMonth(forecastDate.getMonth() + i);
-      const errorMargin = stdDev * confidenceMultiplier;
-
-      forecast.push({
-        date: forecastDate.toISOString().split('T')[0],
-        forecast: lastMA,
-        lowerBound: Math.max(0, lastMA - errorMargin),
-        upperBound: lastMA + errorMargin,
-        confidence: confidenceLevel
-      });
-    }
-
-    return forecast;
-  };
-
-  const generateExponentialSmoothingForecast = (): ForecastData[] => {
-    const values = historicalData.map(d => d.value);
-    const lastDate = new Date(historicalData[historicalData.length - 1].date);
-    const alpha = 0.3; // Smoothing parameter
-    const beta = 0.1;  // Trend smoothing parameter
-    
-    let level = values[0];
-    let trend = 0;
-    
-    // Apply exponential smoothing
-    for (let i = 1; i < values.length; i++) {
-      const prevLevel = level;
-      level = alpha * values[i] + (1 - alpha) * (level + trend);
-      trend = beta * (level - prevLevel) + (1 - beta) * trend;
-    }
-
-    const stdDev = calculateStdDev(values);
-    const confidenceMultiplier = confidenceLevel === 95 ? 1.96 : confidenceLevel === 90 ? 1.645 : 1.282;
-
-    const forecast: ForecastData[] = [];
-    for (let i = 1; i <= forecastPeriod; i++) {
-      const forecastDate = new Date(lastDate);
-      forecastDate.setMonth(forecastDate.getMonth() + i);
-      const forecastValue = level + trend * i;
-      const errorMargin = stdDev * confidenceMultiplier * Math.sqrt(i);
-
-      forecast.push({
-        date: forecastDate.toISOString().split('T')[0],
-        forecast: Math.max(0, forecastValue),
-        lowerBound: Math.max(0, forecastValue - errorMargin),
-        upperBound: forecastValue + errorMargin,
-        confidence: confidenceLevel
-      });
-    }
-
-    return forecast;
-  };
-
-  const generateLinearRegressionForecast = (): ForecastData[] => {
-    const values = historicalData.map(d => d.value);
-    const lastDate = new Date(historicalData[historicalData.length - 1].date);
-    
-    // Calculate linear regression
-    const n = values.length;
-    const x = Array.from({ length: n }, (_, i) => i);
-    const sumX = x.reduce((a, b) => a + b, 0);
-    const sumY = values.reduce((a, b) => a + b, 0);
-    const sumXY = x.reduce((acc, xi, i) => acc + xi * values[i], 0);
-    const sumX2 = x.reduce((acc, xi) => acc + xi * xi, 0);
-    
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / n;
-
-    const stdDev = calculateStdDev(values);
-    const confidenceMultiplier = confidenceLevel === 95 ? 1.96 : confidenceLevel === 90 ? 1.645 : 1.282;
-
-    const forecast: ForecastData[] = [];
-    for (let i = 1; i <= forecastPeriod; i++) {
-      const forecastDate = new Date(lastDate);
-      forecastDate.setMonth(forecastDate.getMonth() + i);
-      const forecastValue = slope * (n + i - 1) + intercept;
-      const errorMargin = stdDev * confidenceMultiplier * Math.sqrt(i);
-
-      forecast.push({
-        date: forecastDate.toISOString().split('T')[0],
-        forecast: Math.max(0, forecastValue),
-        lowerBound: Math.max(0, forecastValue - errorMargin),
-        upperBound: forecastValue + errorMargin,
-        confidence: confidenceLevel
-      });
-    }
-
-    return forecast;
-  };
-
   const calculateTrend = (values: number[]): number => {
     const n = values.length;
     const x = Array.from({ length: n }, (_, i) => i);
@@ -363,13 +257,18 @@ const BudgetForecasting: React.FC = () => {
     return Math.sqrt(variance);
   };
 
-  const calculateMetrics = (_forecast: ForecastData[]) => {
+  const calculateMetrics = () => {
     if (historicalData.length < 12) {
       setForecastMetrics(null);
       return;
     }
 
     const testSize = Math.min(6, Math.floor(historicalData.length * 0.2));
+    if (testSize < 1) {
+      setForecastMetrics(null);
+      return;
+    }
+
     const trainData = historicalData.slice(0, -testSize);
     const testData = historicalData.slice(-testSize);
 
@@ -381,13 +280,19 @@ const BudgetForecasting: React.FC = () => {
 
     const trainMean = trainData.reduce((sum, d) => sum + d.value, 0) / trainData.length;
 
-    testData.forEach((actual, _i) => {
+    let nonZeroActualCount = 0;
+
+    testData.forEach((actual) => {
       const predicted = trainData[trainData.length - 1].value; // Simple prediction
       const error = actual.value - predicted;
       
       sumAbsError += Math.abs(error);
       sumSquaredError += error * error;
-      sumPercentError += Math.abs(error / actual.value) * 100;
+
+      if (actual.value !== 0) {
+        sumPercentError += Math.abs(error / actual.value) * 100;
+        nonZeroActualCount++;
+      }
       
       ssTotal += Math.pow(actual.value - trainMean, 2);
       ssResidual += Math.pow(error, 2);
@@ -396,8 +301,8 @@ const BudgetForecasting: React.FC = () => {
     setForecastMetrics({
       mae: sumAbsError / testSize,
       rmse: Math.sqrt(sumSquaredError / testSize),
-      mape: sumPercentError / testSize,
-      r2: 1 - (ssResidual / ssTotal)
+      mape: nonZeroActualCount > 0 ? sumPercentError / nonZeroActualCount : 0,
+      r2: ssTotal > 0 ? 1 - (ssResidual / ssTotal) : 0
     });
   };
 
@@ -451,7 +356,7 @@ const BudgetForecasting: React.FC = () => {
     const avgValue = values.reduce((a, b) => a + b, 0) / values.length;
     const recentAvg = values.slice(-3).reduce((a, b) => a + b, 0) / 3;
     const oldAvg = values.slice(0, 3).reduce((a, b) => a + b, 0) / 3;
-    const growthRate = ((recentAvg - oldAvg) / oldAvg) * 100;
+    const growthRate = oldAvg !== 0 ? ((recentAvg - oldAvg) / oldAvg) * 100 : 0;
 
     let analysis = '';
     if (trend > avgValue * 0.05) {
@@ -473,7 +378,7 @@ const BudgetForecasting: React.FC = () => {
   };
 
   const formatCurrency = (value: number): string => {
-    return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    return lkrFormatter.format(value);
   };
 
   const formatDate = (dateString: string): string => {
@@ -482,10 +387,17 @@ const BudgetForecasting: React.FC = () => {
   };
 
   const getChartHeight = (value: number, maxValue: number): number => {
+    if (maxValue <= 0) {
+      return 5;
+    }
     return Math.max(5, (value / maxValue) * 100);
   };
 
-  const maxHistoricalValue = Math.max(...historicalData.map(d => d.value), ...forecastData.map(d => d.upperBound));
+  const maxHistoricalValue = Math.max(
+    1,
+    ...historicalData.map(d => d.value),
+    ...forecastData.map(d => d.upperBound)
+  );
 
   return (
     <div className="space-y-6">
@@ -510,13 +422,13 @@ const BudgetForecasting: React.FC = () => {
           Forecast Configuration
         </h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Forecast Type */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Forecast Type</label>
             <select
               value={forecastType}
-              onChange={(e) => setForecastType(e.target.value as any)}
+              onChange={(e) => setForecastType(e.target.value as 'revenue' | 'expenditure' | 'netProfit')}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
             >
               <option value="revenue">💰 Revenue</option>
@@ -545,7 +457,7 @@ const BudgetForecasting: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 mb-2">Forecast Period</label>
             <select
               value={forecastPeriod}
-              onChange={(e) => setForecastPeriod(parseInt(e.target.value) as any)}
+              onChange={(e) => setForecastPeriod(parseInt(e.target.value, 10) as 3 | 6 | 12)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
             >
               <option value="3">3 Months</option>
@@ -554,27 +466,12 @@ const BudgetForecasting: React.FC = () => {
             </select>
           </div>
 
-          {/* Model Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Model</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value as any)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            >
-              <option value="arima">🔬 ARIMA</option>
-              <option value="moving_average">📊 Moving Average</option>
-              <option value="exponential">📈 Exponential Smoothing</option>
-              <option value="linear">📉 Linear Regression</option>
-            </select>
-          </div>
-
           {/* Confidence Level */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Confidence Level</label>
             <select
               value={confidenceLevel}
-              onChange={(e) => setConfidenceLevel(parseInt(e.target.value) as any)}
+              onChange={(e) => setConfidenceLevel(parseInt(e.target.value, 10) as 80 | 90 | 95)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
             >
               <option value="80">80%</option>
@@ -624,7 +521,7 @@ const BudgetForecasting: React.FC = () => {
               <p className="text-2xl font-bold text-gray-800">
                 {historicalData.length > 0 
                   ? formatCurrency(historicalData.reduce((a, b) => a + b.value, 0) / historicalData.length)
-                  : '₹0'}
+                  : formatCurrency(0)}
               </p>
             </div>
             <div className="bg-green-100 rounded-lg p-3">
@@ -655,7 +552,7 @@ const BudgetForecasting: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-gray-600 mb-1">Model</p>
-              <p className="text-xl font-bold text-gray-800 uppercase">{selectedModel}</p>
+              <p className="text-xl font-bold text-gray-800 uppercase">ARIMA</p>
             </div>
             <div className="bg-indigo-100 rounded-lg p-3">
               <i className="fas fa-brain text-2xl text-indigo-600"></i>

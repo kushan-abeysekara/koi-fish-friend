@@ -1,28 +1,51 @@
+/**
+ * PondCamera.tsx
+ *
+ * Live fish health monitoring component for the koi pond dashboard.
+ *
+ * Supports two feed modes:
+ *  - HLS  : Pulls a live RTSP/HLS stream from a Raspberry Pi running MediaMTX.
+ *           Frames are periodically captured to an offscreen <canvas> and the
+ *           pixel data is analyzed client-side to detect YOLOv8 overlay colours
+ *           (bounding boxes + text labels drawn by the Pi's AI pipeline).
+ *  - AI   : Connects via Socket.IO directly to the Python camera server running
+ *           on the Pi, which streams JPEG frames with pre-parsed detection JSON.
+ *
+ * Detection events (fish health readings) are persisted to the backend database
+ * and displayed in a scrollable event log. Critical detections (dead fish) also
+ * trigger an audible alert and a dedicated critical-alert API call.
+ */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Video, VideoOff, AlertCircle, Download, RefreshCw } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import MediaMTXCameraFeed from './MediaMTXCameraFeed';
 
-// Detection Event Interface
+/**
+ * A single fish detection event stored in the frontend event log.
+ * Events are created from both the AI Socket.IO feed and the HLS frame analyser.
+ */
 interface DetectionEvent {
-  id: string;
-  timestamp: string;
-  fishId: number;
-  healthClass: string;
-  confidence: number;
-  isCritical: boolean;
-  needsAttention: boolean;
-  screenshotDataUrl: string;
+  id: string;            // Unique client-side ID (e.g. "db-42" or "hls-1715000000-0")
+  timestamp: string;     // ISO 8601 timestamp of the detection
+  fishId: number;        // Numeric fish identifier from the detection model
+  healthClass: string;   // Health classification (healthy | unhealthy | dead | …)
+  confidence: number;    // Model confidence [0, 1]
+  isCritical: boolean;   // True when the fish is classified as dead
+  needsAttention: boolean; // True when the fish needs monitoring (unhealthy/dead)
+  screenshotDataUrl: string; // base64 data URL of the frame at detection time
   bbox: {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
+    x1: number;          // Bounding box left pixel coordinate
+    y1: number;          // Bounding box top pixel coordinate
+    x2: number;          // Bounding box right pixel coordinate
+    y2: number;          // Bounding box bottom pixel coordinate
   };
 }
 
-// API Detection Event Response Interface
+/**
+ * Raw detection event shape returned by the backend REST API
+ * (GET /api/camera/events). Fields use snake_case to match the DB columns.
+ */
 interface ApiDetectionEvent {
   id: number;
   created_at: string;
@@ -38,48 +61,84 @@ interface ApiDetectionEvent {
   y2: number;
 }
 
-// Feed source type
+/**
+ * Which live-feed source is currently active.
+ *  - 'hls' : MediaMTX HLS stream (default, always available in production)
+ *  - 'ai'  : Direct Socket.IO connection to the Python camera/AI server
+ */
 type FeedSource = 'hls' | 'ai';
 
 const PondCamera: React.FC = () => {
-  // Camera feed states
-  const [cameraConnected, setCameraConnected] = useState(false);
-  const [cameraFPS, setCameraFPS] = useState(0);
-  const [fishCount, setFishCount] = useState(0);
+  // ─── AI Camera Feed State ──────────────────────────────────────────────────
+  // These states are only meaningful when feedSource === 'ai'.
+  const [cameraConnected, setCameraConnected] = useState(false);   // Socket.IO connection status
+  const [cameraFPS, setCameraFPS] = useState(0);                   // Frames-per-second reported by the AI server
+  const [fishCount, setFishCount] = useState(0);                   // Number of fish detected in the latest frame
   const [detections, setDetections] = useState<Array<{ id: number; health?: { class?: string; confidence?: number; is_critical?: boolean; needs_attention?: boolean } }>>([]);
-  const [cameraFrame, setCameraFrame] = useState<string>('');
+  const [cameraFrame, setCameraFrame] = useState<string>('');      // Latest JPEG frame as a base64 data URL
+
+  // Persisted Socket.IO client for the AI camera server
   const cameraSocketRef = useRef<ReturnType<typeof io> | null>(null);
+
+  // Base URL of the Python camera/AI server running on the Raspberry Pi
   const CAMERA_SERVER_URL = import.meta.env.VITE_CAMERA_SERVER_URL || 'http://192.168.8.101:5000';
-  
-  // Feed source toggle (HLS = MediaMTX live stream, AI = local detection server)
+
+  // ─── Feed Source Toggle ────────────────────────────────────────────────────
+  // 'hls'  = MediaMTX live stream (default, works without the Python AI server)
+  // 'ai'   = Direct Socket.IO connection to the Python camera server
   const [feedSource, setFeedSource] = useState<FeedSource>('hls');
 
-  // Camera performance mode (for AI feed)
+  // ─── AI Feed Quality Mode ──────────────────────────────────────────────────
+  // Controls the resolution/quality sent by the Pi camera server to the browser.
+  //   quality     → 960×540, JPEG 90 (best image, higher bandwidth)
+  //   balanced    → 640×360, JPEG 75 (default trade-off)
+  //   performance → 480×270, JPEG 60 (lowest latency, lowest quality)
   const [cameraMode, setCameraMode] = useState<'quality' | 'balanced' | 'performance'>('balanced');
-  
-  // Event logging states
-  const [detectionEvents, setDetectionEvents] = useState<DetectionEvent[]>([]);
-  const [criticalAlerts, setCriticalAlerts] = useState<number>(0);
-  const [, setTotalDetections] = useState<number>(0);
-  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
 
-  // Ref to the HLS <video> element exposed by MediaMTXCameraFeed
+  // ─── Detection Event Log State ─────────────────────────────────────────────
+  const [detectionEvents, setDetectionEvents] = useState<DetectionEvent[]>([]);  // All events (DB + live)
+  const [criticalAlerts, setCriticalAlerts] = useState<number>(0);               // Running count of critical (dead fish) alerts
+  const [, setTotalDetections] = useState<number>(0);                            // Running total of all detected fish across frames
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);                 // True while fetching events from the backend
+
+  // ─── HLS Refs ──────────────────────────────────────────────────────────────
+  // Forwarded ref to the <video> element rendered by MediaMTXCameraFeed.
+  // Used by captureHlsFrame() to draw the current video frame onto a canvas.
   const hlsVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Tracks the last time we generated detection events (to avoid duplicates every interval)
+  /**
+   * Deduplication ref for HLS overlay detections.
+   * We only emit a new detection event when the fish count or health composition
+   * changes, or when more than 10 seconds have passed since the last emission.
+   * This prevents flooding the event log with identical readings every 3 s.
+   */
   const hlsLastDetectionRef = useRef<{ count: number; healthLabel: string; timestamp: number }>({
     count: 0,
     healthLabel: '',
     timestamp: 0,
   });
 
+  /**
+   * Play a short beep to alert the user when a critical (dead fish) event is detected.
+   * Uses an inline base64-encoded WAV so there is no external audio file dependency.
+   * Errors are swallowed because autoplay is often blocked until the user interacts
+   * with the page.
+   */
   const playAlertSound = useCallback(() => {
     const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjGH0fPTgjMGHm7A7+OZURE');
     audio.play().catch(e => console.log('Could not play alert sound:', e));
   }, []);
 
-  // Fetch old detection events from database — retries up to 5 times with
-  // increasing delays so a backend restart doesn't silently leave the log empty.
+  /**
+   * Fetch the persisted detection events from the backend database.
+   *
+   * Called once on mount and again whenever the user presses the refresh button.
+   * Implements an exponential-back-off retry loop (up to 5 attempts) so that a
+   * brief backend restart during initial page load does not silently leave the
+   * event log empty. The retry delays are: 3 s, 5 s, 8 s, 12 s, 20 s.
+   *
+   * @param retryCount - Internal retry counter (do not pass from call sites).
+   */
   const fetchDetectionEvents = useCallback(async (retryCount = 0) => {
     const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
     const MAX_RETRIES = 5;
@@ -122,6 +181,13 @@ const PondCamera: React.FC = () => {
     }
   }, []);
 
+  /**
+   * Persist a batch of detection events to the backend database.
+   *
+   * Events are batched per Socket.IO frame or per HLS capture interval and sent
+   * in a single POST to avoid excessive API calls. Screenshots are included so
+   * the event log can show a thumbnail for each detection.
+   */
   const saveDetectionEvents = useCallback(async (events: DetectionEvent[]) => {
     const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
     try {
@@ -142,6 +208,13 @@ const PondCamera: React.FC = () => {
     }
   }, []);
 
+  /**
+   * Record a critical alert to the backend and play an audible beep.
+   *
+   * Called whenever one or more fish are classified as dead in a single frame.
+   * The alert is stored separately from regular events so it can be queried
+   * independently (e.g. for push notifications or dashboard counters).
+   */
   const saveCriticalAlert = useCallback(async (events: DetectionEvent[]) => {
     const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
     try {
@@ -163,12 +236,22 @@ const PondCamera: React.FC = () => {
     }
   }, [playAlertSound]);
 
-  // Fetch detection events from database on component mount
+  // ─── On Mount: Load Historical Events ────────────────────────────────────
+  // Populate the event log with previously saved detections so the user can
+  // review recent history without waiting for new live detections.
   useEffect(() => {
     fetchDetectionEvents();
   }, [fetchDetectionEvents]);
 
-  // AI Camera Feed WebSocket Connection (optional — only when AI feed is selected)
+  // ─── AI Camera Feed — Socket.IO Connection ────────────────────────────────
+  // This effect manages the lifecycle of the Socket.IO connection to the Python
+  // camera/AI server running on the Raspberry Pi. The connection is only opened
+  // when the user explicitly switches to 'AI Detection' mode; switching back to
+  // 'HLS' immediately disconnects the socket to conserve resources.
+  //
+  // On each 'detection_update' event the server sends:
+  //   { fps, fish_count, detections[], frame (base64 JPEG), timestamp }
+  // We update state, append to the event log, and persist events to the backend.
   useEffect(() => {
     // Only connect to the Pi camera server when the user explicitly selects 'AI Detection' mode
     if (feedSource !== 'ai') {
@@ -183,27 +266,34 @@ const PondCamera: React.FC = () => {
     }
 
     console.log('🎥 Connecting to AI camera server:', CAMERA_SERVER_URL);
-    
+
+    // Open a Socket.IO connection with automatic reconnection.
+    // We prefer WebSocket transport but fall back to long-polling if the Pi's
+    // nginx proxy does not support WebSocket upgrades.
     const socket = io(CAMERA_SERVER_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionDelay: 5000,
-      reconnectionAttempts: 5,
-      timeout: 8000,
+      reconnectionDelay: 5000,   // wait 5 s before the first retry
+      reconnectionAttempts: 5,   // give up after 5 failed reconnections
+      timeout: 8000,             // initial connection timeout
     });
 
     socket.on('connect', () => {
       console.log('✅ AI camera server connected');
       setCameraConnected(true);
-      
+
+      // Resolution/quality presets sent to the Pi camera server.
+      // The server applies these before encoding each JPEG frame.
       const config = {
-        quality: { width: 960, height: 540, quality: 90 },
-        balanced: { width: 640, height: 360, quality: 75 },
+        quality:     { width: 960, height: 540, quality: 90 },
+        balanced:    { width: 640, height: 360, quality: 75 },
         performance: { width: 480, height: 270, quality: 60 }
       };
       
       const settings = config[cameraMode];
-      
+
+      // Push the quality settings to the Pi camera server REST endpoint.
+      // This is fire-and-forget; if it fails the server keeps its previous settings.
       fetch(`${CAMERA_SERVER_URL}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -221,6 +311,14 @@ const PondCamera: React.FC = () => {
       setDetections([]);
     });
 
+    // ── 'detection_update' payload handler ──────────────────────────────────
+    // The AI server emits this event for every processed camera frame.
+    // Payload fields:
+    //   fps         – current frames per second of the AI pipeline
+    //   fish_count  – number of fish detected in this frame
+    //   detections  – array of fish objects (id, health, bbox)
+    //   frame       – base64-encoded JPEG of the annotated frame
+    //   timestamp   – ISO 8601 string
     socket.on('detection_update', (data: { fps?: number; fish_count?: number; detections?: Array<{ id: number; health?: { class?: string; confidence?: number; is_critical?: boolean; needs_attention?: boolean }; bbox?: { x1: number; y1: number; x2: number; y2: number } }>; frame?: string; timestamp?: string }) => {
       try {
         setCameraFPS(data.fps || 0);
@@ -233,6 +331,8 @@ const PondCamera: React.FC = () => {
         }
         
         if (data.detections && data.detections.length > 0) {
+          // Use the annotated frame (if available) as the screenshot for each event.
+          // All detections in the same frame share the same screenshot.
           const aiScreenshotDataUrl = data.frame ? `data:image/jpeg;base64,${data.frame}` : '';
           const newEvents: DetectionEvent[] = data.detections.map((fish) => ({
             id: `${Date.now()}-${fish.id}`,
@@ -246,6 +346,7 @@ const PondCamera: React.FC = () => {
             bbox: fish.bbox || { x1: 0, y1: 0, x2: 0, y2: 0 }
           }));
           
+          // Cap the in-memory event log at 500 entries to prevent unbounded memory growth
           setDetectionEvents(prev => [...newEvents, ...prev].slice(0, 500));
           
           const criticalCount = newEvents.filter(e => e.isCritical).length;
@@ -470,8 +571,16 @@ const PondCamera: React.FC = () => {
     return detections;
   }, []);
 
+  /**
+   * Capture the current HLS video frame, run the pixel-level overlay analyser,
+   * and emit detection events if new fish health data is found.
+   *
+   * Called every 3 seconds by the interval registered below.
+   * Bails out early if the <video> element is not ready or has no video data.
+   */
   const captureHlsFrame = useCallback(() => {
     const video = hlsVideoRef.current;
+    // readyState < 2 means the video has no current data yet (HAVE_CURRENT_DATA = 2)
     if (!video || video.readyState < 2 || video.videoWidth === 0) return;
 
     // Draw the current video frame onto an offscreen canvas
@@ -540,7 +649,10 @@ const PondCamera: React.FC = () => {
     );
   }, [analyzeFrameOverlays, saveCriticalAlert, saveDetectionEvents]);
 
-  // Interval: capture HLS frames every 3 seconds when feedSource === 'hls'
+  // ─── HLS Frame Capture Interval ─────────────────────────────────────────
+  // Fires captureHlsFrame every 3 seconds while the HLS feed is active.
+  // We reset the deduplication ref on entry so the first capture after switching
+  // modes always produces an event (even if the scene hasn't changed).
   useEffect(() => {
     if (feedSource !== 'hls') return;
 
@@ -551,17 +663,24 @@ const PondCamera: React.FC = () => {
       captureHlsFrame();
     }, 3000);
 
+    // Clean up the interval when the component unmounts or feed source changes
     return () => clearInterval(intervalId);
   }, [feedSource, captureHlsFrame]);
 
+  /**
+   * Change the AI camera quality mode and force-reconnect the Socket.IO client.
+   * The server reads the new config on the next 'connect' event.
+   */
   const handleCameraModeChange = (mode: 'quality' | 'balanced' | 'performance') => {
     setCameraMode(mode);
+    // Reconnect so the 'connect' handler re-sends the new quality settings to the Pi
     if (cameraSocketRef.current) {
       cameraSocketRef.current.disconnect();
       cameraSocketRef.current.connect();
     }
   };
 
+  /** Returns a Tailwind text-color class matching the given health classification. */
   const getHealthColor = (healthClass: string) => {
     switch (healthClass) {
       case 'healthy': return 'text-green-500';
@@ -575,6 +694,7 @@ const PondCamera: React.FC = () => {
     }
   };
 
+  /** Returns a coloured circle emoji that visually represents the health status. */
   const getHealthEmoji = (healthClass: string) => {
     switch (healthClass) {
       case 'healthy': return '🟢';
@@ -588,6 +708,11 @@ const PondCamera: React.FC = () => {
     }
   };
 
+  /**
+   * Export all detection events in the event log to a CSV file and trigger a
+   * browser download. Columns: Timestamp, Fish ID, Health Status, Confidence,
+   * Critical, Needs Attention.
+   */
   const exportEventsToCSV = () => {
     const csv = [
       ['Timestamp', 'Fish ID', 'Health Status', 'Confidence', 'Critical', 'Needs Attention'].join(','),
@@ -604,6 +729,10 @@ const PondCamera: React.FC = () => {
     a.click();
   };
 
+  /**
+   * Delete ALL detection events from the backend database and reset local state.
+   * Shows a confirmation dialog before proceeding because this action is irreversible.
+   */
   const clearEvents = async () => {
     if (confirm('Clear all detection events from database? This cannot be undone.')) {
       try {
@@ -620,9 +749,19 @@ const PondCamera: React.FC = () => {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // Layout (top → bottom):
+  //  1. Page header + Export / Clear buttons
+  //  2. Stats row  (feed status, fish count, total events, critical alerts)
+  //  3. Main area  (live camera feed 2/3 width  |  event log 1/3 width)
+  //     ├─ HLS feed : <MediaMTXCameraFeed> + optional feed-source toggle
+  //     └─ AI feed  : Socket.IO JPEG stream + detection overlays
+  //  4. Health distribution bar chart (count per health class)
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* ── Page Header ─────────────────────────────────────────────────── */}
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
@@ -631,6 +770,7 @@ const PondCamera: React.FC = () => {
           </h2>
           <p className="text-gray-600 mt-1">Real-time AI fish detection with health analysis</p>
         </div>
+        {/* Action buttons: CSV export and clear-all */}
         <div className="flex gap-2">
           <button
             onClick={exportEventsToCSV}
@@ -650,7 +790,8 @@ const PondCamera: React.FC = () => {
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* ── Stats Cards ──────────────────────────────────────────────────── */}
+      {/* Four metric cards: feed status, fish count, total events, critical alerts */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
@@ -715,9 +856,9 @@ const PondCamera: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Content Area */}
+      {/* ── Main Content: Camera Feed + Event Log ────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Live Camera Feed - 2/3 width */}
+        {/* Live Camera Feed (occupies 2 of 3 grid columns) */}
         <div className="lg:col-span-2">
           <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
             <div className="bg-gray-700 px-4 py-3 flex items-center justify-between">
