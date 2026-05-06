@@ -48,6 +48,12 @@ const SystemStatus: React.FC = () => {
   const [phDbStatus, setPhDbStatus] = useState<'idle' | 'writing' | 'ok' | 'error'>('idle');
   const phIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ── Turbidity Normal Simulation (random walk, always inside safe range) ────
+  const [turbSimActive, setTurbSimActive] = useState(false);
+  const [turbCurrent, setTurbCurrent] = useState<number | null>(null);
+  const [turbDbStatus, setTurbDbStatus] = useState<'idle' | 'writing' | 'ok' | 'error'>('idle');
+  const turbIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const checkEndpoint = async (name: string, url: string): Promise<EndpointCheck> => {
     const start = performance.now();
     try {
@@ -192,6 +198,169 @@ const SystemStatus: React.FC = () => {
 
   // Cleanup simulation on unmount
   useEffect(() => () => { if (phIntervalRef.current) clearInterval(phIntervalRef.current); }, []);
+
+  // ── Turbidity simulation helpers ────────────────────────────────────────────
+
+  const writeTurbToSupabase = useCallback(async (value: number) => {
+    const rounded = Math.round(value * 10) / 10;
+    setTurbDbStatus('writing');
+    try {
+      await supabasePgQuery(
+        `UPDATE sensor_live SET turbidity = ${rounded}, updated_at = now() WHERE device_id LIKE 'WQ_%'`
+      );
+      setTurbDbStatus('ok');
+    } catch {
+      setTurbDbStatus('error');
+    }
+  }, []);
+
+  const stopTurbSim = useCallback(() => {
+    if (turbIntervalRef.current) {
+      clearInterval(turbIntervalRef.current);
+      turbIntervalRef.current = null;
+    }
+    setTurbSimActive(false);
+  }, []);
+
+  const startTurbSim = useCallback(async () => {
+    stopTurbSim();
+    setTurbSimActive(true);
+    setTurbDbStatus('idle');
+
+    // Start near centre of safe range
+    let current = 12.0;
+    setTurbCurrent(current);
+    await writeTurbToSupabase(current);
+
+    const SAFE_MIN = 2;
+    const SAFE_MAX = 22;
+    const INTERVAL_MS = 3000;
+
+    turbIntervalRef.current = setInterval(async () => {
+      // Random walk ±0.3 to ±1.5 NTU, clamped to safe range
+      const delta = (Math.random() * 1.8 - 0.9); // -0.9 to +0.9
+      current = Math.max(SAFE_MIN, Math.min(SAFE_MAX, Math.round((current + delta) * 10) / 10));
+      setTurbCurrent(current);
+      await writeTurbToSupabase(current);
+    }, INTERVAL_MS);
+  }, [stopTurbSim, writeTurbToSupabase]);
+
+  // Cleanup turbidity sim on unmount
+  useEffect(() => () => { if (turbIntervalRef.current) clearInterval(turbIntervalRef.current); }, []);
+
+  // ── MQ135 Butane / Reset Simulation ───────────────────────────────────────
+  const [mq135Mode, setMq135Mode] = useState<'idle' | 'butane' | 'reset'>('idle');
+  const [mq135Co2, setMq135Co2] = useState<number | null>(null);
+  const [mq135Ammonia, setMq135Ammonia] = useState<number | null>(null);
+  const [mq135Wqi, setMq135Wqi] = useState<number | null>(null);
+  const [mq135DbStatus, setMq135DbStatus] = useState<'idle' | 'writing' | 'ok' | 'error'>('idle');
+  const mq135TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopMq135 = useCallback(() => {
+    if (mq135TimeoutRef.current) { clearTimeout(mq135TimeoutRef.current); mq135TimeoutRef.current = null; }
+    setMq135Mode('idle');
+  }, []);
+
+  const writeMq135ToSupabase = useCallback(async (co2: number, ammonia: number, wqi: number) => {
+    setMq135DbStatus('writing');
+    try {
+      await supabasePgQuery(
+        `UPDATE sensor_live SET co2_level = ${Math.round(co2)}, ammonia = ${ammonia.toFixed(3)}, air_quality_index = ${Math.round(wqi)}, updated_at = now() WHERE device_id LIKE 'WQ_%'`
+      );
+      setMq135DbStatus('ok');
+    } catch {
+      setMq135DbStatus('error');
+    }
+  }, []);
+
+  const startMq135Butane = useCallback(async () => {
+    stopMq135();
+    setMq135Mode('butane');
+    setMq135DbStatus('idle');
+
+    // Fetch current values first
+    let co2 = 400, ammonia = 0.02, wqi = 35;
+    try {
+      const rows = await supabasePgQuery<{ co2_level: number; ammonia: number; air_quality_index: number }>(
+        "SELECT co2_level, ammonia, air_quality_index FROM sensor_live WHERE device_id LIKE 'WQ_%' ORDER BY updated_at DESC LIMIT 1"
+      );
+      if (rows.length > 0) {
+        co2 = Number(rows[0].co2_level) || 400;
+        ammonia = Number(rows[0].ammonia) || 0.02;
+        wqi = Number(rows[0].air_quality_index) || 35;
+      }
+    } catch { /* use defaults */ }
+
+    setMq135Co2(co2); setMq135Ammonia(ammonia); setMq135Wqi(wqi);
+
+    const CO2_TARGET = 2600, AMMONIA_TARGET = 2.8, WQI_TARGET = 420;
+
+    const step = async () => {
+      if (co2 >= CO2_TARGET && ammonia >= AMMONIA_TARGET && wqi >= WQI_TARGET) {
+        setMq135Mode('idle'); return;
+      }
+      // Random step sizes — the "random gaps" effect
+      const co2Step    = co2 < CO2_TARGET    ? Math.random() * 130 + 20   : 0;
+      const ammoniaStep = ammonia < AMMONIA_TARGET ? Math.random() * 0.25 + 0.05 : 0;
+      const wqiStep    = wqi < WQI_TARGET    ? Math.random() * 45 + 10    : 0;
+
+      co2      = Math.min(CO2_TARGET,      co2 + co2Step);
+      ammonia  = Math.min(AMMONIA_TARGET,  ammonia + ammoniaStep);
+      wqi      = Math.min(WQI_TARGET,      wqi + wqiStep);
+
+      setMq135Co2(Math.round(co2 * 10) / 10);
+      setMq135Ammonia(Math.round(ammonia * 1000) / 1000);
+      setMq135Wqi(Math.round(wqi * 10) / 10);
+      await writeMq135ToSupabase(co2, ammonia, wqi);
+
+      // Random delay 600ms–2200ms between steps
+      const delay = Math.random() * 1600 + 600;
+      mq135TimeoutRef.current = setTimeout(step, delay);
+    };
+
+    mq135TimeoutRef.current = setTimeout(step, 500);
+  }, [stopMq135, writeMq135ToSupabase]);
+
+  const startMq135Reset = useCallback(async () => {
+    stopMq135();
+    setMq135Mode('reset');
+    setMq135DbStatus('idle');
+
+    let co2 = mq135Co2 ?? 2600;
+    let ammonia = mq135Ammonia ?? 2.8;
+    let wqi = mq135Wqi ?? 420;
+
+    const CO2_NORMAL = 420, AMMONIA_NORMAL = 0.02, WQI_NORMAL = 35;
+
+    const step = async () => {
+      if (co2 <= CO2_NORMAL && ammonia <= AMMONIA_NORMAL && wqi <= WQI_NORMAL) {
+        co2 = CO2_NORMAL; ammonia = AMMONIA_NORMAL; wqi = WQI_NORMAL;
+        setMq135Co2(co2); setMq135Ammonia(ammonia); setMq135Wqi(wqi);
+        await writeMq135ToSupabase(co2, ammonia, wqi);
+        setMq135Mode('idle'); return;
+      }
+      const co2Step     = co2 > CO2_NORMAL       ? Math.random() * 100 + 20   : 0;
+      const ammoniaStep = ammonia > AMMONIA_NORMAL ? Math.random() * 0.2 + 0.04 : 0;
+      const wqiStep     = wqi > WQI_NORMAL        ? Math.random() * 40 + 10    : 0;
+
+      co2     = Math.max(CO2_NORMAL,      co2 - co2Step);
+      ammonia = Math.max(AMMONIA_NORMAL,  ammonia - ammoniaStep);
+      wqi     = Math.max(WQI_NORMAL,      wqi - wqiStep);
+
+      setMq135Co2(Math.round(co2 * 10) / 10);
+      setMq135Ammonia(Math.round(ammonia * 1000) / 1000);
+      setMq135Wqi(Math.round(wqi * 10) / 10);
+      await writeMq135ToSupabase(co2, ammonia, wqi);
+
+      const delay = Math.random() * 1400 + 600;
+      mq135TimeoutRef.current = setTimeout(step, delay);
+    };
+
+    mq135TimeoutRef.current = setTimeout(step, 400);
+  }, [stopMq135, writeMq135ToSupabase, mq135Co2, mq135Ammonia, mq135Wqi]);
+
+  // Cleanup MQ135 on unmount
+  useEffect(() => () => { if (mq135TimeoutRef.current) clearTimeout(mq135TimeoutRef.current); }, []);
 
   const statusColor = (s: string) => {
     if (s === 'up' || s === 'UP') return 'text-green-600';
@@ -579,6 +748,233 @@ const SystemStatus: React.FC = () => {
             )}
           </div>
         </div>
+      </div>
+
+      {/* ── Turbidity Normal Simulation ────────────────────────────────── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-1">
+          <i className="fas fa-tint mr-2 text-blue-500"></i>Turbidity Calibration
+        </h3>
+        <p className="text-sm text-gray-500 mb-5">
+          Override the turbidity sensor with simulated normal values (2–22 NTU).
+          Values drift randomly every 3 s — always within the safe range.
+        </p>
+
+        {/* Start / Stop button */}
+        <div className="flex items-center gap-4 mb-5">
+          {!turbSimActive ? (
+            <button
+              onClick={startTurbSim}
+              className="flex items-center gap-2 px-5 py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 active:scale-95 transition"
+            >
+              <span className="text-lg">💧</span>
+              Start Normal Turbidity Simulation
+            </button>
+          ) : (
+            <button
+              onClick={stopTurbSim}
+              className="flex items-center gap-2 px-5 py-3 bg-red-100 text-red-700 rounded-xl font-semibold hover:bg-red-200 active:scale-95 transition"
+            >
+              <i className="fas fa-stop mr-1"></i>Stop Simulation
+            </button>
+          )}
+          {turbSimActive && (
+            <span className="flex items-center gap-2 text-sm text-blue-600 font-medium">
+              <i className="fas fa-spinner fa-spin"></i>
+              Sending random values to Supabase…
+            </span>
+          )}
+        </div>
+
+        {/* Live Turbidity display */}
+        {turbCurrent !== null && (
+          <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-medium text-gray-700">Current Simulated Turbidity</span>
+              <span className="text-2xl font-bold tabular-nums text-green-600">
+                {turbCurrent.toFixed(1)}
+                <span className="text-sm font-normal text-gray-500 ml-1">NTU</span>
+                <span className="ml-2 text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-semibold">NORMAL</span>
+              </span>
+            </div>
+
+            {/* 0–100 NTU bar; safe zone shown */}
+            <div className="relative h-4 rounded-full bg-gray-200 overflow-hidden mb-1">
+              {/* Safe zone highlight */}
+              <div
+                className="absolute top-0 h-4 bg-green-200 opacity-60"
+                style={{ left: '0%', width: '25%' }}
+              />
+              {/* Value indicator */}
+              <div
+                className="absolute top-0 h-4 bg-green-500 rounded-full transition-all duration-[2800ms]"
+                style={{ width: `${Math.min(100, (turbCurrent / 100) * 100)}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+              <span>0 NTU</span>
+              <span className="text-green-600 font-medium">Safe: 0–25 NTU</span>
+              <span>100 NTU</span>
+            </div>
+          </div>
+        )}
+
+        {/* DB status */}
+        {turbDbStatus !== 'idle' && (
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            turbDbStatus === 'writing' ? 'bg-blue-100 text-blue-700'
+            : turbDbStatus === 'ok'    ? 'bg-green-100 text-green-700'
+            : 'bg-red-100 text-red-700'
+          }`}>
+            {turbDbStatus === 'writing' ? '⏳ Writing to Supabase'
+            : turbDbStatus === 'ok'     ? '✓ Supabase updated'
+            : '✗ DB write failed'}
+          </span>
+        )}
+      </div>
+
+      {/* ── MQ135 Butane Gas Simulation ────────────────────────────────── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-1">
+          <i className="fas fa-fire mr-2 text-orange-500"></i>MQ135 Gas Sensor — Butane Simulation
+        </h3>
+        <p className="text-sm text-gray-500 mb-5">
+          Simulate opening a butane lighter near the MQ135 sensor. CO₂, Ammonia and Water Quality Index
+          rise sequentially with random step gaps — then use Reset to restore normal values.
+        </p>
+
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-3 mb-6">
+          <button
+            onClick={startMq135Butane}
+            disabled={mq135Mode === 'butane'}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl font-semibold transition active:scale-95
+              ${mq135Mode === 'butane'
+                ? 'bg-orange-200 text-orange-700 cursor-wait'
+                : 'bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50'}`}
+          >
+            <span className="text-lg">🔥</span>
+            {mq135Mode === 'butane' ? 'Butane Mode Active…' : 'Butane Gas Mode'}
+          </button>
+
+          <button
+            onClick={startMq135Reset}
+            disabled={mq135Mode === 'reset'}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl font-semibold transition active:scale-95
+              ${mq135Mode === 'reset'
+                ? 'bg-green-200 text-green-700 cursor-wait'
+                : 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-50'}`}
+          >
+            <i className={`fas ${mq135Mode === 'reset' ? 'fa-spinner fa-spin' : 'fa-undo'} mr-1`}></i>
+            {mq135Mode === 'reset' ? 'Resetting…' : 'Reset to Normal'}
+          </button>
+
+          {(mq135Mode === 'butane' || mq135Mode === 'reset') && (
+            <button
+              onClick={stopMq135}
+              className="flex items-center gap-2 px-4 py-3 bg-red-100 text-red-700 rounded-xl font-semibold hover:bg-red-200 transition active:scale-95"
+            >
+              <i className="fas fa-stop mr-1"></i>Stop
+            </button>
+          )}
+        </div>
+
+        {/* Live meters */}
+        {(mq135Co2 !== null || mq135Ammonia !== null || mq135Wqi !== null) && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+
+            {/* CO2 */}
+            <div className={`p-4 rounded-xl border-2 ${
+              (mq135Co2 ?? 0) > 1000 ? 'border-red-300 bg-red-50' :
+              (mq135Co2 ?? 0) > 600  ? 'border-yellow-300 bg-yellow-50' : 'border-green-300 bg-green-50'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">CO₂ Level</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                  (mq135Co2 ?? 0) > 2000 ? 'bg-red-200 text-red-800' :
+                  (mq135Co2 ?? 0) > 1000 ? 'bg-yellow-200 text-yellow-800' : 'bg-green-200 text-green-800'
+                }`}>
+                  {(mq135Co2 ?? 0) > 2000 ? 'DANGER' : (mq135Co2 ?? 0) > 1000 ? 'WARNING' : 'NORMAL'}
+                </span>
+              </div>
+              <p className="text-2xl font-bold tabular-nums text-gray-800">
+                {(mq135Co2 ?? 0).toFixed(0)}
+                <span className="text-sm font-normal text-gray-500 ml-1">PPM</span>
+              </p>
+              <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div className={`h-2 rounded-full transition-all duration-700 ${
+                  (mq135Co2 ?? 0) > 2000 ? 'bg-red-500' : (mq135Co2 ?? 0) > 1000 ? 'bg-yellow-500' : 'bg-green-500'
+                }`} style={{ width: `${Math.min(100, ((mq135Co2 ?? 0) / 3000) * 100)}%` }} />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Safe: 400–1000 PPM</p>
+            </div>
+
+            {/* Ammonia */}
+            <div className={`p-4 rounded-xl border-2 ${
+              (mq135Ammonia ?? 0) > 1.0 ? 'border-red-300 bg-red-50' :
+              (mq135Ammonia ?? 0) > 0.5 ? 'border-yellow-300 bg-yellow-50' : 'border-green-300 bg-green-50'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Ammonia (NH₃)</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                  (mq135Ammonia ?? 0) > 1.0 ? 'bg-red-200 text-red-800' :
+                  (mq135Ammonia ?? 0) > 0.5 ? 'bg-yellow-200 text-yellow-800' : 'bg-green-200 text-green-800'
+                }`}>
+                  {(mq135Ammonia ?? 0) > 1.0 ? 'DANGER' : (mq135Ammonia ?? 0) > 0.5 ? 'WARNING' : 'NORMAL'}
+                </span>
+              </div>
+              <p className="text-2xl font-bold tabular-nums text-gray-800">
+                {(mq135Ammonia ?? 0).toFixed(3)}
+                <span className="text-sm font-normal text-gray-500 ml-1">PPM</span>
+              </p>
+              <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div className={`h-2 rounded-full transition-all duration-700 ${
+                  (mq135Ammonia ?? 0) > 1.0 ? 'bg-red-500' : (mq135Ammonia ?? 0) > 0.5 ? 'bg-yellow-500' : 'bg-green-500'
+                }`} style={{ width: `${Math.min(100, ((mq135Ammonia ?? 0) / 3) * 100)}%` }} />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Safe: 0–0.5 PPM</p>
+            </div>
+
+            {/* Water Quality Index */}
+            <div className={`p-4 rounded-xl border-2 ${
+              (mq135Wqi ?? 0) > 200 ? 'border-red-300 bg-red-50' :
+              (mq135Wqi ?? 0) > 100 ? 'border-yellow-300 bg-yellow-50' : 'border-green-300 bg-green-50'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Water Quality Index</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                  (mq135Wqi ?? 0) > 200 ? 'bg-red-200 text-red-800' :
+                  (mq135Wqi ?? 0) > 100 ? 'bg-yellow-200 text-yellow-800' : 'bg-green-200 text-green-800'
+                }`}>
+                  {(mq135Wqi ?? 0) > 200 ? 'DANGER' : (mq135Wqi ?? 0) > 100 ? 'WARNING' : 'NORMAL'}
+                </span>
+              </div>
+              <p className="text-2xl font-bold tabular-nums text-gray-800">
+                {(mq135Wqi ?? 0).toFixed(0)}
+                <span className="text-sm font-normal text-gray-500 ml-1">WQI</span>
+              </p>
+              <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div className={`h-2 rounded-full transition-all duration-700 ${
+                  (mq135Wqi ?? 0) > 200 ? 'bg-red-500' : (mq135Wqi ?? 0) > 100 ? 'bg-yellow-500' : 'bg-green-500'
+                }`} style={{ width: `${Math.min(100, ((mq135Wqi ?? 0) / 450) * 100)}%` }} />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Safe: 0–100 WQI</p>
+            </div>
+          </div>
+        )}
+
+        {/* DB write status */}
+        {mq135DbStatus !== 'idle' && (
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            mq135DbStatus === 'writing' ? 'bg-blue-100 text-blue-700'
+            : mq135DbStatus === 'ok'    ? 'bg-green-100 text-green-700'
+            : 'bg-red-100 text-red-700'
+          }`}>
+            {mq135DbStatus === 'writing' ? '⏳ Writing to Supabase'
+            : mq135DbStatus === 'ok'     ? '✓ Supabase updated'
+            : '✗ DB write failed'}
+          </span>
+        )}
       </div>
     </div>
   );
